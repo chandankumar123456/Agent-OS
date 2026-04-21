@@ -52,6 +52,26 @@ export interface CreateTaskResponse {
   created_at: string;
 }
 
+export interface ToolInfo {
+  name: string;
+  description: string;
+  type: string;
+  status: string;
+  parameters?: Record<string, any>;
+}
+
+export interface AgentInfo {
+  agent_id: string;
+  name: string;
+  role: string;
+  status: string;
+  system_prompt?: string;
+  model?: string;
+  temperature?: number;
+  max_tokens?: number;
+  tools?: string[];
+}
+
 class ApiClient {
   private baseUrl: string;
 
@@ -96,8 +116,15 @@ class ApiClient {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ detail: 'Request failed' }));
-      throw new Error(error.detail || `HTTP ${response.status}`);
+      const error = await response.json().catch(() => ({ error: 'Request failed' }));
+      const message = error.error || error.detail || `HTTP ${response.status}`;
+      if (response.status === 401 || response.status === 403) {
+        localStorage.removeItem('apiKey');
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('user');
+        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
+      }
+      throw new Error(message);
     }
 
     return response.json();
@@ -213,6 +240,67 @@ class ApiClient {
     avg_response_time: number;
   }> {
     return fetch(`${this.getRootUrl()}/metrics`).then((response) => response.json());
+  }
+
+  async getTools(): Promise<Array<{name: string; description: string; type: string; status: string}>> {
+    return this.request<Array<{name: string; description: string; type: string; status: string}>>('/tools');
+  }
+
+  async createTool(tool: { name: string; description: string; type?: string; parameters_schema?: Record<string, any>; template?: string }): Promise<ToolInfo> {
+    const response = await this.request<{ success: boolean; tool: ToolInfo }>('/tools', {
+      method: 'POST',
+      body: JSON.stringify(tool),
+    });
+    return response.tool;
+  }
+
+  async executeTool(toolName: string, parameters: Record<string, any>): Promise<any> {
+    return this.request(`/tools/${toolName}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ parameters }),
+    });
+  }
+
+  async getConfig(): Promise<Record<string, any>> {
+    return this.request<Record<string, any>>('/config');
+  }
+
+  async updateConfig(key: string, value: any): Promise<{success: boolean; message: string}> {
+    return this.request<{success: boolean; message: string}>('/config', {
+      method: 'POST',
+      body: JSON.stringify({ key, value }),
+    });
+  }
+
+  async resetConfig(): Promise<{success: boolean; message: string}> {
+    return this.request<{success: boolean; message: string}>('/config/reset', {
+      method: 'POST',
+    });
+  }
+
+  async listAgents(): Promise<AgentInfo[]> {
+    const response = await this.request<{ agents: AgentInfo[] }>('/agents');
+    return response.agents;
+  }
+
+  async createAgent(agent: { name: string; role: string; system_prompt?: string; model?: string; temperature?: number; max_tokens?: number; tools?: string[] }): Promise<AgentInfo> {
+    return this.request<AgentInfo>('/agents', {
+      method: 'POST',
+      body: JSON.stringify(agent),
+    });
+  }
+
+  async updateAgent(agentId: string, agent: { name: string; role: string; system_prompt?: string; model?: string; temperature?: number; max_tokens?: number; tools?: string[] }): Promise<AgentInfo> {
+    return this.request<AgentInfo>(`/agents/${agentId}`, {
+      method: 'PUT',
+      body: JSON.stringify(agent),
+    });
+  }
+
+  async deleteAgent(agentId: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/agents/${agentId}`, {
+      method: 'DELETE',
+    });
   }
 }
 

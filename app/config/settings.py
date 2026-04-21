@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     POSTGRES_DB: str = "agentos"
     
     OPENAI_API_KEY: Optional[str] = None
-    OPENAI_MODEL: str = "gpt-5.4-mini"
+    OPENAI_MODEL: str = "gpt-4o"
+    EXA_API_KEY: Optional[str] = None
     
     MAX_STEPS_DEFAULT: int = 10
     TIMEOUT_DEFAULT: int = 300
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     CORS_ORIGINS: str = "*"
     
-    USE_CELERY: bool = False
+    USE_CELERY: bool = True
     API_KEYS: Optional[str] = None
     RATE_LIMIT_PER_MINUTE: int = 60
     

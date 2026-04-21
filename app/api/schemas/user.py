@@ -13,6 +13,7 @@ class UserResponse(BaseModel):
     id: str
     email: str
     name: Optional[str] = None
+    role: str = "user"
     created_at: datetime
 
     class Config:

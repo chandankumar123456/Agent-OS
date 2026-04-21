@@ -3,11 +3,13 @@ from uuid import uuid4
 
 import pytest
 
+from app.api.routes.tasks import get_task
 from app.memory.long_term import db
-from app.memory.long_term import task_repo, step_repo
+from app.memory.long_term import task_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
+from app.queue.tasks import execute_task as celery_execute_task
 
 
-def test_persisted_task_lookup_includes_steps_when_present():
+def test_persisted_task_lookup_includes_workflow_nodes_when_present():
     task_id = str(uuid4())
 
     async def run():
@@ -16,12 +18,59 @@ def test_persisted_task_lookup_includes_steps_when_present():
         except ModuleNotFoundError:
             pytest.skip("asyncpg is not installed in this environment")
         await task_repo.create(task_id=task_id, query="persist me", status="completed")
-        await step_repo.create(step_id=str(uuid4()), task_id=task_id, step_number=0, agent_type="executor", input_data={"step": "do it"})
-        steps = await step_repo.get_by_task(task_id)
+        workflow = await workflow_repo.create(task_id=task_id, name="wf", definition={"nodes": []})
+        await workflow_node_repo.create(workflow_id=workflow.id, step_number=1, agent_type="executor", depends_on=[], input_data={"step": "do it"})
+        nodes = await workflow_node_repo.get_by_workflow(workflow.id)
         await db.disconnect()
-        return steps
+        return nodes
 
     steps = asyncio.run(run())
 
     assert len(steps) == 1
     assert steps[0].agent_type == "executor"
+
+
+def test_get_task_returns_workflow_nodes_instead_of_legacy_steps():
+    task_id = str(uuid4())
+
+    async def run():
+        try:
+            await db.connect()
+        except ModuleNotFoundError:
+            pytest.skip("asyncpg is not installed in this environment")
+
+        await task_repo.create(task_id=task_id, query="persist me", status="completed")
+        workflow = await workflow_repo.create(task_id=task_id, name="wf", definition={"nodes": []})
+        node = await workflow_node_repo.create(workflow_id=workflow.id, step_number=1, agent_type="executor", depends_on=[], input_data={"step": "do it"})
+        await workflow_edge_repo.create(workflow.id, node.id, node.id)
+
+        response = await get_task(uuid4(), None)
+
+        await db.disconnect()
+        return response
+
+    with pytest.raises(Exception):
+        asyncio.run(run())
+
+
+def test_celery_worker_marks_failed_tasks_in_db_on_exception(monkeypatch):
+    updates = []
+    import app.memory.long_term as long_term
+    import app.orchestrator.core as core
+
+    async def fake_update(task_id, status=None, result=None, error=None):
+        updates.append({"task_id": task_id, "status": status, "result": result, "error": error})
+
+    class FakeOrchestrator:
+        async def execute_task(self, query, config, task_id=None):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(long_term.task_repo, "update", fake_update)
+    monkeypatch.setattr(core, "orchestrator", FakeOrchestrator(), raising=False)
+
+    result = celery_execute_task.run(str(uuid4()), "query", {})
+
+    assert result["status"] == "failed"
+    assert updates[0]["status"] == "running"
+    assert updates[-1]["status"] == "failed"
+    assert updates[-1]["error"] == "boom"

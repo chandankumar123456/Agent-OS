@@ -1,12 +1,21 @@
 from typing import Dict, List, Optional, Any
+from dataclasses import dataclass
 from .base import BaseTool, ToolInput, ToolOutput
 from .search import SearchTool, CalculatorTool, TextProcessorTool
 from ..logs.logger import logger
 
 
+@dataclass
+class RegisteredTool:
+    name: str
+    description: str
+    type: str
+    tool: BaseTool
+
+
 class ToolRegistry:
     def __init__(self):
-        self.tools: Dict[str, BaseTool] = {}
+        self.tools: Dict[str, RegisteredTool] = {}
         self._register_default_tools()
     
     def _register_default_tools(self):
@@ -16,14 +25,30 @@ class ToolRegistry:
         logger.info("Default tools registered")
     
     def register(self, tool: BaseTool):
-        self.tools[tool.name] = tool
+        self.tools[tool.name] = RegisteredTool(
+            name=tool.name,
+            description=tool.description,
+            type=getattr(tool, "tool_type", "builtin"),
+            tool=tool,
+        )
         logger.info(f"Registered tool: {tool.name}")
-    
+
     def get(self, name: str) -> Optional[BaseTool]:
-        return self.tools.get(name)
-    
+        registered = self.tools.get(name)
+        return registered.tool if registered else None
+
+    def get_tool(self, name: str) -> Optional[BaseTool]:
+        return self.get(name)
+
     def list_tools(self) -> List[Dict[str, Any]]:
-        return [tool.get_schema() for tool in self.tools.values()]
+        return [
+            {
+                **registered.tool.get_schema(),
+                "type": registered.type,
+                "status": "active",
+            }
+            for registered in self.tools.values()
+        ]
     
     async def execute(
         self,

@@ -36,10 +36,11 @@ async def signup(request: UserCreate):
             email=request.email,
             hashed_password=hashed_password,
             name=request.name,
-            api_key=api_key
+            api_key=api_key,
+            role="user"
         )
         
-        access_token = create_access_token({"sub": user.id, "email": user.email})
+        access_token = create_access_token({"sub": user.id, "email": user.email, "role": user.role})
         
         logger.info(f"User signup: {request.email}")
         
@@ -50,6 +51,7 @@ async def signup(request: UserCreate):
                 id=user.id,
                 email=user.email,
                 name=user.name,
+                role=user.role,
                 created_at=user.created_at
             )
         )
@@ -71,7 +73,7 @@ async def login(request: LoginRequest):
         api_key = generate_api_key()
         user = await user_repo.update_api_key(user.id, api_key)
     
-    access_token = create_access_token({"sub": user.id, "email": user.email})
+    access_token = create_access_token({"sub": user.id, "email": user.email, "role": user.role})
     
     logger.info(f"User login: {request.email}")
     
@@ -82,6 +84,7 @@ async def login(request: LoginRequest):
             id=user.id,
             email=user.email,
             name=user.name,
+            role=user.role,
             created_at=user.created_at
         )
     )

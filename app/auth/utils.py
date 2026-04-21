@@ -62,6 +62,10 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
 def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if not payload.get("sub"):
+            return None
+        if payload.get("exp") and int(payload["exp"]) < int(datetime.now(timezone.utc).timestamp()):
+            return None
         return payload
     except JWTError as e:
         logger.warning(f"JWT verification failed: {e}")

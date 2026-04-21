@@ -15,48 +15,20 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         self.api_keys = api_keys or []
     
     async def dispatch(self, request: Request, call_next):
-        public_paths = {
-            "/health",
-            "/docs",
-            "/openapi.json",
-            "/api/v1/auth/signup",
-            "/api/v1/auth/login",
-            "/api/v1/tasks",
-        }
-
-        if request.url.path in public_paths:
+        if request.url.path in {"/api/v1/auth/login", "/api/v1/auth/signup"}:
             return await call_next(request)
-        
-        if request.url.path.startswith("/api/v1"):
-            provided_key = request.headers.get("x-api-key")
+
+        if request.url.path.startswith("/api/v1") or request.url.path in {"/health", "/metrics"}:
             bearer_token = request.headers.get("authorization", "").replace("Bearer ", "") if request.headers.get("authorization", "").startswith("Bearer ") else None
-            
-            auth_valid = False
-            if provided_key:
-                user = await user_repo.get_by_api_key(provided_key)
-                if user and user.is_active:
-                    auth_valid = True
-                elif provided_key in self.api_keys:
-                    auth_valid = True
-            
-            if bearer_token:
-                payload = verify_access_token(bearer_token)
-                if payload:
-                    auth_valid = True
-            
-            if not auth_valid and not provided_key and not bearer_token:
-                return JSONResponse(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    content={"detail": "API key or Bearer token required"}
-                )
-            
-            if not auth_valid:
+
+            if not bearer_token:
+                return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized"})
+
+            payload = verify_access_token(bearer_token)
+            if not payload:
                 logger.warning(f"Invalid auth attempt from {request.client.host}")
-                return JSONResponse(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    content={"detail": "Invalid authentication"}
-                )
-        
+                return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized"})
+
         response = await call_next(request)
         return response
 

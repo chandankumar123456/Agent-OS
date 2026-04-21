@@ -1,6 +1,7 @@
 import httpx
 from typing import Dict, Any
 from .base import BaseTool, ToolInput, ToolOutput
+from ..config.settings import settings
 from ..logs.logger import logger
 
 
@@ -18,6 +19,31 @@ class SearchTool(BaseTool):
             )
         
         logger.info(f"SearchTool executing: {query}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.exa.ai/search",
+                    json={"query": query, "num_results": 10},
+                    headers={
+                        "Authorization": f"Bearer {settings.EXA_API_KEY or ''}",
+                        "Content-Type": "application/json"
+                    } if settings.EXA_API_KEY else {}
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    results = [
+                        {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("snippet")}
+                        for r in data.get("results", [])[:5]
+                    ]
+                    return ToolOutput(
+                        success=True,
+                        result={"query": query, "results": results},
+                        metadata={"provider": "exa"}
+                    )
+        except Exception as e:
+            logger.warning(f"SearchTool fallback: {e}")
         
         return ToolOutput(
             success=True,

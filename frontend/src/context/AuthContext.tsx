@@ -4,6 +4,7 @@ interface User {
   id: string;
   email: string;
   name?: string;
+  role?: string;
   created_at: string;
 }
 
@@ -41,6 +42,30 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoading(false);
   }, []);
 
+  useEffect(() => {
+    if (!accessToken || !user) {
+      return;
+    }
+
+    try {
+      const payload = JSON.parse(atob(accessToken.split('.')[1]));
+      if (payload.exp && Date.now() >= payload.exp * 1000) {
+        logout();
+      }
+    } catch {
+      logout();
+    }
+  }, [accessToken, user]);
+
+  useEffect(() => {
+    const handleAuthExpired = () => {
+      logout();
+    };
+
+    window.addEventListener('auth:expired', handleAuthExpired as EventListener);
+    return () => window.removeEventListener('auth:expired', handleAuthExpired as EventListener);
+  }, []);
+
   const login = async (email: string, password: string) => {
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
@@ -50,7 +75,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.detail || 'Login failed');
+      throw new Error(error.error || error.detail || 'Login failed');
     }
 
     const data = await response.json();
@@ -73,7 +98,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.detail || 'Signup failed');
+      throw new Error(error.error || error.detail || 'Signup failed');
     }
 
     const data = await response.json();

@@ -29,7 +29,7 @@ class OutputValidator:
         
         return result
     
-async def validate_context(
+def validate_context(
         context: Dict[str, Any]
     ) -> ValidationResult:
     return GuardrailSchema.validate_context(context)

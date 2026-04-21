@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from .config.settings import settings
@@ -8,6 +9,9 @@ from .memory.long_term import db
 from .memory.short_term import redis_client
 from .middleware.auth import APIKeyMiddleware, get_api_keys
 from .middleware.rate_limit import RateLimitMiddleware, get_rate_limit
+from .api.deps import get_current_user
+from fastapi.exceptions import RequestValidationError
+from fastapi import HTTPException
 
 
 metrics_data = {
@@ -50,6 +54,9 @@ app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
     description="MCP-Based Multi-Agent Operating System",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
     lifespan=lifespan
 )
 
@@ -70,6 +77,17 @@ if api_keys:
 app.include_router(api_router, prefix="/api/v1")
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException):
+    detail = exc.detail if isinstance(exc.detail, str) else "Error"
+    return JSONResponse(status_code=exc.status_code, content={"error": detail})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    return JSONResponse(status_code=422, content={"error": "Validation error"})
+
+
 @app.middleware("http")
 async def metrics_middleware(request, call_next):
     import time
@@ -88,12 +106,12 @@ async def metrics_middleware(request, call_next):
 
 
 @app.get("/health")
-async def health():
+async def health(_: object = Depends(get_current_user)):
     return {"status": "healthy", "version": settings.VERSION}
 
 
 @app.get("/metrics")
-async def get_metrics():
+async def get_metrics(_: object = Depends(get_current_user)):
     avg_response = (
         metrics_data["total_response_time"] / metrics_data["request_count"]
         if metrics_data["request_count"] > 0 else 0

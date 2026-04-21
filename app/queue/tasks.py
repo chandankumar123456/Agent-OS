@@ -1,6 +1,7 @@
 from celery import Celery
 from ..config.settings import settings
 from ..logs.logger import logger
+from ..agents.types import TaskStatus
 
 redis_url = settings.REDIS_URL or "redis://localhost:6379/0"
 
@@ -22,7 +23,7 @@ logger.info("Celery app initialized")
 
 
 @celery_app.task(name="agent_os.execute_task", bind=True)
-def execute_task(self, task_id: str, query: str, config: dict):
+def execute_task(self, task_id: str, query: str, config: dict, user_id: str):
     logger.info(f"Executing task {task_id}: {query}")
     
     try:
@@ -30,12 +31,26 @@ def execute_task(self, task_id: str, query: str, config: dict):
         import asyncio
         
         from uuid import UUID
+        from ..memory.long_term import task_repo
 
-        result = asyncio.run(orchestrator.execute_task(query, config, task_id=UUID(task_id)))
+        async def run():
+            await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
+            try:
+                result = await orchestrator.execute_task(query, config, task_id=UUID(task_id), user_id=user_id)
+                if result.status.value == "success":
+                    await task_repo.update(task_id, status=TaskStatus.COMPLETED.value, result=result.output_data)
+                else:
+                    await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=result.error_message)
+                return result
+            except Exception as exc:
+                await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
+                raise
+
+        result = asyncio.run(run())
         
         return {
             "task_id": task_id,
-            "status": "success",
+            "status": result.status.value,
             "result": result.output_data
         }
     except Exception as e:

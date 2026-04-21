@@ -2,6 +2,11 @@ import asyncio
 from uuid import uuid4
 
 from app.orchestrator.core import Orchestrator
+from app.api.routes.tasks import use_celery
+
+
+def test_use_celery_defaults_to_enabled():
+    assert use_celery() is True
 
 
 def test_execute_task_preserves_provided_task_id():
