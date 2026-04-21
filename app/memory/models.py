@@ -105,7 +105,27 @@ class TraceModel(Base):
     task_id = Column(String(36), nullable=False, index=True)
     user_id = Column(String(36), nullable=False, index=True)
     trace_id = Column(String(36), nullable=False, unique=True, index=True)
+    status = Column(String(20), default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NodeTraceModel(Base):
+    __tablename__ = "node_traces"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    task_id = Column(String(36), nullable=False, index=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    trace_id = Column(String(36), nullable=False, index=True)
+    node_id = Column(String(36), nullable=False, index=True)
+    status = Column(String(20), default="pending")
+    input_data = Column(JSON, nullable=True)
+    output_data = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class SpanModel(Base):

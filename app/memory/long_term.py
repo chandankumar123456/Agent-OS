@@ -15,6 +15,7 @@ from .models import (
     WorkflowEdgeModel,
     UserModel,
     TraceModel,
+    NodeTraceModel,
     SpanModel,
     ToolModel,
     AgentModel,
@@ -32,6 +33,7 @@ _MEMORY_TOOLS: Dict[str, Any] = {}
 _MEMORY_AGENTS: Dict[str, Any] = {}
 _MEMORY_CONFIG: Dict[str, Any] = {}
 _MEMORY_TRACES: Dict[str, Any] = {}
+_MEMORY_NODE_TRACES: Dict[str, Any] = {}
 _MEMORY_SPANS: Dict[str, Any] = {}
 _MEMORY_WORKFLOWS: Dict[str, Any] = {}
 _MEMORY_WORKFLOW_NODES: Dict[str, Any] = {}
@@ -78,7 +80,7 @@ db = Database()
 
 
 class TaskRepository:
-    async def create(self, task_id: str, query: str, user_id: str, status: str = "pending") -> TaskModel:
+    async def create(self, task_id: str, query: str, user_id: str = "system", status: str = "pending") -> TaskModel:
         try:
             async with db.get_session() as session:
                 task = TaskModel(id=task_id, query=query, user_id=user_id, status=status)
@@ -250,7 +252,7 @@ class WorkflowRepository:
     async def create(
         self,
         task_id: str,
-        user_id: str,
+        user_id: str = "system",
         name: Optional[str] = None,
         definition: Optional[Dict[str, Any]] = None,
         status: str = "pending",
@@ -499,7 +501,7 @@ user_repo = UserRepository()
 
 
 class TraceRepository:
-    async def create(self, task_id: str, trace_id: str, user_id: str):
+    async def create(self, task_id: str, trace_id: str, user_id: str, status: str = "pending"):
         try:
             async with db.get_session() as session:
                 existing = await session.execute(select(TraceModel).where(TraceModel.trace_id == trace_id))
@@ -507,14 +509,14 @@ class TraceRepository:
                 if trace:
                     return trace
 
-                trace = TraceModel(task_id=task_id, trace_id=trace_id, user_id=user_id)
+                trace = TraceModel(task_id=task_id, trace_id=trace_id, user_id=user_id, status=status)
                 session.add(trace)
                 await session.commit()
                 await session.refresh(trace)
                 return trace
         except Exception as e:
             _fallback_log("TraceRepository.create", e)
-            row = _memory_row(id=trace_id, task_id=task_id, trace_id=trace_id, user_id=user_id, created_at=datetime.utcnow())
+            row = _memory_row(id=trace_id, task_id=task_id, trace_id=trace_id, user_id=user_id, status=status, created_at=datetime.utcnow(), updated_at=datetime.utcnow())
             _MEMORY_TRACES[trace_id] = row
             return row
 
@@ -535,6 +537,118 @@ class TraceRepository:
         except Exception as e:
             _fallback_log("TraceRepository.get_by_trace_id", e)
             return _MEMORY_TRACES.get(trace_id)
+
+    async def update_status(self, trace_id: str, status: str):
+        try:
+            async with db.get_session() as session:
+                result = await session.execute(select(TraceModel).where(TraceModel.trace_id == trace_id))
+                trace = result.scalar_one_or_none()
+                if trace:
+                    trace.status = status
+                    await session.commit()
+                    await session.refresh(trace)
+                return trace
+        except Exception as e:
+            _fallback_log("TraceRepository.update_status", e)
+            trace = _MEMORY_TRACES.get(trace_id)
+            if trace:
+                trace.status = status
+                trace.updated_at = datetime.utcnow()
+            return trace
+
+
+class NodeTraceRepository:
+    async def create(
+        self,
+        task_id: str,
+        user_id: str,
+        trace_id: str,
+        node_id: str,
+        status: str,
+        input_data: Optional[Dict[str, Any]] = None,
+        output_data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ):
+        try:
+            async with db.get_session() as session:
+                row = NodeTraceModel(
+                    task_id=task_id,
+                    user_id=user_id,
+                    trace_id=trace_id,
+                    node_id=node_id,
+                    status=status,
+                    input_data=input_data,
+                    output_data=output_data,
+                    error=error,
+                )
+                session.add(row)
+                await session.commit()
+                await session.refresh(row)
+                return row
+        except Exception as e:
+            _fallback_log("NodeTraceRepository.create", e)
+            row = _memory_row(
+                id=str(uuid4()),
+                task_id=task_id,
+                user_id=user_id,
+                trace_id=trace_id,
+                node_id=node_id,
+                status=status,
+                input_data=input_data or {},
+                output_data=output_data,
+                error=error,
+                started_at=datetime.utcnow(),
+                finished_at=datetime.utcnow(),
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow(),
+            )
+            _MEMORY_NODE_TRACES[row.id] = row
+            return row
+
+    async def update(
+        self,
+        node_trace_id: str,
+        status: Optional[str] = None,
+        output_data: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ):
+        try:
+            async with db.get_session() as session:
+                result = await session.execute(select(NodeTraceModel).where(NodeTraceModel.id == node_trace_id))
+                row = result.scalar_one_or_none()
+                if row:
+                    if status:
+                        row.status = status
+                    if output_data is not None:
+                        row.output_data = output_data
+                    if error is not None:
+                        row.error = error
+                    row.finished_at = datetime.utcnow()
+                    await session.commit()
+                    await session.refresh(row)
+                return row
+        except Exception as e:
+            _fallback_log("NodeTraceRepository.update", e)
+            row = _MEMORY_NODE_TRACES.get(node_trace_id)
+            if row:
+                if status:
+                    row.status = status
+                if output_data is not None:
+                    row.output_data = output_data
+                if error is not None:
+                    row.error = error
+                row.finished_at = datetime.utcnow()
+                row.updated_at = datetime.utcnow()
+            return row
+
+    async def get_by_task(self, task_id: str):
+        try:
+            async with db.get_session() as session:
+                result = await session.execute(select(NodeTraceModel).where(NodeTraceModel.task_id == task_id).order_by(NodeTraceModel.created_at))
+                return result.scalars().all()
+        except Exception as e:
+            _fallback_log("NodeTraceRepository.get_by_task", e)
+            return [row for row in _MEMORY_NODE_TRACES.values() if row.task_id == task_id]
 
 
 class SpanRepository:
@@ -778,6 +892,7 @@ class ConfigRepository:
 
 
 trace_repo = TraceRepository()
+node_trace_repo = NodeTraceRepository()
 span_repo = SpanRepository()
 tool_repo = ToolRepository()
 agent_repo = AgentRepository()

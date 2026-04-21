@@ -58,6 +58,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, [accessToken, user]);
 
   useEffect(() => {
+    const handleStorage = () => {
+      const storedApiKey = localStorage.getItem('apiKey');
+      const storedAccessToken = localStorage.getItem('accessToken');
+      const storedUser = localStorage.getItem('user');
+
+      if (!storedApiKey || !storedAccessToken || !storedUser) {
+        logout();
+      }
+    };
+
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, []);
+
+  useEffect(() => {
     const handleAuthExpired = () => {
       logout();
     };

@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, List
 from ...orchestrator.core import Orchestrator
 from ...agents.types import TaskStatus
 from ...logs.logger import logger
-from ...memory.long_term import task_repo, trace_repo, span_repo
+from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo
 from ...config.settings import settings
 from ..deps import OrchestratorDep, get_current_user
 
@@ -90,6 +90,23 @@ def _ensure_task_access(task, user: object) -> None:
         raise HTTPException(status_code=404, detail="Task not found")
 
 
+def _status_label(value: Any) -> Any:
+    return value.upper() if isinstance(value, str) else value
+
+
+def _serialize_node(node) -> Dict[str, Any]:
+    return {
+        "id": node.id,
+        "step_number": node.step_number,
+        "agent_type": node.agent_type,
+        "status": _status_label(node.status),
+        "depends_on": node.depends_on,
+        "input_data": node.input_data,
+        "output_data": node.output_data,
+        "confidence": node.confidence,
+    }
+
+
 async def _task_scoped_workflow_state(task_id: UUID, current_user: object):
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
@@ -152,18 +169,7 @@ async def get_task(task_id: UUID, current_user: object = Depends(get_current_use
             task_id=UUID(db_task.id),
             status=TaskStatus(db_task.status),
             result=db_task.result,
-            steps=[
-                {
-                    "step_id": node.id,
-                    "step_number": node.step_number,
-                    "agent_type": node.agent_type,
-                    "status": node.status,
-                    "input_data": node.input_data,
-                    "output_data": node.output_data,
-                    "confidence": node.confidence,
-                }
-                for node in workflow_state["nodes"]
-            ],
+            steps=[_serialize_node(node) for node in workflow_state["nodes"]],
             workflow_state={
                 "workflow": {
                     "id": workflow_state["workflow"].id if workflow_state["workflow"] else None,
@@ -172,19 +178,7 @@ async def get_task(task_id: UUID, current_user: object = Depends(get_current_use
                     "definition": workflow_state["workflow"].definition if workflow_state["workflow"] else None,
                     "status": workflow_state["workflow"].status if workflow_state["workflow"] else None,
                 },
-                "nodes": [
-                    {
-                        "id": node.id,
-                        "step_number": node.step_number,
-                        "agent_type": node.agent_type,
-                        "status": node.status,
-                        "depends_on": node.depends_on,
-                        "input_data": node.input_data,
-                        "output_data": node.output_data,
-                        "confidence": node.confidence,
-                    }
-                    for node in workflow_state["nodes"]
-                ],
+                "nodes": [_serialize_node(node) for node in workflow_state["nodes"]],
                 "edges": [
                     {"id": edge.id, "from_node_id": edge.from_node_id, "to_node_id": edge.to_node_id}
                     for edge in workflow_state["edges"]
@@ -210,18 +204,7 @@ async def list_tasks(current_user: object = Depends(get_current_user)):
             task_id=UUID(db_task.id),
             status=TaskStatus(db_task.status),
             result=db_task.result,
-            steps=[
-                {
-                    "step_id": node.id,
-                    "step_number": node.step_number,
-                    "agent_type": node.agent_type,
-                    "status": node.status,
-                    "input_data": node.input_data,
-                    "output_data": node.output_data,
-                    "confidence": node.confidence,
-                }
-                for node in workflow_state["nodes"]
-            ],
+            steps=[_serialize_node(node) for node in workflow_state["nodes"]],
             workflow_state={
                 "workflow": {
                     "id": workflow_state["workflow"].id if workflow_state["workflow"] else None,
@@ -230,19 +213,7 @@ async def list_tasks(current_user: object = Depends(get_current_user)):
                     "definition": workflow_state["workflow"].definition if workflow_state["workflow"] else None,
                     "status": workflow_state["workflow"].status if workflow_state["workflow"] else None,
                 },
-                "nodes": [
-                    {
-                        "id": node.id,
-                        "step_number": node.step_number,
-                        "agent_type": node.agent_type,
-                        "status": node.status,
-                        "depends_on": node.depends_on,
-                        "input_data": node.input_data,
-                        "output_data": node.output_data,
-                        "confidence": node.confidence,
-                    }
-                    for node in workflow_state["nodes"]
-                ],
+                "nodes": [_serialize_node(node) for node in workflow_state["nodes"]],
                 "edges": [
                     {"id": edge.id, "from_node_id": edge.from_node_id, "to_node_id": edge.to_node_id}
                     for edge in workflow_state["edges"]
@@ -281,17 +252,52 @@ async def get_task_trace(task_id: UUID, current_user: object = Depends(get_curre
         return {"message": "No trace available", "task_id": str(task_id)}
 
     spans = await span_repo.get_by_trace(trace_id)
-    if not spans:
-        return {"message": "No trace available", "task_id": str(task_id)}
+    node_traces = await node_trace_repo.get_by_task(str(task_id))
+    workflow_state = await _task_scoped_workflow_state(task_id, current_user)
 
     return {
         "trace_id": trace_id,
+        "task_id": str(task_id),
+        "user_id": str(getattr(current_user, "id", "")),
+        "status": _status_label(getattr(trace_row, "status", None)),
+        "workflow_state": {
+            "workflow": {
+                "id": workflow_state["workflow"].id if workflow_state["workflow"] else None,
+                "task_id": workflow_state["workflow"].task_id if workflow_state["workflow"] else None,
+                "name": workflow_state["workflow"].name if workflow_state["workflow"] else None,
+                "definition": workflow_state["workflow"].definition if workflow_state["workflow"] else None,
+                "status": _status_label(workflow_state["workflow"].status) if workflow_state["workflow"] else None,
+            },
+            "nodes": [_serialize_node(node) for node in workflow_state["nodes"]],
+            "edges": [
+                {"id": edge.id, "from_node_id": edge.from_node_id, "to_node_id": edge.to_node_id}
+                for edge in workflow_state["edges"]
+            ],
+        },
+        "node_traces": [
+            {
+                "id": row.id,
+                "task_id": row.task_id,
+                "user_id": row.user_id,
+                "trace_id": row.trace_id,
+                "node_id": row.node_id,
+                "status": _status_label(row.status),
+                "input_data": row.input_data,
+                "output_data": row.output_data,
+                "error": row.error,
+                "started_at": row.started_at.isoformat() if getattr(row, "started_at", None) else None,
+                "finished_at": row.finished_at.isoformat() if getattr(row, "finished_at", None) else None,
+                "created_at": row.created_at.isoformat() if getattr(row, "created_at", None) else None,
+                "updated_at": row.updated_at.isoformat() if getattr(row, "updated_at", None) else None,
+            }
+            for row in node_traces
+        ],
         "spans": [
             {
                 "span_id": s.span_id,
                 "operation": s.operation,
                 "agent_name": s.agent_name,
-                "start_time": s.start_time.isoformat(),
+                "start_time": s.start_time.isoformat() if getattr(s, "start_time", None) else None,
                 "end_time": s.end_time.isoformat() if s.end_time else None,
                 "status": s.status,
                 "error": s.error,

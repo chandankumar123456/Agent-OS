@@ -10,7 +10,7 @@ from ..logs.logger import logger
 from ..logs.tracing import trace_manager
 from ..mcp.message import MCPMessage, Payload, Metadata
 from ..mcp.protocol import mcp_protocol
-from ..memory.long_term import task_repo, trace_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
+from ..memory.long_term import task_repo, trace_repo, node_trace_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
 from ..guardrails.validator import guardrails
 from ..orchestrator.retry import retry_with_backoff, RetryConfig
 from ..orchestrator.fallback import fallback_manager, FallbackAgent
@@ -88,6 +88,10 @@ class Orchestrator:
             logger.info(f"Saved task to DB: {context.task_id}")
         except Exception as e:
             logger.warning(f"DB save failed: {e}")
+
+    @staticmethod
+    def _status_label(status: str) -> str:
+        return status.upper() if isinstance(status, str) else str(status)
     
     async def _validate_input(self, query: str, config: Dict[str, Any]) -> bool:
         try:
@@ -229,14 +233,33 @@ class Orchestrator:
             )
 
             if exec_result.status != AgentStatus.SUCCESS:
-                await workflow_node_repo.update(step_id, status=StepStatus.FAILED.value, output_data=exec_result.output_data, confidence=exec_result.confidence)
+                await workflow_node_repo.update(step_id, status=self._status_label(StepStatus.FAILED.value), output_data=exec_result.output_data, confidence=exec_result.confidence)
+                await node_trace_repo.create(
+                    task_id=str(task_id),
+                    user_id=context.user_id,
+                    trace_id=trace_id,
+                    node_id=step_id,
+                    status=self._status_label(StepStatus.FAILED.value),
+                    input_data=step_input,
+                    output_data=exec_result.output_data,
+                    error=exec_result.error_message,
+                )
                 trace_manager.end_span(step_span, "failure", exec_result.error_message)
                 raise UnrecoverableError(
                     exec_result.error_message or "Step execution failed",
                     ErrorType.EXECUTION_ERROR,
                 )
 
-            await workflow_node_repo.update(step_id, status=StepStatus.COMPLETED.value, output_data=exec_result.output_data, confidence=exec_result.confidence)
+            await workflow_node_repo.update(step_id, status=self._status_label(StepStatus.COMPLETED.value), output_data=exec_result.output_data, confidence=exec_result.confidence)
+            await node_trace_repo.create(
+                task_id=str(task_id),
+                user_id=context.user_id,
+                trace_id=trace_id,
+                node_id=step_id,
+                status=self._status_label(StepStatus.COMPLETED.value),
+                input_data=step_input,
+                output_data=exec_result.output_data,
+            )
             trace_manager.end_span(step_span, "success")
 
             return {
@@ -248,7 +271,17 @@ class Orchestrator:
                 "confidence": exec_result.confidence,
             }
         except Exception as e:
-            await workflow_node_repo.update(step_id, status=StepStatus.FAILED.value, output_data={"error": str(e)})
+            await workflow_node_repo.update(step_id, status=self._status_label(StepStatus.FAILED.value), output_data={"error": str(e)})
+            await node_trace_repo.create(
+                task_id=str(task_id),
+                user_id=context.user_id,
+                trace_id=trace_id,
+                node_id=step_id,
+                status=self._status_label(StepStatus.FAILED.value),
+                input_data=step_input,
+                output_data={"error": str(e)},
+                error=str(e),
+            )
             trace_manager.end_span(step_span, "failure", str(e))
             raise
 
@@ -306,13 +339,13 @@ class Orchestrator:
     ) -> AgentOutput:
         task_id = task_id or uuid4()
         if not user_id:
-            raise UnrecoverableError("Missing task owner", ErrorType.VALIDATION_ERROR)
+            user_id = "system"
         trace_id = str(uuid4())
         context = TaskContext(task_id, user_id, query, config)
         context.trace_id = trace_id
 
         try:
-            await trace_repo.create(str(task_id), trace_id, user_id)
+            await trace_repo.create(str(task_id), trace_id, user_id, status=TaskStatus.RUNNING.value)
         except Exception as e:
             logger.warning(f"Trace row creation failed, continuing with live cache: {e}")
 
@@ -330,6 +363,7 @@ class Orchestrator:
                 raise UnrecoverableError("Input validation failed", ErrorType.VALIDATION_ERROR)
 
             await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
+            await trace_repo.update_status(trace_id, TaskStatus.RUNNING.value)
             await self._load_task_state(context)
 
             tools_schema = tool_registry.list_tools()
@@ -362,6 +396,7 @@ class Orchestrator:
 
             if plan_result.status != AgentStatus.SUCCESS:
                 await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=plan_result.error_message)
+                await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
                 trace_manager.end_span(main_span, "failure", str(plan_result.error_message))
                 return plan_result
 
@@ -411,7 +446,15 @@ class Orchestrator:
 
             for node_id, node_result in workflow_result["nodes"].items():
                 if node_result["status"] == "skipped":
-                    await workflow_node_repo.update(node_id, status=StepStatus.SKIPPED.value)
+                    await workflow_node_repo.update(node_id, status=self._status_label(StepStatus.SKIPPED.value))
+                    await node_trace_repo.create(
+                        task_id=str(task_id),
+                        user_id=user_id,
+                        trace_id=trace_id,
+                        node_id=node_id,
+                        status=self._status_label(StepStatus.SKIPPED.value),
+                        input_data=next((node.input_data for node in workflow_nodes if node.id == node_id), {}),
+                    )
 
             verify_span = trace_manager.start_span(
                 trace_id=trace_id,
@@ -440,6 +483,7 @@ class Orchestrator:
 
             if verify_result.status != AgentStatus.SUCCESS:
                 await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=verify_result.error_message)
+                await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
                 trace_manager.end_span(main_span, "failure", str(verify_result.error_message))
                 return verify_result
 
@@ -464,6 +508,7 @@ class Orchestrator:
             context.result = combined_result
             context.status = TaskStatus.COMPLETED
             await self._save_task_state(context)
+            await trace_repo.update_status(trace_id, TaskStatus.COMPLETED.value)
             trace_manager.end_span(main_span, "success")
 
             return AgentOutput(
@@ -485,6 +530,7 @@ class Orchestrator:
             context.status = TaskStatus.FAILED
             await self._save_task_state(context)
             await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
+            await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
             trace_manager.end_span(main_span, "failure", str(e))
             return AgentOutput(
                 task_id=task_id,
@@ -500,6 +546,7 @@ class Orchestrator:
             context.status = TaskStatus.FAILED
             await self._save_task_state(context)
             await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
+            await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
             trace_manager.end_span(main_span, "failure", str(e))
             return AgentOutput(
                 task_id=task_id,

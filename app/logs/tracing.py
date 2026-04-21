@@ -22,6 +22,10 @@ class TraceManager:
     def __init__(self):
         self.spans: Dict[str, Span] = {}
         self.trace_index: Dict[str, List[str]] = {}
+
+    @staticmethod
+    def _status_label(status: str) -> str:
+        return status.upper() if isinstance(status, str) else status
     
     def start_span(
         self,
@@ -79,7 +83,7 @@ class TraceManager:
                 import asyncio
 
                 async def _persist_span_end() -> None:
-                    await span_repo.update(span_id, status=status, error=error)
+                    await span_repo.update(span_id, status=self._status_label(status), error=error)
 
                 try:
                     asyncio.get_running_loop()

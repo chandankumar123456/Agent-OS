@@ -23,7 +23,7 @@ logger.info("Celery app initialized")
 
 
 @celery_app.task(name="agent_os.execute_task", bind=True)
-def execute_task(self, task_id: str, query: str, config: dict, user_id: str):
+def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "system"):
     logger.info(f"Executing task {task_id}: {query}")
     
     try:
@@ -36,7 +36,10 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str):
         async def run():
             await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
             try:
-                result = await orchestrator.execute_task(query, config, task_id=UUID(task_id), user_id=user_id)
+                try:
+                    result = await orchestrator.execute_task(query, config, task_id=UUID(task_id), user_id=user_id)
+                except TypeError:
+                    result = await orchestrator.execute_task(query, config, task_id=UUID(task_id))
                 if result.status.value == "success":
                     await task_repo.update(task_id, status=TaskStatus.COMPLETED.value, result=result.output_data)
                 else:

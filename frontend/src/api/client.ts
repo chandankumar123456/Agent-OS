@@ -12,11 +12,35 @@ export interface TaskStep {
   confidence?: number;
 }
 
+export interface WorkflowNode {
+  id: string;
+  step_number: number;
+  agent_type: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED' | string;
+  depends_on?: string[];
+  input_data?: any;
+  output_data?: any;
+  confidence?: number;
+}
+
+export interface WorkflowState {
+  workflow?: {
+    id?: string | null;
+    task_id?: string | null;
+    name?: string | null;
+    definition?: any;
+    status?: string | null;
+  } | null;
+  nodes?: WorkflowNode[];
+  edges?: Array<{ id?: string; from_node_id?: string; to_node_id?: string }>;
+}
+
 export interface Task {
   task_id: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   result?: any;
   steps?: TaskStep[];
+  workflow_state?: WorkflowState;
   error?: any;
   created_at?: string;
 }
@@ -34,7 +58,24 @@ export interface TaskTraceSpan {
 export interface TaskTrace {
   trace_id?: string;
   task_id?: string;
+  status?: string;
   message?: string;
+  workflow_state?: WorkflowState;
+  node_traces?: Array<{
+    id: string;
+    task_id: string;
+    user_id: string;
+    trace_id: string;
+    node_id: string;
+    status: string;
+    input_data?: any;
+    output_data?: any;
+    error?: string | null;
+    started_at?: string | null;
+    finished_at?: string | null;
+    created_at?: string | null;
+    updated_at?: string | null;
+  }>;
   spans?: TaskTraceSpan[];
 }
 
@@ -161,6 +202,7 @@ class ApiClient {
       task_id: String(task.task_id),
       status: task.status,
       steps: Array.isArray(task.steps) ? task.steps.map((step: any) => this.normalizeTaskStep(step)) : [],
+      workflow_state: task.workflow_state,
     };
   }
 
