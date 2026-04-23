@@ -1,14 +1,17 @@
-# Details Directory
+# Details/ Technical Documentation
 
-Legacy/high-level project narrative documents.
+## Scope
+`Details/` contains long-form narrative and planning documents produced during project definition.
 
-## Contents
+## Role in Current System
+- These files capture intent/design history.
+- Runtime truth must be derived from executable code in `app/`, `frontend/`, migrations, and tests.
 
+## Files
 - `Project_Details.md`
 - `Core_Design_Specification.md`
 - `Complete_Project_Documentation.md`
 - `Implementation_Plan.md`
 
-## Purpose
-
-These files capture conceptual and roadmap-level descriptions. Current implementation behavior should be treated as authoritative from `app/`, `frontend/`, `migrations/`, and tests.
+## Usage Guidance
+Use this directory for historical context and design rationale, not as authoritative API/runtime specification.

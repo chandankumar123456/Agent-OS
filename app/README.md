@@ -1,19 +1,26 @@
-# app/
+# app/ Backend Technical Documentation
 
-Backend application package.
+## Purpose
+Python backend package implementing API, orchestration, runtime, persistence, tooling, and observability.
 
-## Subsystems
+## Entry Point
+- `main.py`: FastAPI application lifecycle, middleware, exception handling, route mounting.
 
-- `main.py`: FastAPI app creation, lifespan startup/shutdown, middleware wiring, exception handlers.
-- `api/`: HTTP routes and dependencies.
-- `orchestrator/`: execution engine and mode strategies.
-- `runtime/`: agent worker lifecycle and registry.
+## Subsystem Map
+- `api/`: route composition and request-layer contracts.
 - `agents/`: planner/executor/verifier implementations.
-- `tools/`: built-in and dynamic tools.
-- `memory/`: database/redis abstractions and repositories.
-- `mcp/`: inter-agent protocol + router + bus.
-- `middleware/`: auth + rate limiting.
-- `guardrails/`: output/input validation helpers.
-- `logs/`: logger, tracing, and metrics collectors.
-- `queue/`: Celery task entrypoint.
-- `config/`: environment and runtime config.
+- `runtime/`: agent worker lifecycle and singleton runtime.
+- `orchestrator/`: mode strategies and workflow pipeline.
+- `memory/`: database and redis state access.
+- `tools/`: built-in/dynamic tool execution.
+- `mcp/`: message protocol and routing.
+- `queue/`: Celery worker execution hook.
+- `middleware/`: auth and rate limiting.
+- `guardrails/`: validation checks.
+- `logs/`: metrics and tracing support.
+- `config/`: settings model.
+- `migrations/`: migration runner.
+
+## Architectural Constraints
+- Orchestrator delegates agent execution through `AgentRuntime` workers.
+- Startup requires DB/Redis/OpenAI config to pass validation.

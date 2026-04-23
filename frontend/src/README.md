@@ -1,19 +1,20 @@
-# frontend/src/
+# frontend/src/ Technical Documentation
 
-Frontend application source.
+## Purpose
+Primary frontend source code.
 
-## Files
+## Entry Modules
+- `main.tsx`: React bootstrapping.
+- `App.tsx`: route graph and protected-route boundary.
+- `index.css`: global Tailwind and custom utility classes.
 
-- `main.tsx`: React entrypoint.
-- `App.tsx`: route tree and protected-route gate.
-- `index.css`: Tailwind layers + custom design system utilities.
-- `App.css`: legacy starter stylesheet (mostly unused by current UI).
-
-## Subdirectories
-
-- `api/`: typed API client.
+## Directory Map
+- `api/`: typed backend client.
+- `context/`: auth provider and auth lifecycle tests.
 - `components/`: shared layout shell.
-- `context/`: auth state and session lifecycle.
-- `pages/`: feature screens.
+- `pages/`: route-level feature pages.
+- `assets/`: bundled visual assets.
 - `test/`: test setup.
-- `assets/`: static imported assets.
+
+## Operational Notes
+Auth failures propagate through custom `auth:expired` event and force logout.

@@ -1,15 +1,16 @@
-# app/tools/
+# app/tools/ Technical Documentation
 
-Tooling subsystem for agent tool use.
+## Purpose
+Defines tool contracts, registration, execution, parsing, and sandboxing.
 
-## Files
+## Modules
+- `base.py`: tool input/output base classes.
+- `registry.py`: global tool registry singleton.
+- `search.py`: built-in tools (`web_search`, `calculator`, `text_processor`).
+- `parser.py`: tool call extraction from agent JSON output.
+- `sandbox.py`: restricted execution of dynamic tool templates.
 
-- `base.py`: tool input/output contracts.
-- `registry.py`: in-memory registry with execute/list/get operations.
-- `search.py`: built-in `web_search`, `calculator`, `text_processor` tools.
-- `parser.py`: extracts `tool_call` from agent output JSON.
-- `sandbox.py`: restricted execution environment for dynamic tool templates.
-
-## Dynamic Tools
-
-Custom tools can be registered via API and executed through `DynamicTool` + sandbox.
+## Dynamic Tool Path
+1. Tool registered via API and persisted.
+2. `DynamicTool` wraps template and executes through `ToolSandbox`.
+3. Sandbox validates AST and blocks dangerous constructs.

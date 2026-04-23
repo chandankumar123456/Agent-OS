@@ -1,13 +1,16 @@
-# app/migrations/
+# app/migrations/ Technical Documentation
 
-Application-level migration runner.
+## Purpose
+Code-based migration orchestration and schema status reporting.
 
-## File
+## Module
+- `runner.py`: migration table management, file discovery, statement splitting, pending migration application.
 
-- `runner.py`: tracks migration versions in `schema_migrations`, discovers `migrations/*.sql`, applies pending migrations in order.
+## Migration Source
+Reads SQL files from repository-level `/migrations` directory.
 
-## Behavior
-
-- Splits SQL files into executable statements.
-- Inserts applied migration records idempotently.
-- Exposes schema status reporting.
+## Operational Flow
+1. Ensure `schema_migrations` table exists.
+2. Compare applied versions with disk migration files.
+3. Apply pending migrations in order.
+4. Record each applied version atomically.

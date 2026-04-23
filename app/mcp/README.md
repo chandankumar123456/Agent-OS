@@ -1,14 +1,17 @@
-# app/mcp/
+# app/mcp/ Technical Documentation
 
-MCP communication primitives for inter-agent messaging.
+## Purpose
+Defines inter-agent message contracts and delivery infrastructure.
 
-## Files
+## Modules
+- `message.py`: strongly typed MCP message payload/metadata envelope.
+- `bus.py`: abstract bus + in-memory + Redis pub/sub implementations.
+- `router.py`: receiver-channel registration and routing.
+- `protocol.py`: facade for message creation, send, and history management.
 
-- `message.py`: typed message payload/metadata/envelope.
-- `bus.py`: abstract bus + in-memory and Redis-backed implementations.
-- `router.py`: channel registration and message routing to agent handlers.
-- `protocol.py`: protocol facade, message creation, send/history APIs.
+## Runtime Use
+- Collaboration mode emits MCP messages per step.
+- Agent workers register inbox handlers with protocol router.
 
-## Default Transport
-
-`MemoryMCPBus` is default; Redis bus is scaffolded for production extensions.
+## Transport Notes
+Default implementation uses in-memory bus; Redis bus is scaffolded for production extension.

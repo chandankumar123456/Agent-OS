@@ -1,12 +1,14 @@
-# app/guardrails/
+# app/guardrails/ Technical Documentation
 
-Validation layer for output, steps, and context.
+## Purpose
+Implements lightweight validation for orchestration inputs/outputs and workflow steps.
 
-## Files
+## Modules
+- `schema.py`: validation result models and static validation rules.
+- `validator.py`: async wrapper classes (`OutputValidator`, `Guardrails`).
 
-- `schema.py`: validation result schema + static validation rules.
-- `validator.py`: async wrappers (`OutputValidator`, `Guardrails`) used by orchestrator.
+## Integration Points
+- `Orchestrator._validate_input` and `_validate_output` invoke guardrail validation.
 
-## Integration
-
-`Orchestrator` validates input payload and final output before persistence.
+## Limitations
+Current checks are schema/logical heuristics and do not perform advanced semantic policy enforcement.

@@ -1,5 +1,12 @@
-# docs/superpowers/plans/
+# docs/superpowers/plans/ Technical Documentation
 
-Implementation plan documents captured during iterative delivery phases.
+## Purpose
+Stores milestone implementation plans for major refactors and phases.
 
-Current files cover workflow engine, Celery/workflow hardening, and phase cleanup alignment.
+## Current Coverage
+- Workflow engine implementation plan
+- Celery/workflow hardening plan
+- Cleanup/alignment phase plan
+
+## Intended Use
+Task decomposition, delivery sequencing, and engineering checkpoints.

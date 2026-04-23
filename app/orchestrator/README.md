@@ -1,15 +1,22 @@
-# app/orchestrator/
+# app/orchestrator/ Technical Documentation
 
-Task orchestration core and workflow engine.
+## Purpose
+Implements task orchestration, workflow execution, retries, and mode strategies.
 
 ## Core Modules
+- `core.py`: orchestrator facade and mode dispatch.
+- `pipeline.py`: plan -> workflow build -> graph execute -> verify pipeline.
+- `workflow.py`: DAG model/validation/condition evaluation/execution.
+- `builder.py`: workflow persistence from planner steps.
+- `executor.py`: persisted step execution + node trace generation.
+- `retry.py`: retry config and backoff logic.
+- `context.py`: per-task runtime context container.
+- `errors.py`: domain error codes/types.
 
-- `core.py`: orchestrator facade, mode dispatch, persistence helpers.
-- `pipeline.py`: task/workflow mode pipeline (plan → build workflow → execute DAG → verify).
-- `workflow.py`: DAG model, validation, deterministic condition evaluation, graph execution.
-- `builder.py`: persists planner steps into workflow/node/edge rows.
-- `executor.py`: executes individual workflow nodes and records traces.
-- `retry.py`: retry config, retryability rules, exponential backoff helper.
-- `context.py`: per-task execution context object.
-- `errors.py`: typed error taxonomy and codes.
-- `modes/`: mode strategy implementations.
+## Execution Guarantees
+- Planner output normalized before persistence.
+- Graph dependencies validated before node execution.
+- Node statuses persisted and trace-linked.
+
+## Extension Surface
+Additional modes plug in through `modes/` strategy interface.

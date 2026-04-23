@@ -1,31 +1,31 @@
-# frontend/
+# frontend/ Technical Documentation
 
-React + TypeScript UI for interacting with Agent-OS APIs.
+## Purpose
+React control plane for interacting with Agent-OS backend APIs.
 
-## Stack
-
-- React 19 + React Router 7
+## Technology Stack
+- React 19 + TypeScript
+- React Router 7
 - Vite 8
-- TailwindCSS + custom utility styles
+- Tailwind CSS + custom design utilities
 - Vitest + Testing Library
 - ESLint + TypeScript ESLint
 
-## Application Areas (`src/pages`)
+## Application Architecture
+- App shell and protected routing in `src/App.tsx`.
+- Auth state management in `src/context/AuthContext.tsx`.
+- HTTP integration in `src/api/client.ts`.
+- Feature pages in `src/pages/*`.
 
-- `Dashboard`: task submission, polling, trace display, metrics cards.
-- `AgentBuilder`: CRUD for agents and tool assignment.
-- `Tools`: list/register/execute tools.
-- `Orchestrator`: active agent view.
-- `Monitor`: runtime metrics panel.
-- `Settings`: runtime config view/reset.
-- `Login`, `Signup`, `Landing`: auth + entry flows.
-
-## API Client
-
-`src/api/client.ts` centralizes all backend HTTP calls, auth header handling, and auth-expiry event dispatch.
+## Main UI Domains
+- Task execution and traces (`Dashboard`).
+- Tool registry (`Tools`).
+- Agent configuration (`AgentBuilder`).
+- Runtime monitor (`Monitor`).
+- Mode/agent visibility (`Orchestrator`).
+- Runtime config management (`Settings`).
 
 ## Scripts
-
 - `npm run dev`
 - `npm run lint`
 - `npm run test`

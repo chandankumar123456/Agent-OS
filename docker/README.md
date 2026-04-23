@@ -1,14 +1,17 @@
-# docker/
+# docker/ Technical Documentation
 
-Containerization and local stack orchestration.
+## Purpose
+Container images and service orchestration for local/dev runtime.
 
 ## Files
+- `Dockerfile`: Python runtime image for API and worker processes.
+- `docker-compose.yml`: multi-service composition (postgres, redis, api, worker).
 
-- `Dockerfile`: Python 3.11 runtime image for API/worker.
-- `docker-compose.yml`: postgres + redis + api + celery worker services.
+## Service Topology
+- `postgres`: persistent relational store
+- `redis`: cache, broker/backend, rate-limit storage
+- `api`: FastAPI application (`uvicorn`)
+- `worker`: Celery worker process
 
-## Default Ports
-
-- API: `8000`
-- PostgreSQL: `5432`
-- Redis: `6379`
+## Environment Contracts
+API and worker require shared DB/Redis/OpenAI environment values.

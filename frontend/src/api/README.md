@@ -1,11 +1,16 @@
-# frontend/src/api/
+# frontend/src/api/ Technical Documentation
 
-Typed HTTP client for backend API.
+## Purpose
+Centralized typed API client for backend communication.
 
-## File
+## Module
+- `client.ts`
 
-- `client.ts`: request wrapper, auth header injection, 401/403 handling, typed methods for tasks/tools/agents/config/health endpoints.
+## Responsibilities
+- Build base URL from `VITE_API_URL` fallback.
+- Attach bearer token from localStorage.
+- Handle non-2xx responses and auth expiration.
+- Expose typed methods for tasks, traces, tools, agents, config, and health/metrics.
 
-## Notable Behavior
-
-On auth failure, client clears local auth storage and emits `auth:expired` browser event.
+## Error Handling
+401/403 responses clear auth storage and dispatch `auth:expired` browser event.

@@ -1,13 +1,21 @@
-# app/memory/
+# app/memory/ Technical Documentation
 
-Persistence and state storage.
+## Purpose
+Long-term and short-term state management abstraction layer.
 
-## Files
-
-- `models.py`: SQLAlchemy table models.
-- `long_term.py`: async DB engine and repositories.
-- `short_term.py`: Redis client + task context cache helper.
+## Modules
+- `models.py`: SQLAlchemy model definitions.
+- `long_term.py`: async engine/session management + repositories.
+- `short_term.py`: Redis client and task context cache.
 
 ## Repository Coverage
+- Task/workflow/workflow node/workflow edge
+- User/auth lookup
+- Trace/node trace/span
+- Tool registry persistence
+- Agent registry persistence
+- Runtime config key-value storage
 
-Repositories exist for tasks, workflows, workflow nodes/edges, users, traces, node traces, spans, tools, agents, and runtime config.
+## Persistence Strategy
+- PostgreSQL via SQLAlchemy async for durable state.
+- Redis for ephemeral task context and middleware rate-limit primitives.

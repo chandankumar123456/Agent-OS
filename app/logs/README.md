@@ -1,14 +1,14 @@
-# app/logs/
+# app/logs/ Technical Documentation
 
-Observability utilities.
+## Purpose
+Provides logging, metrics, and tracing infrastructure.
 
-## Files
+## Modules
+- `logger.py`: app logger wrapper with structured helper methods.
+- `metrics.py`: in-memory Prometheus-compatible counters/histograms.
+- `tracing.py`: trace/span lifecycle manager with DB persistence support.
 
-- `logger.py`: lightweight structured logger wrapper.
-- `metrics.py`: in-memory Prometheus-format counters/histograms.
-- `tracing.py`: span lifecycle manager with DB persistence hooks.
-
-## Usage
-
-- HTTP middleware increments request/error counters and latency histogram.
-- Orchestration pipeline creates planner/executor/verifier/task spans.
+## Runtime Behavior
+- HTTP middleware in `app/main.py` increments request/error metrics.
+- Orchestrator creates spans for planning, step execution, verification, and task execution.
+- Trace data is queryable via task trace API.

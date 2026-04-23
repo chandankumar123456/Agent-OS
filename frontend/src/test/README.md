@@ -1,7 +1,10 @@
-# frontend/src/test/
+# frontend/src/test/ Technical Documentation
 
-Frontend test harness setup.
+## Purpose
+Shared test bootstrap configuration for frontend tests.
 
-## File
+## Module
+- `setup.ts`: extends assertions with `@testing-library/jest-dom`.
 
-- `setup.ts`: imports `@testing-library/jest-dom` matchers for Vitest environment.
+## Runtime
+Loaded by Vitest via `vitest.config.ts` `setupFiles` setting.

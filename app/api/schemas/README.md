@@ -1,8 +1,15 @@
-# app/api/schemas/
+# app/api/schemas/ Technical Documentation
 
-Pydantic API schema definitions.
+## Purpose
+Shared schema objects for request/response payload validation.
 
-## Files
+## Modules
+- `user.py`:
+  - `UserCreate`, `LoginRequest`
+  - `UserResponse`, `TokenResponse`
+- `error.py`:
+  - `ErrorContext`
+  - `ErrorEnvelope`
 
-- `user.py`: signup/login payloads and token response envelope.
-- `error.py`: structured error context/envelope models.
+## Design Notes
+Schemas are intentionally minimal and used by auth and error response surfaces.

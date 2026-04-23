@@ -1,8 +1,13 @@
-# app/config/
+# app/config/ Technical Documentation
 
-Configuration and environment settings.
+## Purpose
+Runtime configuration model and validation.
 
-## Files
+## Module
+- `settings.py`: `Settings(BaseSettings)` with field validators and required dependency checks.
 
-- `settings.py`: `pydantic-settings` model with validation and required dependency checks.
-- `models/`: reserved package namespace for config-domain models (currently empty).
+## Key Technical Characteristics
+- Loads env vars from `.env`.
+- Validates bounds for retries/timeouts/rate limits.
+- Enforces mandatory URLs and OpenAI API key.
+- Exposes singleton `settings` instance imported globally.

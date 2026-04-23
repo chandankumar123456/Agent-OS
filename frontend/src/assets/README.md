@@ -1,5 +1,7 @@
-# frontend/src/assets/
+# frontend/src/assets/ Technical Documentation
 
-Bundled frontend assets imported into UI components.
+## Purpose
+Bundled static media imported by React components.
 
-Current files include brand/placeholder SVG and image assets.
+## Current Assets
+Contains image/SVG assets used for branding and UI visuals.

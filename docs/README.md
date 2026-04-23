@@ -1,10 +1,11 @@
-# docs/
+# docs/ Technical Documentation
 
-Project planning and design artifacts used during implementation phases.
+## Purpose
+Hosts design and implementation process artifacts.
 
-## Structure
-
+## Subdirectories
 - `superpowers/specs/`: design specifications.
-- `superpowers/plans/`: phase-by-phase implementation plans.
+- `superpowers/plans/`: implementation plans/checklists.
 
-These are process documents; live behavior is defined by code and tests.
+## Usage
+Treat these as planning records and engineering rationale; validate runtime behavior against source code and tests.

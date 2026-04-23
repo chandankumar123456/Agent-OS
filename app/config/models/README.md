@@ -1,5 +1,7 @@
-# app/config/models/
+# app/config/models/ Technical Documentation
 
+## Purpose
 Reserved namespace for future configuration-domain models.
 
-Current state: only package marker (`__init__.py`).
+## Current State
+Contains package marker only (`__init__.py`).

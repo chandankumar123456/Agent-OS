@@ -1,11 +1,20 @@
-# app/auth/
+# app/auth/ Technical Documentation
 
-Authentication utilities.
+## Purpose
+Credential, token, and auth helper utilities.
 
-## Capabilities
+## Functions
+- `hash_password`, `verify_password`
+- `create_access_token`, `verify_access_token`
+- `generate_api_key`
+- `get_password_strength`
 
-- BCrypt password hashing with SHA-256 pre-hash fallback for >72-byte inputs.
-- Password verification with long-password compatibility path.
-- JWT creation and verification (`sub` + `exp` checks).
-- API key generation helper.
-- Password strength validator (length + upper + lower + digit).
+## Security Behavior
+- Bcrypt is used through passlib context.
+- Passwords exceeding bcrypt byte limit (72) are SHA-256 preprocessed.
+- JWT includes expiration and requires `sub` claim for validity.
+
+## Used By
+- `app/api/routes/auth.py`
+- `app/api/deps.py`
+- `app/middleware/auth.py`, `app/middleware/rate_limit.py`

@@ -1,16 +1,20 @@
-# app/agents/
+# app/agents/ Technical Documentation
 
-LLM-driven agent implementations and shared contracts.
+## Purpose
+Defines agent contracts and concrete role agents used by orchestration.
 
-## Files
+## Components
+- `base.py`: `AgentInput`, `AgentOutput`, `AgentRole`, `AgentStatus`, `BaseAgent` protocol.
+- `types.py`: task/step status enums used across APIs and repositories.
+- `llm_client.py`: OpenAI async wrapper for text/json completions.
+- `planner.py`: prompt + normalization to DAG-safe step format.
+- `executor.py`: step execution, iterative tool-calling loop (`MAX_TOOL_ROUNDS`).
+- `verifier.py`: output validation scoring/issue reporting.
 
-- `base.py`: `AgentInput`, `AgentOutput`, roles/status enums, protocol interface.
-- `types.py`: task/step status enums.
-- `llm_client.py`: OpenAI Async client wrapper (`complete`, `complete_json`).
-- `planner.py`: generates normalized DAG-compatible steps with dependency sanitization.
-- `executor.py`: executes steps, optionally calls tools through parser + registry.
-- `verifier.py`: validates aggregate output quality.
+## Contracts
+Agents are async and return `AgentOutput`; failures are encoded as structured failure output rather than uncaught exceptions.
 
-## Runtime Use
-
-Instantiated by `app/runtime/factory.py` and executed via `AgentRuntime` workers.
+## Dependencies
+- `app/tools` (executor)
+- `app/config/settings.py` (llm model/key)
+- `app/logs/logger.py`

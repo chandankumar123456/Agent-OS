@@ -1,12 +1,15 @@
-# app/queue/
+# app/queue/ Technical Documentation
 
-Asynchronous task execution integration.
+## Purpose
+Asynchronous task execution using Celery.
 
-## File
+## Module
+- `tasks.py`:
+  - Celery app configuration (broker/backend/timeouts/retry behavior).
+  - `agent_os.execute_task` worker function.
 
-- `tasks.py`: Celery app configuration and `agent_os.execute_task` worker task.
-
-## Execution Contract
-
-- Worker marks task running, executes orchestrator, then writes completed/failed state.
-- Retries with exponential delay until `MAX_RETRIES`.
+## Worker Responsibilities
+- connect DB and Redis for execution context,
+- mark task running/completed/failed,
+- invoke orchestrator with explicit `task_id` and `user_id`,
+- retry with exponential backoff when retry budget remains.

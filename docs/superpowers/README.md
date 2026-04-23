@@ -1,8 +1,11 @@
-# docs/superpowers/
+# docs/superpowers/ Technical Documentation
 
-Planning/specification workspace.
+## Purpose
+Organizes planning and architecture artifacts created during phased delivery.
 
-## Subdirectories
+## Structure
+- `plans/`: actionable execution plans.
+- `specs/`: technical design docs.
 
-- `plans/`: implementation plans with task checklists.
-- `specs/`: design-level technical specs.
+## Governance Note
+These docs are non-runtime artifacts and may diverge from implementation unless continuously maintained.

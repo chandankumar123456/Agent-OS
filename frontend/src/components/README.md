@@ -1,7 +1,16 @@
-# frontend/src/components/
+# frontend/src/components/ Technical Documentation
 
-Reusable UI composition components.
+## Purpose
+Shared reusable UI composition components.
 
-## File
+## Module
+- `Layout.tsx`: authenticated shell with sidebar navigation, user session controls, and outlet rendering.
 
-- `Layout.tsx`: authenticated shell with sidebar navigation and `<Outlet />` content area.
+## Navigation Model
+Routes map directly to page modules:
+- Dashboard
+- Agent Builder
+- Workflow Orchestrator
+- Runtime Monitor
+- Tool Registry
+- Settings

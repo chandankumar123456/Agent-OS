@@ -1,13 +1,15 @@
-# migrations/
+# migrations/ Technical Documentation
 
-SQL schema migrations consumed by `app/migrations/runner.py`.
+## Purpose
+SQL migration source files for database schema evolution.
 
 ## Files
+- `001_initial_schema.sql`: creates base schema and indexes.
+- `002_add_user_id_to_tasks.sql`: introduces multi-user task ownership field/indexes.
+- `003_fix_schema_mismatches.sql`: schema alignment fixes.
 
-- `001_initial_schema.sql`: creates base tables and indexes.
-- `002_add_user_id_to_tasks.sql`: adds `tasks.user_id` and related indexes.
-- `003_fix_schema_mismatches.sql`: fixes steps/users schema drift.
+## Execution
+Applied by `app/migrations/runner.py` in numeric order.
 
-## Ordering
-
-Migrations are applied in numeric prefix order.
+## Operational Guidance
+Keep migrations idempotent and forward-only; add new numbered files for future changes.

@@ -1,16 +1,22 @@
-# app/api/routes/
+# app/api/routes/ Technical Documentation
 
-HTTP endpoint implementations.
+## Purpose
+Implements externally exposed backend behavior.
 
-## Route Modules
+## Modules
+- `auth.py`: signup/login and token response.
+- `tasks.py`: task creation, listing, retrieval, cancellation, and trace aggregation.
+- `tools.py`: tool discovery/registration/execution APIs.
+- `agents.py`: runtime agent config CRUD APIs.
+- `config.py`: runtime config read/write/reset APIs.
+- `health.py`: readiness/liveness/metrics endpoints.
 
-- `auth.py`: signup/login, password validation, JWT issuance.
-- `tasks.py`: task creation, listing, status, cancellation, trace retrieval.
-- `tools.py`: list/get/register/execute tools (admin checks for registration).
-- `agents.py`: list/get/create/update/delete agents (admin checks for mutation).
-- `config.py`: read/update/reset runtime config keys (admin-only).
-- `health.py`: liveness/readiness/metrics endpoints.
+## Common Patterns
+- Uses `Depends(get_current_user)` for authentication.
+- Uses admin role checks for privileged mutations.
+- Returns structured error payloads aligned to `ErrorCode` enums.
 
-## Security Model
-
-All `/api/v1/*` endpoints require bearer auth except signup/login; route modules additionally enforce role-based checks for admin actions.
+## Cross-Cutting Dependencies
+- Repositories in `app/memory/long_term.py`
+- Orchestrator APIs and settings
+- Logger and tracing/metrics data providers

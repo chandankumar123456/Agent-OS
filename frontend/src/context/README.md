@@ -1,8 +1,13 @@
-# frontend/src/context/
+# frontend/src/context/ Technical Documentation
 
-React context providers and related tests.
+## Purpose
+Global auth/session state and lifecycle management.
 
-## Files
+## Modules
+- `AuthContext.tsx`: provider/hook/login/signup/logout/token expiry handling.
+- `AuthContext.test.tsx`: token expiry/invalid token logout behavior tests.
 
-- `AuthContext.tsx`: login/signup/logout flows, localStorage persistence, token-expiry checks, auth-expired event handling.
-- `AuthContext.test.tsx`: expiration/invalid token behavior tests.
+## Session Behavior
+- Persists `accessToken` and `user` in localStorage.
+- Validates token expiration client-side.
+- Listens to storage and custom auth-expired events for cross-tab/session sync.

@@ -1,14 +1,19 @@
-# app/runtime/
+# app/runtime/ Technical Documentation
 
-Agent lifecycle runtime.
+## Purpose
+Runtime control plane for agent worker registration and execution lifecycle.
 
-## Files
+## Modules
+- `runtime.py`: singleton `AgentRuntime` worker registry and lifecycle APIs.
+- `factory.py`: maps role/type to concrete agent implementation.
+- `worker.py`: queue-driven worker inbox and direct execute wrapper.
+- `pool.py`: semaphore-based worker capacity control.
 
-- `runtime.py`: singleton `AgentRuntime`, worker registry, init/shutdown, DB agent loading.
-- `factory.py`: agent instance creation logic by role.
-- `worker.py`: async worker with inbox loop + direct execution path.
-- `pool.py`: semaphore-backed agent capacity control.
+## Architectural Constraint
+`AgentRuntime` is the intended execution entry point for orchestrator-agent interactions.
 
-## Invariant
-
-All agent execution should flow through runtime-managed workers.
+## Startup Behavior
+`initialize()` eagerly registers core agents:
+- `core_planner`
+- `core_executor`
+- `core_verifier`

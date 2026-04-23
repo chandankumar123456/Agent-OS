@@ -224,3 +224,5 @@ claude.md
 .vevn/
 celery_logs.txt
 tests/
+!tests/
+!tests/README.md

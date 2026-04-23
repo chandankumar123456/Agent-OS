@@ -1,12 +1,19 @@
-# app/orchestrator/modes/
+# app/orchestrator/modes/ Technical Documentation
 
-Execution mode strategy implementations selected by `ModeStrategyFactory`.
+## Purpose
+Strategy implementations for execution-mode-specific orchestration behavior.
 
-## Modes
+## Modules
+- `base.py`: abstract `ModeStrategy` contract.
+- `factory.py`: mode-to-strategy mapping.
+- `task.py`: standard pipeline execution.
+- `workflow.py`: workflow semantics wrapper around pipeline.
+- `autonomous.py`: iterative self-directed loop mode.
+- `collaboration.py`: multi-agent collaboration with MCP dispatch.
 
-- `task.py`: standard pipeline mode.
-- `workflow.py`: pipeline mode with workflow semantics and optional predefined workflow lookup.
-- `autonomous.py`: iterative self-directed loop with completion checks.
-- `collaboration.py`: planner assigns step agent types + MCP dispatch + direct execution.
-- `base.py`: abstract strategy interface.
-- `factory.py`: mode registry and lookup.
+## Mode Registry
+Valid modes:
+- `task`
+- `workflow`
+- `autonomous`
+- `collaboration`
