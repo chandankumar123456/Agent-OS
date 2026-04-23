@@ -3,8 +3,33 @@
 ## Purpose
 Python backend package implementing API, orchestration, runtime, persistence, tooling, and observability.
 
+## Backend Component Architecture
+
+```mermaid
+flowchart TB
+    Main[main.py FastAPI App] --> API[api/]
+    Main --> Middleware[middleware/]
+    Main --> Runtime[runtime/]
+    Main --> Memory[memory/]
+
+    API --> Routes[api/routes]
+    API --> Schemas[api/schemas]
+
+    Routes --> Orchestrator[orchestrator/]
+    Orchestrator --> Agents[agents/]
+    Orchestrator --> Tools[tools/]
+    Orchestrator --> Guardrails[guardrails/]
+    Orchestrator --> Logs[logs/]
+
+    Runtime --> MCP[mcp/]
+    Runtime --> Queue[queue/]
+
+    Memory --> Postgres[(PostgreSQL)]
+    Memory --> Redis[(Redis)]
+```
+
 ## Entry Point
-- `main.py`: FastAPI application lifecycle, middleware, exception handling, route mounting.
+- `main.py`: FastAPI application lifecycle, middleware, exception handling, and route mounting.
 
 ## Subsystem Map
 - `api/`: route composition and request-layer contracts.
@@ -21,6 +46,11 @@ Python backend package implementing API, orchestration, runtime, persistence, to
 - `config/`: settings model.
 - `migrations/`: migration runner.
 
-## Architectural Constraints
+## Runtime Invariants
 - Orchestrator delegates agent execution through `AgentRuntime` workers.
 - Startup requires DB/Redis/OpenAI config to pass validation.
+- Workflow graph persistence is treated as source of truth for execution progress.
+
+## Operational Notes
+- With `USE_CELERY=true`, task execution runs in worker processes.
+- Without Celery, FastAPI background tasks run orchestration in-process.
