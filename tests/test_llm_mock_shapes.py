@@ -1,20 +1,10 @@
-import asyncio
+import pytest
 
 from app.agents.llm_client import LLMClient
 
 
-def test_mock_planner_json_returns_steps_shape():
-    client = LLMClient(api_key=None)
+def test_llm_client_requires_api_key(monkeypatch):
+    monkeypatch.setattr("app.agents.llm_client.settings.OPENAI_API_KEY", None, raising=False)
 
-    async def run():
-        return await client.complete_json([
-            {"role": "system", "content": "You are a Planner agent for Agent-OS."}
-        ])
-
-    result = asyncio.run(run())
-
-    assert isinstance(result, dict)
-    assert "steps" in result
-    assert isinstance(result["steps"], list)
-    assert result["steps"] and isinstance(result["steps"][0], dict)
-    assert "step" in result["steps"][0]
+    with pytest.raises(RuntimeError, match="OpenAI API key is required"):
+        LLMClient(api_key=None)

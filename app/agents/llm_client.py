@@ -12,13 +12,11 @@ class LLMClient:
     ):
         self.model = model or settings.OPENAI_MODEL
         self.api_key = api_key or settings.OPENAI_API_KEY
-        self.client = None
-        
-        if self.api_key and self.api_key != "your-openai-api-key-here":
-            self.client = AsyncOpenAI(api_key=self.api_key)
-            logger.info(f"LLM client initialized with model: {self.model}")
-        else:
-            logger.warning("OpenAI API key not configured - using mock mode")
+        if not self.api_key:
+            raise RuntimeError("OpenAI API key is required")
+
+        self.client = AsyncOpenAI(api_key=self.api_key)
+        logger.info(f"LLM client initialized with model: {self.model}")
     
     async def complete(
         self,
@@ -26,9 +24,6 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: Optional[int] = None
     ) -> str:
-        if not self.client:
-            return self._mock_complete(messages)
-        
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -39,16 +34,13 @@ class LLMClient:
             return response.choices[0].message.content
         except Exception as e:
             logger.error(f"LLM completion failed: {e}")
-            return self._mock_complete(messages)
+            raise
     
     async def complete_json(
         self,
         messages: List[Dict[str, str]],
         response_schema: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        if not self.client:
-            return self._mock_complete_json()
-        
         try:
             response = await self.client.chat.completions.create(
                 model=self.model,
@@ -61,17 +53,6 @@ class LLMClient:
             return json.loads(content)
         except Exception as e:
             logger.error(f"LLM JSON completion failed: {e}")
-            return self._mock_complete_json()
+            raise
     
-    def _mock_complete(self, messages: List[Dict[str, str]]) -> str:
-        user_message = next(
-            (m["content"] for m in messages if m["role"] == "user"),
-            "process this request"
-        )
-        return f"processed: {user_message}"
-    
-    def _mock_complete_json(self) -> Dict[str, Any]:
-        return {"steps": [{"step": "mock_step", "agent_type": "executor", "depends_on": []}]}
-
-
 llm_client = LLMClient()

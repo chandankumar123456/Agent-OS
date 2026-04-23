@@ -28,10 +28,9 @@ class OutputValidator:
             logger.warning(f"Steps validation failed: {result.errors}")
         
         return result
-    
-def validate_context(
-        context: Dict[str, Any]
-    ) -> ValidationResult:
+
+
+def validate_context(context: Dict[str, Any]) -> ValidationResult:
     return GuardrailSchema.validate_context(context)
 
 

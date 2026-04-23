@@ -57,13 +57,15 @@ services:
       - DATABASE_URL=postgresql+asyncpg://agentos:agentos@postgres:5432/agentos
       - REDIS_URL=redis://:@redis:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=gpt-5.4-mini
+      - OPENAI_MODEL=gpt-4o
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ..:/app
-    command: celery -A app.queue.tasks worker --loglevel=info
+    command: celery -A app.queue.tasks worker --loglevel=info --concurrency=4 --prefetch-multiplier=1
 
 volumes:
   postgres_data:

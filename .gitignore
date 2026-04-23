@@ -222,3 +222,5 @@ opencode.jsonc
 design.md
 claude.md
 .vevn/
+celery_logs.txt
+tests/

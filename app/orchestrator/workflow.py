@@ -206,6 +206,7 @@ class WorkflowEngine:
         nodes: List[WorkflowNode],
         runtime: Dict[str, Any],
         context: Dict[str, Any],
+        max_parallelism: Optional[int] = None,
     ) -> Dict[str, Any]:
         self.validate_graph(nodes)
         node_map = {node.id: node for node in nodes}
@@ -216,6 +217,7 @@ class WorkflowEngine:
         skipped: set[str] = set()
         running_context = dict(context)
         runner = runtime["run_node"]
+        semaphore = asyncio.Semaphore(max_parallelism) if max_parallelism else None
 
         while len(completed) + len(skipped) < len(nodes):
             ready = [
@@ -239,9 +241,15 @@ class WorkflowEngine:
                 continue
 
             async def execute_node(node: WorkflowNode) -> tuple[str, Dict[str, Any]]:
-                results[node.id]["status"] = "running"
-                output = await runner(node, running_context)
-                return node.id, output
+                if semaphore:
+                    async with semaphore:
+                        results[node.id]["status"] = "running"
+                        output = await runner(node, running_context)
+                        return node.id, output
+                else:
+                    results[node.id]["status"] = "running"
+                    output = await runner(node, running_context)
+                    return node.id, output
 
             node_outputs = await asyncio.gather(*(execute_node(node) for node in runnable))
 

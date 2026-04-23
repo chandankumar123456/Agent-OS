@@ -20,36 +20,29 @@ class SearchTool(BaseTool):
         
         logger.info(f"SearchTool executing: {query}")
         
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "https://api.exa.ai/search",
-                    json={"query": query, "num_results": 10},
-                    headers={
-                        "Authorization": f"Bearer {settings.EXA_API_KEY or ''}",
-                        "Content-Type": "application/json"
-                    } if settings.EXA_API_KEY else {}
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    results = [
-                        {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("snippet")}
-                        for r in data.get("results", [])[:5]
-                    ]
-                    return ToolOutput(
-                        success=True,
-                        result={"query": query, "results": results},
-                        metadata={"provider": "exa"}
-                    )
-        except Exception as e:
-            logger.warning(f"SearchTool fallback: {e}")
-        
-        return ToolOutput(
-            success=True,
-            result={"query": query, "results": []},
-            metadata={"provider": "mock"}
-        )
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://api.exa.ai/search",
+                json={"query": query, "num_results": 10},
+                headers={
+                    "Authorization": f"Bearer {settings.EXA_API_KEY}",
+                    "Content-Type": "application/json"
+                } if settings.EXA_API_KEY else {}
+            )
+
+            if response.status_code != 200:
+                raise RuntimeError(f"Search API returned {response.status_code}")
+
+            data = response.json()
+            results = [
+                {"title": r.get("title"), "url": r.get("url"), "snippet": r.get("snippet")}
+                for r in data.get("results", [])[:5]
+            ]
+            return ToolOutput(
+                success=True,
+                result={"query": query, "results": results},
+                metadata={"provider": "exa"}
+            )
 
 
 class CalculatorTool(BaseTool):

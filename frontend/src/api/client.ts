@@ -1,48 +1,36 @@
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
 
-export interface TaskStep {
-  step_id?: string;
-  step?: string;
-  agent?: string;
-  agent_type?: string;
-  status?: string;
-  result?: any;
-  output_data?: any;
-  input_data?: any;
-  confidence?: number;
+export interface WorkflowState {
+  workflow: {
+    id: string | null;
+    task_id: string | null;
+    name: string | null;
+    definition: any;
+    status: string | null;
+  } | null;
+  nodes: WorkflowNode[];
+  edges: Array<{ id: string; from_node_id: string; to_node_id: string }>;
 }
 
 export interface WorkflowNode {
   id: string;
   step_number: number;
   agent_type: string;
-  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'SKIPPED' | string;
-  depends_on?: string[];
+  status: string;
+  depends_on: number[];
   input_data?: any;
   output_data?: any;
   confidence?: number;
 }
 
-export interface WorkflowState {
-  workflow?: {
-    id?: string | null;
-    task_id?: string | null;
-    name?: string | null;
-    definition?: any;
-    status?: string | null;
-  } | null;
-  nodes?: WorkflowNode[];
-  edges?: Array<{ id?: string; from_node_id?: string; to_node_id?: string }>;
-}
-
 export interface Task {
   task_id: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-  result?: any;
-  steps?: TaskStep[];
-  workflow_state?: WorkflowState;
-  error?: any;
-  created_at?: string;
+  result: any;
+  steps: WorkflowNode[];
+  workflow_state: WorkflowState;
+  error: { message: string } | null;
+  created_at: string | null;
 }
 
 export interface TaskTraceSpan {
@@ -56,27 +44,27 @@ export interface TaskTraceSpan {
 }
 
 export interface TaskTrace {
-  trace_id?: string;
-  task_id?: string;
-  status?: string;
-  message?: string;
-  workflow_state?: WorkflowState;
-  node_traces?: Array<{
+  trace_id: string;
+  task_id: string;
+  user_id: string;
+  status: string;
+  workflow_state: WorkflowState;
+  node_traces: Array<{
     id: string;
     task_id: string;
     user_id: string;
     trace_id: string;
     node_id: string;
     status: string;
-    input_data?: any;
-    output_data?: any;
-    error?: string | null;
-    started_at?: string | null;
-    finished_at?: string | null;
-    created_at?: string | null;
-    updated_at?: string | null;
+    input_data: any;
+    output_data: any;
+    error: string | null;
+    started_at: string | null;
+    finished_at: string | null;
+    created_at: string | null;
+    updated_at: string | null;
   }>;
-  spans?: TaskTraceSpan[];
+  spans: TaskTraceSpan[];
 }
 
 export interface CreateTaskRequest {
@@ -85,6 +73,7 @@ export interface CreateTaskRequest {
     max_steps?: number;
     timeout?: number;
   };
+  mode?: 'task' | 'workflow' | 'autonomous' | 'collaboration';
 }
 
 export interface CreateTaskResponse {
@@ -120,25 +109,17 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
-  private getRootUrl(): string {
-    return this.baseUrl.replace(/\/api\/v1\/?$/, '');
-  }
-
   private getAuthHeaders(): HeadersInit {
-    const apiKey = localStorage.getItem('apiKey');
     const accessToken = localStorage.getItem('accessToken');
-    
+
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
     };
-    
-    if (apiKey) {
-      headers['x-api-key'] = apiKey;
-    }
+
     if (accessToken) {
       headers['Authorization'] = `Bearer ${accessToken}`;
     }
-    
+
     return headers;
   }
 
@@ -147,7 +128,7 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
-    
+
     const response = await fetch(url, {
       ...options,
       headers: {
@@ -158,9 +139,8 @@ class ApiClient {
 
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Request failed' }));
-      const message = error.error || error.detail || `HTTP ${response.status}`;
+      const message = error.error?.message || error.error || error.detail || `HTTP ${response.status}`;
       if (response.status === 401 || response.status === 403) {
-        localStorage.removeItem('apiKey');
         localStorage.removeItem('accessToken');
         localStorage.removeItem('user');
         window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
@@ -171,41 +151,6 @@ class ApiClient {
     return response.json();
   }
 
-  private normalizeTaskStep(step: any): TaskStep {
-    if (!step || typeof step !== 'object') {
-      return {};
-    }
-
-    const nestedStep = step.step && typeof step.step === 'object' ? step.step : null;
-    const stepName =
-      typeof step.step === 'string'
-        ? step.step
-        : nestedStep?.step || nestedStep?.result || step.result?.step;
-
-    return {
-      ...step,
-      step: stepName,
-      agent: step.agent || step.agent_type || nestedStep?.agent || nestedStep?.agent_type,
-      agent_type: step.agent_type || nestedStep?.agent_type,
-      result: step.result ?? step.output_data,
-      output_data: step.output_data ?? step.result,
-    };
-  }
-
-  private normalizeTask(task: any): Task {
-    if (!task || typeof task !== 'object') {
-      return task;
-    }
-
-    return {
-      ...task,
-      task_id: String(task.task_id),
-      status: task.status,
-      steps: Array.isArray(task.steps) ? task.steps.map((step: any) => this.normalizeTaskStep(step)) : [],
-      workflow_state: task.workflow_state,
-    };
-  }
-
   async createTask(request: CreateTaskRequest): Promise<CreateTaskResponse> {
     return this.request<CreateTaskResponse>('/tasks', {
       method: 'POST',
@@ -214,13 +159,11 @@ class ApiClient {
   }
 
   async getTask(taskId: string): Promise<Task> {
-    const task = await this.request<Task>(`/tasks/${taskId}`);
-    return this.normalizeTask(task);
+    return this.request<Task>(`/tasks/${taskId}`);
   }
 
-  async listTasks(): Promise<Task[]> {
-    const tasks = await this.request<Task[]>('/tasks');
-    return tasks.map((task) => this.normalizeTask(task));
+  async listTasks(limit: number = 50, offset: number = 0): Promise<Task[]> {
+    return this.request<Task[]>(`/tasks?limit=${limit}&offset=${offset}`);
   }
 
   async deleteTask(taskId: string): Promise<void> {
@@ -236,12 +179,12 @@ class ApiClient {
     maxAttempts: number = 60
   ): Promise<Task> {
     let attempts = 0;
-    
+
     return new Promise((resolve, reject) => {
       const poll = async () => {
         try {
           const task = await this.getTask(taskId);
-          
+
           if (onStatusChange) {
             onStatusChange(task);
           }
@@ -272,7 +215,7 @@ class ApiClient {
   }
 
   async getHealth(): Promise<{ status: string; version: string }> {
-    return fetch(`${this.getRootUrl()}/health`).then((response) => response.json());
+    return this.request<{ status: string; version: string }>('/health');
   }
 
   async getMetrics(): Promise<{
@@ -281,7 +224,12 @@ class ApiClient {
     error_rate: number;
     avg_response_time: number;
   }> {
-    return fetch(`${this.getRootUrl()}/metrics`).then((response) => response.json());
+    return this.request<{
+      requests_total: number;
+      errors_total: number;
+      error_rate: number;
+      avg_response_time: number;
+    }>('/metrics');
   }
 
   async getTools(): Promise<Array<{name: string; description: string; type: string; status: string}>> {

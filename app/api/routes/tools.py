@@ -45,35 +45,57 @@ class DynamicTool(BaseTool):
         self.parameters_schema = parameters_schema
         self.template = template
         self.tool_type = "custom"
+        from ...tools.sandbox import ToolSandbox
+        self._sandbox = ToolSandbox()
 
     async def execute(self, tool_input: ToolInput):
-        return ToolOutput(
-            success=True,
-            result={
-                "tool": self.name,
-                "parameters": tool_input.parameters,
-                "template": self.template,
-            },
-        )
+        if not self.template:
+            return ToolOutput(
+                success=True,
+                result={
+                    "tool": self.name,
+                    "parameters": tool_input.parameters,
+                    "template": None,
+                },
+            )
+        return await self._sandbox.run(self.name, self.template, tool_input.parameters)
 
 
 @router.get("", response_model=List[ToolInfo])
 async def list_tools(_: object = Depends(get_current_user)):
-    tools = await tool_repo.list_all()
-    return [
-        ToolInfo(
-            name=t.name,
-            description=t.description,
-            type=getattr(t, "type", getattr(t, "tool_type", "unknown")),
-            status=getattr(t, "status", "active"),
-            parameters=getattr(t, "parameters_schema", {}) or {},
-        )
-        for t in tools
-    ]
+    registry_tools = tool_registry.list_tools()
+    db_tools = await tool_repo.list_all()
+
+    registry_names = {t["name"] for t in registry_tools}
+
+    combined = list(registry_tools)
+
+    for t in db_tools:
+        if t.name not in registry_names:
+            combined.append(ToolInfo(
+                name=t.name,
+                description=t.description,
+                type=getattr(t, "type", getattr(t, "tool_type", "unknown")),
+                status=getattr(t, "status", "active"),
+                parameters=getattr(t, "parameters_schema", {}) or {},
+            ).model_dump())
+
+    return combined
 
 
 @router.get("/{tool_name}", response_model=ToolInfo)
 async def get_tool(tool_name: str, _: object = Depends(get_current_user)):
+    registry_tool = tool_registry.get(tool_name)
+    if registry_tool:
+        schema = registry_tool.get_schema()
+        return ToolInfo(
+            name=schema["name"],
+            description=schema["description"],
+            type=getattr(registry_tool, "tool_type", "builtin"),
+            status="active",
+            parameters=schema.get("parameters", {}),
+        )
+
     tool = await tool_repo.get_by_name(tool_name)
     if not tool:
         raise HTTPException(status_code=404, detail=f"Tool {tool_name} not found")

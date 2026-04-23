@@ -39,7 +39,7 @@ class WorkflowModel(Base):
     __tablename__ = "workflows"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-    task_id = Column(String(36), nullable=False, index=True)
+    task_id = Column(String(36), nullable=False, index=True, unique=True)
     user_id = Column(String(36), nullable=False, index=True)
     name = Column(String(100), nullable=True)
     definition = Column(JSON, nullable=True)

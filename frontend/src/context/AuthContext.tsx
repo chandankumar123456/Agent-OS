@@ -10,7 +10,6 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
-  apiKey: string | null;
   accessToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
@@ -25,17 +24,14 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [apiKey, setApiKey] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const storedApiKey = localStorage.getItem('apiKey');
     const storedAccessToken = localStorage.getItem('accessToken');
     const storedUser = localStorage.getItem('user');
 
-    if (storedApiKey && storedAccessToken && storedUser) {
-      setApiKey(storedApiKey);
+    if (storedAccessToken && storedUser) {
       setAccessToken(storedAccessToken);
       setUser(JSON.parse(storedUser));
     }
@@ -59,11 +55,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     const handleStorage = () => {
-      const storedApiKey = localStorage.getItem('apiKey');
       const storedAccessToken = localStorage.getItem('accessToken');
       const storedUser = localStorage.getItem('user');
 
-      if (!storedApiKey || !storedAccessToken || !storedUser) {
+      if (!storedAccessToken || !storedUser) {
         logout();
       }
     };
@@ -94,12 +89,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     const data = await response.json();
-    
-    localStorage.setItem('apiKey', data.api_key);
     localStorage.setItem('accessToken', data.access_token);
     localStorage.setItem('user', JSON.stringify(data.user));
-    
-    setApiKey(data.api_key);
     setAccessToken(data.access_token);
     setUser(data.user);
   };
@@ -117,33 +108,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     const data = await response.json();
-    
-    localStorage.setItem('apiKey', data.api_key);
     localStorage.setItem('accessToken', data.access_token);
     localStorage.setItem('user', JSON.stringify(data.user));
-    
-    setApiKey(data.api_key);
     setAccessToken(data.access_token);
     setUser(data.user);
   };
 
   const logout = () => {
-    localStorage.removeItem('apiKey');
     localStorage.removeItem('accessToken');
     localStorage.removeItem('user');
-    setApiKey(null);
     setAccessToken(null);
     setUser(null);
   };
 
   return (
     <AuthContext.Provider
-      value={{
-        user,
-        apiKey,
-        accessToken,
-        isAuthenticated: !!user,
-        isLoading,
+        value={{
+          user,
+          accessToken,
+          isAuthenticated: !!user,
+          isLoading,
         login,
         signup,
         logout,

@@ -12,7 +12,7 @@ const Settings = () => {
   const load = async () => {
     const data = await apiClient.getConfig();
     setConfig(data);
-    setModel(data.OPENAI_MODEL || 'gpt-4o');
+    setModel(data.OPENAI_MODEL);
   };
 
   useEffect(() => {
@@ -98,7 +98,7 @@ const Settings = () => {
             <div className="grid grid-cols-1 gap-6">
               <div>
                 <label className="block text-xs font-semibold tracking-widest uppercase text-secondaryText mb-2">Use Celery</label>
-                <input type="text" className="w-full obsidian-input" value={String(config.USE_CELERY ?? true)} readOnly />
+                <input type="text" className="w-full obsidian-input" value={String(config.USE_CELERY)} readOnly />
               </div>
             </div>
           </div>

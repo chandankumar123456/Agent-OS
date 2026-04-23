@@ -1,11 +1,11 @@
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
-from typing import Dict
+from typing import Optional
 import time
-from collections import defaultdict
 from ..config.settings import settings
 from ..logs.logger import logger
+from ..memory.short_term import redis_client
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -18,48 +18,65 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.burst_size = burst_size
-        self.client_requests: Dict[str, list] = defaultdict(list)
-    
-    def _clean_old_requests(self, client_id: str, current_time: float):
-        minute_ago = current_time - 60
-        self.client_requests[client_id] = [
-            t for t in self.client_requests[client_id] if t > minute_ago
-        ]
-    
-    def _is_rate_limited(self, client_id: str) -> bool:
+
+    async def _get_user_id(self, request: Request) -> Optional[str]:
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            from ..auth.utils import verify_access_token
+            payload = verify_access_token(auth_header.removeprefix("Bearer ").strip())
+            if payload and payload.get("sub"):
+                return str(payload["sub"])
+        return request.client.host if request.client else "unknown"
+
+    async def _is_rate_limited(self, client_id: str) -> bool:
         current_time = time.time()
-        self._clean_old_requests(client_id, current_time)
-        
-        if len(self.client_requests[client_id]) >= self.requests_per_minute:
-            return True
-        
-        recent_requests = [
-            t for t in self.client_requests[client_id]
-            if t > current_time - 1
-        ]
-        
-        if len(recent_requests) >= self.burst_size:
-            return True
-        
-        self.client_requests[client_id].append(current_time)
+        key = f"agentos:ratelimit:{client_id}"
+
+        try:
+            if redis_client.client:
+                pipe = redis_client.client.pipeline()
+                pipe.zremrangebyscore(key, 0, current_time - 60)
+                pipe.zadd(key, {str(current_time): current_time})
+                pipe.zcard(key)
+                pipe.expire(key, 60)
+                results = await pipe.execute()
+                request_count = results[2]
+
+                if request_count > self.requests_per_minute:
+                    return True
+
+                recent_count = await redis_client.client.zcount(
+                    key, current_time - 1, current_time
+                )
+                if recent_count > self.burst_size:
+                    return True
+
+                return False
+        except Exception as e:
+            logger.warning(f"Redis rate limit check failed, allowing request: {e}")
+            return False
+
         return False
-    
+
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ["/health", "/docs", "/openapi.json"]:
             return await call_next(request)
-        
-        client_id = request.client.host if request.client else "unknown"
-        
-        if self._is_rate_limited(client_id):
+
+        client_id = await self._get_user_id(request)
+
+        if await self._is_rate_limited(client_id):
             logger.warning(f"Rate limit exceeded for {client_id}")
             return JSONResponse(
                 status_code=429,
                 content={
-                    "detail": "Rate limit exceeded",
-                    "retry_after": 60
+                    "error": {
+                        "code": "RATE_LIMIT_EXCEEDED",
+                        "message": "Rate limit exceeded",
+                        "context": {"retry_after": 60}
+                    }
                 }
             )
-        
+
         response = await call_next(request)
         return response
 

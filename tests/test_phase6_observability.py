@@ -56,7 +56,7 @@ def test_user_cannot_access_another_users_task(monkeypatch):
         assert getattr(exc, "status_code", None) == 404
 
 
-def test_get_task_returns_uppercase_node_statuses(monkeypatch):
+def test_get_task_returns_lowercase_node_statuses(monkeypatch):
     task_id = uuid4()
     current_user = FakeUser(id=str(uuid4()), role="user")
 
@@ -95,8 +95,7 @@ def test_get_task_returns_uppercase_node_statuses(monkeypatch):
 
     response = asyncio.run(get_task(task_id, current_user))
 
-    assert response.steps[0]["status"] == "COMPLETED"
-    assert response.workflow_state["nodes"][0]["status"] == "COMPLETED"
+    assert response.workflow_state["nodes"][0]["status"] == "completed"
 
 
 def test_get_task_trace_returns_full_workflow_trace(monkeypatch):

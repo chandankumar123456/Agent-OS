@@ -1,5 +1,17 @@
+import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import Dashboard from './Dashboard';
+
+beforeAll(() => {
+  class MockIntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+
+  // @ts-expect-error test-only global stub
+  globalThis.IntersectionObserver = MockIntersectionObserver;
+});
 
 vi.mock('../api/client', () => ({
   apiClient: {

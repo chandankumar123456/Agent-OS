@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 from uuid import UUID, uuid4
 from datetime import datetime
@@ -8,6 +8,7 @@ from ...agents.types import TaskStatus
 from ...logs.logger import logger
 from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo
 from ...config.settings import settings
+from ...orchestrator.errors import ErrorCode
 from ..deps import OrchestratorDep, get_current_user
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -21,6 +22,7 @@ class TaskConfig(BaseModel):
 class TaskCreateRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000)
     config: Optional[TaskConfig] = None
+    mode: Optional[str] = Field(default="task", pattern="^(task|workflow|autonomous|collaboration)$")
 
 
 class TaskCreateResponse(BaseModel):
@@ -37,12 +39,6 @@ class TaskStatusResponse(BaseModel):
     workflow_state: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
-
-
-class TaskCreateBodyResponse(BaseModel):
-    task_id: UUID
-    status: TaskStatus
-    created_at: datetime
 
 
 def _step_dependencies(step: Dict[str, Any]) -> List[int]:
@@ -87,11 +83,20 @@ def _ensure_task_access(task, user: object) -> None:
     if _is_admin(user):
         return
     if not task or getattr(task, "user_id", None) != getattr(user, "id", None):
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": ErrorCode.TASK_ACCESS_DENIED.value,
+                    "message": "Task not found",
+                    "context": {}
+                }
+            }
+        )
 
 
 def _status_label(value: Any) -> Any:
-    return value.upper() if isinstance(value, str) else value
+    return value.lower() if isinstance(value, str) else value
 
 
 def _serialize_node(node) -> Dict[str, Any]:
@@ -113,46 +118,84 @@ async def _task_scoped_workflow_state(task_id: UUID, current_user: object):
     return await Orchestrator()._get_workflow_state(task_id)
 
 
-@router.post("", response_model=TaskCreateBodyResponse)
+@router.post("", response_model=TaskCreateResponse)
 async def create_task(
     request: TaskCreateRequest,
     orchestrator: OrchestratorDep,
+    background_tasks: BackgroundTasks,
     current_user: object = Depends(get_current_user)
 ):
+    user_id = str(getattr(current_user, "id"))
+
+    active_count = await task_repo.count_active_by_user(user_id)
+    if active_count >= settings.MAX_ACTIVE_TASKS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": {
+                    "code": ErrorCode.RATE_LIMIT_EXCEEDED.value,
+                    "message": f"Maximum active tasks ({settings.MAX_ACTIVE_TASKS_PER_USER}) reached",
+                    "context": {"active_tasks": active_count, "limit": settings.MAX_ACTIVE_TASKS_PER_USER}
+                }
+            }
+        )
+
     task_id = uuid4()
-    
+
     config = request.config.model_dump() if request.config else {}
-    config.setdefault("max_steps", 10)
-    config.setdefault("timeout", 300)
-    
+    config.setdefault("max_steps", settings.MAX_STEPS_DEFAULT)
+    config.setdefault("timeout", settings.TIMEOUT_DEFAULT)
+    config.setdefault("mode", request.mode or "task")
+
     created_at = datetime.utcnow()
-    
+
     db_task = await task_repo.create(
         task_id=str(task_id),
         query=request.query,
-        user_id=str(getattr(current_user, "id")),
+        user_id=user_id,
         status=TaskStatus.PENDING.value
     )
     created_at = db_task.created_at
-    
+
     if use_celery():
         try:
             from ...queue.tasks import celery_app
             celery_app.send_task(
                 "agent_os.execute_task",
-                args=[str(task_id), request.query, config, str(getattr(current_user, "id"))],
+                args=[str(task_id), request.query, config, user_id],
                 task_id=str(task_id)
             )
             logger.info(f"Enqueued task {task_id} to Celery")
         except Exception as e:
-            logger.warning(f"Celery enqueue failed: {e}")
-            raise HTTPException(status_code=503, detail="Task queue unavailable")
+            logger.error(f"Celery enqueue failed: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": {
+                        "code": ErrorCode.TASK_QUEUE_UNAVAILABLE.value,
+                        "message": "Task queue unavailable",
+                        "context": {"error": str(e)}
+                    }
+                }
+            )
     else:
-        raise HTTPException(status_code=503, detail="Celery execution is required")
-    
+        async def _run_task():
+            try:
+                await orchestrator.execute_task(
+                    query=request.query,
+                    config=config,
+                    task_id=task_id,
+                    user_id=user_id,
+                )
+            except Exception as e:
+                logger.error(f"Background task execution failed: {e}")
+
+        background_tasks.add_task(_run_task)
+        logger.info(f"Started background task {task_id}")
+
     logger.info(f"Created task {task_id} for query: {request.query}")
-    
-    return TaskCreateBodyResponse(
+
+    return TaskCreateResponse(
         task_id=task_id,
         status=TaskStatus.PENDING,
         created_at=created_at
@@ -188,17 +231,32 @@ async def get_task(task_id: UUID, current_user: object = Depends(get_current_use
             created_at=db_task.created_at,
         )
 
-    raise HTTPException(status_code=404, detail="Task not found")
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": {
+                "code": ErrorCode.TASK_NOT_FOUND.value,
+                "message": "Task not found",
+                "context": {"task_id": str(task_id)}
+            }
+        }
+    )
 
 
 @router.get("", response_model=List[TaskStatusResponse])
-async def list_tasks(current_user: object = Depends(get_current_user)):
-    db_tasks = await task_repo.list_all()
+async def list_tasks(
+    current_user: object = Depends(get_current_user),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0)
+):
+    if _is_admin(current_user):
+        db_tasks = await task_repo.list_all()
+    else:
+        db_tasks = await task_repo.list_by_user(str(getattr(current_user, "id")), limit=limit, offset=offset)
+
     all_tasks = []
-    
+
     for db_task in db_tasks:
-        if not _is_admin(current_user) and getattr(db_task, "user_id", None) != getattr(current_user, "id", None):
-            continue
         workflow_state = await _task_scoped_workflow_state(UUID(db_task.id), current_user)
         all_tasks.append(TaskStatusResponse(
             task_id=UUID(db_task.id),
@@ -222,7 +280,7 @@ async def list_tasks(current_user: object = Depends(get_current_user)):
             error={"message": db_task.error} if db_task.error else None,
             created_at=db_task.created_at
         ))
-    
+
     return all_tasks
 
 
@@ -231,7 +289,7 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
     await task_repo.update(str(task_id), status=TaskStatus.CANCELLED.value)
-    
+
     return {"message": "Task deleted"}
 
 
@@ -239,7 +297,16 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
 async def get_task_trace(task_id: UUID, current_user: object = Depends(get_current_user)):
     db_task = await task_repo.get(str(task_id))
     if not db_task:
-        raise HTTPException(status_code=404, detail="Task not found")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": {
+                    "code": ErrorCode.TASK_NOT_FOUND.value,
+                    "message": "Task not found",
+                    "context": {"task_id": str(task_id)}
+                }
+            }
+        )
     _ensure_task_access(db_task, current_user)
 
     result = db_task.result if isinstance(db_task.result, dict) else {}

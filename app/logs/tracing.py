@@ -1,5 +1,5 @@
-from typing import Dict, Any, List, Optional, Awaitable
-from uuid import UUID, uuid4
+from typing import Dict, Any, List, Optional
+from uuid import uuid4
 from datetime import datetime
 from dataclasses import dataclass, field
 from ..memory.long_term import trace_repo, span_repo
@@ -19,14 +19,22 @@ class Span:
 
 
 class TraceManager:
+    """Manages execution spans with transactional persistence.
+
+    Spans are buffered in memory and can be persisted on demand.
+    This allows the orchestrator to commit spans in the same
+    database transaction as task state updates.
+    """
+
     def __init__(self):
         self.spans: Dict[str, Span] = {}
         self.trace_index: Dict[str, List[str]] = {}
+        self._pending_db_ops: List[dict] = []
 
     @staticmethod
     def _status_label(status: str) -> str:
-        return status.upper() if isinstance(status, str) else status
-    
+        return status.lower() if isinstance(status, str) else status
+
     def start_span(
         self,
         trace_id: str,
@@ -35,7 +43,7 @@ class TraceManager:
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         span_id = str(uuid4())
-        
+
         span = Span(
             span_id=span_id,
             trace_id=trace_id,
@@ -44,29 +52,15 @@ class TraceManager:
             start_time=datetime.utcnow(),
             metadata=metadata or {}
         )
-        
-        try:
-            import asyncio
 
-            async def _persist_span() -> None:
-                persisted = await span_repo.create(trace_id, span_id, operation, agent_name, metadata or {})
-                self.spans[span_id] = span
-                if trace_id not in self.trace_index:
-                    self.trace_index[trace_id] = []
-                if span_id not in self.trace_index[trace_id]:
-                    self.trace_index[trace_id].append(span_id)
-                return persisted
+        self.spans[span_id] = span
+        if trace_id not in self.trace_index:
+            self.trace_index[trace_id] = []
+        if span_id not in self.trace_index[trace_id]:
+            self.trace_index[trace_id].append(span_id)
 
-            try:
-                asyncio.get_running_loop()
-                asyncio.create_task(_persist_span())
-            except RuntimeError:
-                pass
-        except Exception:
-            pass
-        
         return span_id
-    
+
     def end_span(
         self,
         span_id: str,
@@ -79,20 +73,27 @@ class TraceManager:
             span.status = status
             span.error = error
 
-            try:
-                import asyncio
+    async def persist_span(self, span_id: str) -> None:
+        """Persist a single span to the database."""
+        if span_id not in self.spans:
+            return
+        span = self.spans[span_id]
+        await span_repo.create(
+            span.trace_id,
+            span.span_id,
+            span.operation,
+            span.agent_name,
+            span.metadata
+        )
+        if span.end_time:
+            await span_repo.update(span_id, status=self._status_label(span.status), error=span.error)
 
-                async def _persist_span_end() -> None:
-                    await span_repo.update(span_id, status=self._status_label(status), error=error)
+    async def persist_trace(self, trace_id: str) -> None:
+        """Persist all spans for a trace to the database."""
+        span_ids = self.trace_index.get(trace_id, [])
+        for span_id in span_ids:
+            await self.persist_span(span_id)
 
-                try:
-                    asyncio.get_running_loop()
-                    asyncio.create_task(_persist_span_end())
-                except RuntimeError:
-                    pass
-            except Exception:
-                pass
-    
     def get_trace(self, trace_id: str) -> List[Span]:
         span_ids = self.trace_index.get(trace_id, [])
         return [self.spans[sid] for sid in span_ids if sid in self.spans]
@@ -121,12 +122,15 @@ class TraceManager:
         return spans
 
     def get_trace_duration(self, trace_id: str) -> float:
-        raise RuntimeError("Trace duration is unavailable without DB read path")
-    
-    def clear_trace(self, trace_id: str):
-        span_ids = self.trace_index.pop(trace_id, [])
-        for sid in span_ids:
-            self.spans.pop(sid, None)
+        spans = self.get_trace(trace_id)
+        if not spans:
+            return 0.0
+        start_times = [s.start_time for s in spans if s.start_time]
+        end_times = [s.end_time for s in spans if s.end_time]
+        if not start_times or not end_times:
+            return 0.0
+        return (max(end_times) - min(start_times)).total_seconds()
 
 
+# Module-level singleton for backward compatibility
 trace_manager = TraceManager()

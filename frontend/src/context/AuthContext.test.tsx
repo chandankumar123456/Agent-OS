@@ -1,3 +1,4 @@
+import React from 'react';
 import { render, waitFor } from '@testing-library/react';
 import { AuthProvider, useAuth } from './AuthContext';
 
@@ -7,7 +8,6 @@ function Probe() {
 }
 
 test('expired token logs out', async () => {
-  localStorage.setItem('apiKey', 'key');
   localStorage.setItem('user', JSON.stringify({ id: '1', email: 'x@test.com', created_at: 'now' }));
   localStorage.setItem('accessToken', 'eyJhbGciOiJub25lIn0.eyJleHAiOjF9.');
 
@@ -21,7 +21,6 @@ test('expired token logs out', async () => {
 });
 
 test('invalid token logs out', async () => {
-  localStorage.setItem('apiKey', 'key');
   localStorage.setItem('user', JSON.stringify({ id: '1', email: 'x@test.com', created_at: 'now' }));
   localStorage.setItem('accessToken', 'not-a-jwt');
 

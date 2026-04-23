@@ -1,27 +1,17 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { CheckCircle2, Play, GitMerge, Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { apiClient } from '../api/client';
 
 const Orchestrator = () => {
   const [agents, setAgents] = useState<Array<{agent_id: string; name: string; role: string; status: string}>>([]);
   const [loading, setLoading] = useState(true);
-  const [taskId, setTaskId] = useState('');
-  const [taskStatus, setTaskStatus] = useState<string>('idle');
 
   useEffect(() => {
     apiClient.listAgents()
       .then(setAgents)
       .finally(() => setLoading(false));
   }, []);
-
-  const executeDemo = async () => {
-    setTaskStatus('running');
-    const task = await apiClient.createTask({ query: 'Run orchestrator demo', config: { max_steps: 10, timeout: 300 } });
-    setTaskId(task.task_id);
-    await apiClient.pollTaskStatus(task.task_id, (update) => setTaskStatus(update.status), 1500, 40);
-    setTaskStatus('completed');
-  };
 
   const refreshAgents = async () => {
     setLoading(true);
@@ -39,18 +29,9 @@ const Orchestrator = () => {
           <h1 className="text-3xl font-bold tracking-tight mb-1 cursor-default">Workflow Orchestrator</h1>
           <p className="text-secondaryText text-sm">Multi-agent pipeline status.</p>
         </div>
-        <div className="flex gap-3">
-          <button className="btn-secondary flex items-center gap-2" onClick={refreshAgents}>
-            <GitMerge className="w-4 h-4" /> Add Branch
-          </button>
-          <button className="btn-primary flex items-center gap-2 shadow-glow-cyan" onClick={executeDemo}>
-            <Play className="w-4 h-4" /> Execute Flow
-          </button>
-        </div>
-      </div>
-
-      <div className="obsidian-panel border border-outline/10 p-4 text-sm text-secondaryText">
-        Current task: <span className="text-primaryText">{taskId || 'none'}</span> | Status: <span className="text-primaryText">{taskStatus}</span>
+        <button className="btn-secondary flex items-center gap-2" onClick={refreshAgents}>
+          Refresh Agents
+        </button>
       </div>
 
       <div className="flex-1 flex justify-center py-12 obsidian-panel border border-outline/10 relative overflow-hidden">

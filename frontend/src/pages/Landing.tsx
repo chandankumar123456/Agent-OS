@@ -80,9 +80,6 @@ const Landing = () => {
             >
               Initialize Workspace
             </button>
-            <button className="btn-secondary px-8 py-4 text-lg">
-              View Documentation
-            </button>
           </motion.div>
         </motion.div>
 

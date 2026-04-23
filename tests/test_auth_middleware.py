@@ -41,8 +41,8 @@ async def _dispatch(path: str, headers: list[tuple[bytes, bytes]] | None = None)
     return called, response
 
 
-def test_signup_route_is_not_blocked_without_credentials():
-    called, response = asyncio.run(_dispatch("/api/v1/auth/signup"))
+def test_api_route_is_blocked_without_credentials():
+    called, response = asyncio.run(_dispatch("/api/v1/tasks"))
 
-    assert called is True
-    assert response is not None
+    assert called is False
+    assert response.status_code == 401

@@ -2,387 +2,197 @@
 
 MCP-based multi-agent operating system for structured AI workflow execution.
 
-## 1) Project purpose
+## 1) System Overview
 
-Agent-OS is designed as a layered runtime for AI agents, not a single-model chatbot.
+Agent-OS is a layered runtime for AI agents, not a single-model chatbot. It enforces strict separation between orchestration, execution, communication, tools, safety, and observability.
 
-Core goals:
-- Centralized orchestration (orchestrator controls flow end-to-end)
-- Structured communication (MCP message contract)
-- Composable agents (planner, executor, verifier)
-- Recoverable failures (retry/fallback patterns)
-- Observable execution (logs + traces)
+### Core Design Principles
 
-This README is implementation-accurate for the code currently in this repository and aligned with the design documents in `Details/`.
+- **Runtime is the ONLY execution entry point**: No module may instantiate or call agents directly.
+- **Strategy-based modes**: Task, Workflow, Autonomous, and Collaboration modes are distinct strategies with zero conditional branching in the orchestrator.
+- **MCP for inter-agent communication**: All cross-agent messaging flows through the Message Control Protocol bus.
+- **Sandboxed tool execution**: Custom tools run in a restricted Python environment with blocked builtins and AST validation.
+- **Transactional observability**: Spans are persisted in the same conceptual transaction as state updates; metrics are Prometheus-compatible.
+
+---
 
 ## 2) Architecture
 
-Locked logical architecture (from `Details/Implementation_Plan.md`):
-
 ```text
-User -> API Layer -> Orchestrator -> Agent Layer -> Tool Layer
-                          |
-                       MCP Layer
-                          |
-                  Memory + State Layer
-                          |
-                   Observability Layer
-                          |
-                  Queue / Execution Layer
+┌─────────────────────────────────────────────────────────────┐
+│  API Layer (FastAPI routes)                                  │
+│  - Thin: validation, auth, serialization                    │
+├─────────────────────────────────────────────────────────────┤
+│  Orchestration Layer                                         │
+│  - Orchestrator: mode selection → aggregate results         │
+│  - PipelineExecutor: plan → execute → verify pipeline       │
+│  - WorkflowBuilder: DAG construction and persistence        │
+│  - StepExecutor: single-step execution via Runtime          │
+│  - WorkflowEngine: DAG traversal with condition sandbox     │
+├─────────────────────────────────────────────────────────────┤
+│  Mode Strategies                                             │
+│  - TaskMode, WorkflowMode, AutonomousMode, CollaborationMode│
+│  - Each delegates ALL execution to Runtime                  │
+├─────────────────────────────────────────────────────────────┤
+│  Agent Layer                                                 │
+│  - PlannerAgent, ExecutorAgent, VerifierAgent               │
+│  - BaseAgent protocol with execute(input) → output          │
+├─────────────────────────────────────────────────────────────┤
+│  Runtime Layer (CORE EXECUTION ENGINE)                       │
+│  - AgentRuntime: singleton registry agent_id → AgentWorker  │
+│  - AgentWorker: owns inbox queue, processes AgentInput      │
+│  - AgentFactory: creates agents from config                 │
+│  - AgentPool: semaphore-guarded concurrency (~100 workers)  │
+├─────────────────────────────────────────────────────────────┤
+│  MCP Layer (System Communication)                            │
+│  - MCPBus: abstract pub/sub (MemoryMCPBus | RedisMCPBus)    │
+│  - MessageRouter: routes by receiver_agent to inbox         │
+│  - MCPProtocol: message creation, history, bounded log      │
+├─────────────────────────────────────────────────────────────┤
+│  Tool Layer                                                  │
+│  - ToolRegistry: central discovery + capability binding      │
+│  - ToolCallParser: extracts tool invocations from LLM text  │
+│  - ToolSandbox: restricted builtins + AST validation         │
+│  - BaseTool: schema + execute contract                       │
+├─────────────────────────────────────────────────────────────┤
+│  Safety Layer                                                │
+│  - Guardrails: input/output/structural validation           │
+│  - ToolSandbox: execution isolation with blocked imports    │
+│  - Output validation raises UnrecoverableError on failure   │
+├─────────────────────────────────────────────────────────────┤
+│  Observability Layer                                         │
+│  - StructuredLogger: JSON-structured logs with trace_id      │
+│  - TraceManager: span creation, nesting, timing             │
+│  - MetricsCollector: Prometheus-compatible counters/hists   │
+│  - HealthReporter: /health, /ready, /live, /health/metrics  │
+├─────────────────────────────────────────────────────────────┤
+│  Memory Layer                                                │
+│  - PostgreSQL: long-term persistence (SQLAlchemy async)     │
+│  - Redis: short-term context cache + MCP pub/sub            │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Current runtime flow in code:
+### Data Flow
 
-```text
-Client -> FastAPI (/api/v1/tasks)
-       -> in-process background task
-       -> Orchestrator
-       -> Planner -> Executor (loop) -> Verifier
-       -> result returned via GET /api/v1/tasks/{task_id}
+1. **Task Creation**: Client → API Route → Orchestrator.execute_task()
+2. **Mode Selection**: Orchestrator → ModeStrategyFactory → ModeStrategy
+3. **Execution Entry**: ModeStrategy → AgentRuntime (NEVER direct agent calls)
+4. **Agent Execution**: AgentRuntime → AgentWorker → AgentInstance.execute()
+5. **Tool Use**: ExecutorAgent → ToolCallParser → ToolRegistry → ToolSandbox
+6. **Collaboration**: CollaborationMode → MCPBus → MessageRouter → AgentWorker inbox
+7. **Observability**: Every layer emits spans/logs → TraceManager → DB
+
+---
+
+## 3) Layer-by-Layer Explanation
+
+### API Layer (`app/api/`)
+
+- **Routes**: `tasks.py`, `auth.py`, `tools.py`, `agents.py`, `config.py`, `health.py`
+- **Dependency injection**: `deps.py` returns the module-level `orchestrator` singleton
+- **No business logic**: Routes validate, serialize, and delegate exclusively
+
+### Orchestration Layer (`app/orchestrator/`)
+
+- **`core.py`** (~182 lines): Thin orchestrator. Selects mode via `ModeStrategyFactory`, delegates pipeline to `PipelineExecutor`.
+- **`pipeline.py`**: Full plan → execute → verify pipeline. Creates traces, calls planner/executor/verifier through Runtime, handles errors.
+- **`builder.py`**: Persists workflow DAG nodes and edges to PostgreSQL.
+- **`executor.py`**: Executes a single step via an agent instance, updating node trace records.
+- **`workflow.py`**: `WorkflowEngine` traverses DAGs, evaluates conditions in an AST sandbox, and handles parallel/sequential execution.
+
+### Mode Strategies (`app/orchestrator/modes/`)
+
+- **`base.py`**: `ModeStrategy` ABC. Receives `AgentRuntime`, `Orchestrator`, query, config, task_id, user_id.
+- **`task.py`**: Standard pipeline. Delegates to `PipelineExecutor`.
+- **`workflow.py`**: Loads predefined workflows by name from DB; falls back to dynamic planning.
+- **`autonomous.py`**: Replanning loop up to `max_steps`. Halts on completion heuristic or empty plan.
+- **`collaboration.py`**: Distributes steps to different agent types via Runtime and MCP messages.
+
+### Runtime Layer (`app/runtime/`)
+
+- **`runtime.py`**: `AgentRuntime` singleton. Lazy/eager registration. `initialize()` creates core agents at startup. `register()` acquires pool slot. `get()` returns `AgentWorker`.
+- **`worker.py`**: `AgentWorker` owns an `asyncio.Queue` inbox. `execute()` calls `agent_instance.execute()`. `on_message()` enqueues MCP messages. `_run_loop()` processes inbox.
+- **`factory.py`**: `AgentFactory` creates `PlannerAgent`, `ExecutorAgent`, `VerifierAgent`, or custom agents from DB config.
+- **`pool.py`**: `AgentPool` uses `asyncio.Semaphore(max_agents)` to limit concurrent workers.
+
+### MCP Layer (`app/mcp/`)
+
+- **`bus.py`**: `MCPBus` ABC. `MemoryMCPBus` for local dev (bounded history: 10,000 messages). `RedisMCPBus` for production.
+- **`router.py`**: `MessageRouter` registers agent handlers and routes messages to channels (`agent:{name}`).
+- **`protocol.py`**: `MCPProtocol` creates messages, sends via router, maintains bounded message log.
+
+### Tool Layer (`app/tools/`)
+
+- **`registry.py`**: `ToolRegistry` singleton. `register()`, `get()`, `list_tools()`, `execute()`.
+- **`sandbox.py`**: `ToolSandbox` validates code via AST (blocks `import`, `eval`, `exec`, `open`), executes in restricted `__builtins__`, enforces timeout.
+- **`base.py`**: `BaseTool`, `ToolInput`, `ToolOutput` dataclasses.
+- **`search.py`**, **`calculator.py`**, **`text_processor.py`**: Built-in tools.
+
+### Safety Layer (`app/guardrails/`)
+
+- **`validator.py`**: `Guardrails` validates input/output. On failure, `_validate_output()` now raises `UnrecoverableError` instead of just logging.
+- **`schema.py`**: Pydantic-based output schemas.
+
+### Observability Layer (`app/logs/`)
+
+- **`tracing.py`**: `TraceManager` creates spans in memory. `persist_span()` and `persist_trace()` commit to DB on demand.
+- **`metrics.py`**: `MetricsCollector` with counters and histograms. `get_prometheus_format()` exports text.
+- **`logger.py`**: Structured JSON logging.
+- **`middleware`**: `metrics_middleware` in `main.py` records request count, duration, and errors.
+
+### Memory Layer (`app/memory/`)
+
+- **`long_term.py`**: Async SQLAlchemy with connection pooling (`pool_size=20`, `max_overflow=40`, `pool_pre_ping=True`).
+- **`short_term.py`**: Redis client for context cache.
+
+---
+
+## 4) API Documentation
+
+### Tasks
+- `POST /api/v1/tasks` — Create and execute a task
+- `GET /api/v1/tasks` — List tasks
+- `GET /api/v1/tasks/{task_id}` — Get task details
+- `DELETE /api/v1/tasks/{task_id}` — Cancel/delete task
+
+### Agents
+- `GET /api/v1/agents` — List registered agents
+- `POST /api/v1/agents` — Register a new agent
+- `GET /api/v1/agents/{agent_id}` — Get agent details
+
+### Tools
+- `GET /api/v1/tools` — List available tools
+- `POST /api/v1/tools` — Register a custom tool
+- `POST /api/v1/tools/{tool_id}/execute` — Execute a tool
+
+### Health & Observability
+- `GET /health` — Basic health check
+- `GET /health/ready` — Readiness probe (checks DB + Redis)
+- `GET /health/live` — Liveness probe
+- `GET /health/metrics` — Prometheus-format metrics
+
+### Auth
+- `POST /api/v1/auth/token` — Obtain access token
+
+---
+
+## 5) Setup and Environment Configuration
+
+Create a `.env` file:
+
+```env
+OPENAI_API_KEY=<your-key>
+OPENAI_MODEL=gpt-4o
+DATABASE_URL=postgresql+asyncpg://agentos:agentos@localhost:5432/agentos
+REDIS_URL=redis://:@localhost:6379/0
+MAX_STEPS_DEFAULT=10
+TIMEOUT_DEFAULT=300
+MAX_RETRIES=3
+APP_NAME=Agent-OS
+VERSION=1.0.0
 ```
 
-## 3) Repository structure
-
-```text
-AgentOS/
-  app/
-    main.py
-    api/
-      deps.py
-      routes/
-        tasks.py
-    orchestrator/
-      core.py
-      workflow.py
-      retry.py
-      fallback.py
-      errors.py
-    agents/
-      base.py
-      llm_client.py
-      planner.py
-      executor.py
-      verifier.py
-      dummy_agent.py
-      types.py
-    mcp/
-      message.py
-      protocol.py
-    memory/
-      models.py
-      long_term.py
-      short_term.py
-    guardrails/
-      schema.py
-      validator.py
-    tools/
-      base.py
-      search.py
-      registry.py
-    logs/
-      logger.py
-      tracing.py
-    queue/
-      tasks.py
-  docker/
-    Dockerfile
-    docker-compose.yml
-  frontend/
-    src/api/client.ts
-  Details/
-    Complete_Project_Documentation.md
-    Core_Design_Specification.md
-    Implementation_Plan.md
-    Ultra-detailed-implementation-plan.md
-  requirements.txt
-```
-
-## 4) Core module documentation
-
-### 4.1 API Layer (`app/api`)
-
-Entry points:
-- `POST /api/v1/tasks` creates an async task and returns `task_id`
-- `GET /api/v1/tasks/{task_id}` returns current task state
-- `GET /api/v1/tasks` lists all in-memory tasks
-- `DELETE /api/v1/tasks/{task_id}` deletes in-memory task metadata
-- `GET /health` returns service health/version
-
-Implementation notes:
-- Task registry is currently in-memory (`TASKS` dict in `app/api/routes/tasks.py`).
-- Execution is triggered via FastAPI `BackgroundTasks`.
-
-### 4.2 Orchestrator (`app/orchestrator`)
-
-Main class: `Orchestrator` in `app/orchestrator/core.py`.
-
-Responsibilities:
-- Create per-task context (`TaskContext`)
-- Call planner to produce steps
-- Execute each step through executor
-- Verify combined output through verifier
-- Return normalized `AgentOutput`
-
-Related utilities:
-- Retry utility: `app/orchestrator/retry.py`
-- Fallback manager: `app/orchestrator/fallback.py`
-- Error taxonomy: `app/orchestrator/errors.py`
-
-### 4.3 Agent runtime (`app/agents`)
-
-Contract defined in `app/agents/base.py`:
-- Input model: `AgentInput`
-- Output model: `AgentOutput`
-- Roles: `planner`, `executor`, `verifier`, `researcher`
-
-Concrete agents:
-- `PlannerAgent` (`app/agents/planner.py`)
-- `ExecutorAgent` (`app/agents/executor.py`)
-- `VerifierAgent` (`app/agents/verifier.py`)
-
-LLM adapter:
-- `LLMClient` in `app/agents/llm_client.py`
-- Uses OpenAI `AsyncOpenAI`
-- Falls back to mock behavior when `OPENAI_API_KEY` is missing/placeholder
-
-### 4.4 MCP layer (`app/mcp`)
-
-Message schema:
-- `MCPMessage` with `message_id`, `task_id`, `step_id`, `sender_agent`, `receiver_agent`, `timestamp`, `payload`, `metadata`
-- `payload` includes `input_data`, `output_data`, `context_snapshot`
-- `metadata` includes `status`, `priority`, `retry_count`, `execution_time`
-
-Protocol helper:
-- `MCPProtocol` in `app/mcp/protocol.py`
-- Supports message creation, router registration, routing, and message history
-
-### 4.5 Memory and state (`app/memory`)
-
-Long-term (PostgreSQL):
-- SQLAlchemy models in `app/memory/models.py`
-  - `tasks`
-  - `steps`
-  - `context`
-  - `messages`
-- DB/session/repositories in `app/memory/long_term.py`
-
-Short-term (Redis):
-- Redis client + context helpers in `app/memory/short_term.py`
-- Context key format: `agentos:context:{task_id}`
-
-Lifecycle hookup:
-- `app/main.py` connects/disconnects DB and Redis in app lifespan hooks
-
-### 4.6 Guardrails (`app/guardrails`)
-
-Validation models/rules:
-- `ValidationResult`, `GuardrailSchema` in `app/guardrails/schema.py`
-
-Validator entry points:
-- `OutputValidator` and `Guardrails` in `app/guardrails/validator.py`
-
-### 4.7 Tool layer (`app/tools`)
-
-Tool contract:
-- `ToolInput`, `ToolOutput`, `BaseTool` in `app/tools/base.py`
-
-Registry:
-- `ToolRegistry` in `app/tools/registry.py`
-
-Default tools:
-- `web_search`
-- `calculator`
-- `text_processor`
-
-### 4.8 Observability (`app/logs`)
-
-Logging:
-- Structured logger wrapper in `app/logs/logger.py`
-
-Tracing:
-- Span/trace manager in `app/logs/tracing.py`
-
-### 4.9 Queue and async workers (`app/queue`)
-
-Celery app:
-- `app/queue/tasks.py`
-- Redis broker/backend
-- Worker task `agent_os.execute_task`
-
-Note:
-- API route execution is currently in-process via FastAPI background tasks.
-- Celery worker path exists and is containerized, but API routes are not yet wired to enqueue Celery tasks directly.
-
-## 5) API specification
-
-Base URL: `http://localhost:8000/api/v1`
-
-### POST `/tasks`
-
-Creates a task and starts background execution.
-
-Request:
-
-```json
-{
-  "query": "Find cheapest healthy breakfast ingredients",
-  "config": {
-    "max_steps": 10,
-    "timeout": 300
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "task_id": "0f2d6b31-52fa-47f2-a31e-c41b0a31cdd1",
-  "status": "pending",
-  "created_at": "2026-04-20T10:10:10.100000"
-}
-```
-
-### GET `/tasks/{task_id}`
-
-Returns current state and output (if completed).
-
-Response shape:
-
-```json
-{
-  "task_id": "uuid",
-  "status": "pending|running|completed|failed",
-  "result": {},
-  "steps": [],
-  "error": {},
-  "created_at": "datetime"
-}
-```
-
-### GET `/tasks`
-
-Returns all in-memory task records.
-
-### DELETE `/tasks/{task_id}`
-
-Deletes task from in-memory registry.
-
-### GET `/health`
-
-Health check endpoint:
-
-```json
-{
-  "status": "healthy",
-  "version": "0.1.0"
-}
-```
-
-## 6) Execution lifecycle
-
-Task status lifecycle:
-
-```text
-pending -> running -> completed
-                 \-> failed
-```
-
-Orchestrator lifecycle:
-1. Build `TaskContext`
-2. Planner generates step list
-3. Executor runs each step sequentially
-4. Verifier validates aggregate output
-5. Final `AgentOutput` is returned to API layer
-
-## 7) Contracts
-
-### 7.1 Agent input contract
-
-Defined in `app/agents/base.py`:
-
-```json
-{
-  "task_id": "uuid",
-  "step_id": "uuid",
-  "role": "planner|executor|verifier|researcher",
-  "input_data": {},
-  "context": {},
-  "constraints": {}
-}
-```
-
-### 7.2 Agent output contract
-
-```json
-{
-  "task_id": "uuid",
-  "step_id": "uuid",
-  "status": "pending|running|success|failure",
-  "output_data": {},
-  "confidence": 0.0,
-  "reasoning_trace": [],
-  "error_type": "string|null",
-  "error_message": "string|null",
-  "recoverable": true
-}
-```
-
-### 7.3 MCP contract
-
-Defined in `app/mcp/message.py`:
-
-```json
-{
-  "message_id": "uuid",
-  "task_id": "uuid",
-  "step_id": "uuid",
-  "sender_agent": "orchestrator",
-  "receiver_agent": "planner",
-  "timestamp": "datetime",
-  "payload": {
-    "input_data": {},
-    "output_data": {},
-    "context_snapshot": {}
-  },
-  "metadata": {
-    "status": "pending|sent",
-    "priority": 0,
-    "retry_count": 0,
-    "execution_time": null
-  }
-}
-```
-
-## 8) Configuration
-
-Primary configuration file: `.env`
-
-Important variables:
-- `OPENAI_API_KEY` - OpenAI key used by agent LLM client
-- `OPENAI_MODEL` - model name used by OpenAI client
-- `DATABASE_URL` - async SQLAlchemy DSN
-- `REDIS_URL` - Redis DSN for cache/queue
-- `MAX_STEPS_DEFAULT`, `TIMEOUT_DEFAULT`, `MAX_RETRIES`
-
-Configuration model is defined in `app/config/settings.py`.
-
-## 9) Running the system
-
-### Option A: Full containerized stack (recommended)
-
-```bash
-cd docker
-docker compose up --build
-```
-
-Services started by `docker/docker-compose.yml`:
-- `postgres`
-- `redis`
-- `api`
-- `worker`
-
-### Option B: Local backend only
+### Backend
 
 ```bash
 pip install -r requirements.txt
@@ -391,51 +201,182 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ### Frontend
 
-Frontend API client is in `frontend/src/api/client.ts` and defaults to:
-- `VITE_API_URL` env var if provided
-- fallback: `http://localhost:8000/api/v1`
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-## 10) Security and production hardening
+### Full Stack (Docker)
 
-Current code includes scaffolding for production hardening but does not yet implement full auth/rate-limit/monitoring policy.
+```bash
+cd docker
+docker compose up --build
+```
 
-Planned/expected additions (per `Details/Implementation_Plan.md` phase 10):
-- API authentication/authorization
-- Rate limiting
-- Metrics stack (Prometheus/Grafana)
-- Hardened secret management
+---
 
-## 11) Known limitations (current code state)
+## 6) Local Development Guide
 
-- API task state is currently in-memory (`TASKS` dict) and not persisted by API routes.
-- DB and Redis clients are connected at startup, but orchestration persistence wiring is partial.
-- Celery worker exists and runs in Docker, but `/tasks` currently uses FastAPI background tasks instead of queue submission.
-- OpenAI model defaults in code/config may differ from desired deployment model; set `OPENAI_MODEL` explicitly in `.env`.
-- `app/guardrails/validator.py` currently contains a syntax issue in `validate_context` and should be fixed before strict runtime use.
+### Running Tests
 
-## 12) Phase compliance matrix
+```bash
+pytest -q
+```
 
-Alignment against `Details/Implementation_Plan.md`:
+### Adding a New Mode
 
-| Phase | Name | Repo status |
-|---|---|---|
-| 1 | Core Skeleton | Implemented |
-| 2 | Agent Execution | Implemented |
-| 3 | MCP Protocol | Implemented |
-| 4 | Memory System | Implemented (with partial route-level wiring) |
-| 5 | Guardrails | Implemented (needs syntax fix in validator) |
-| 6 | Failure Handling | Implemented |
-| 7 | Tool Integration | Implemented |
-| 8 | Observability | Implemented |
-| 9 | Async & Queue | Implemented (API not fully Celery-wired) |
-| 10 | Production Hardening | Scaffolded / partially implemented |
+1. Create `app/orchestrator/modes/my_mode.py`
+2. Inherit from `ModeStrategy`
+3. Implement `execute(runtime, orchestrator, query, config, task_id, user_id)`
+4. Register in `app/orchestrator/modes/factory.py`
 
-## 13) Design-source references
+### Adding a New Tool
 
-Project design sources in `Details/`:
-- `Details/Complete_Project_Documentation.md`
-- `Details/Core_Design_Specification.md`
-- `Details/Implementation_Plan.md`
-- `Details/Ultra-detailed-implementation-plan.md`
+1. Create a class inheriting from `BaseTool`
+2. Implement `execute(tool_input: ToolInput) -> ToolOutput`
+3. Register in `ToolRegistry._register_default_tools()` or via API
 
-These documents define the architectural intent. This README documents the current implementation behavior and interface contracts.
+### Adding a New Agent Type
+
+1. Create a class inheriting from `BaseAgent`
+2. Register in `AgentFactory.create_agent()`
+
+---
+
+## 7) Testing Strategy
+
+- **Unit tests**: Agent logic, tool parsing, guardrails, retry logic
+- **Integration tests**: Runtime initialization, mode strategy factory, task lifecycle
+- **End-to-end tests**: API routes, task execution with mocked LLM
+- **Observability tests**: Trace persistence, metrics export, health endpoints
+
+Run the full suite:
+
+```bash
+pytest -q
+```
+
+---
+
+## 8) Deployment Instructions
+
+### Requirements
+- Python 3.11+
+- PostgreSQL 14+
+- Redis 7+
+- Node.js 20+ (for frontend)
+
+### Production Checklist
+- [ ] Set `DATABASE_URL` with connection pooling tuned for load
+- [ ] Set `REDIS_URL` for MCP pub/sub and caching
+- [ ] Configure `MAX_RETRIES`, `TIMEOUT_DEFAULT`, `MAX_STEPS_DEFAULT`
+- [ ] Set `OPENAI_API_KEY` and `OPENAI_MODEL`
+- [ ] Enable `RedisMCPBus` instead of `MemoryMCPBus` for multi-instance deployments
+- [ ] Monitor `/health/ready` for load balancer health checks
+- [ ] Scrape `/health/metrics` with Prometheus
+
+---
+
+## 9) Scaling Considerations
+
+- **Agent Workers**: `AgentPool` semaphore limits concurrent agents (default 100).
+- **Database**: SQLAlchemy pool (`pool_size=20`, `max_overflow=40`).
+- **Asyncio**: Event loop handles 10,000+ coroutines; the real limit is DB connections.
+- **Redis**: Use `RedisMCPBus` for multi-instance deployments.
+- **Celery**: Worker exists in Docker but API uses in-process background tasks.
+
+---
+
+## 10) Troubleshooting Guide
+
+### "Agent core_planner not found in runtime"
+Ensure `AgentRuntime.initialize()` is called in the FastAPI lifespan hook. Check `app/main.py`.
+
+### Database connection errors
+Verify `DATABASE_URL` and that PostgreSQL is running. Check `/health/ready`.
+
+### Redis connection errors
+Verify `REDIS_URL`. Check `/health/ready`.
+
+### Tool execution timeout
+Increase timeout in `ToolSandbox` or simplify tool code.
+
+### Output validation failures
+Check `app/guardrails/validator.py` rules. Validation failures now raise `UnrecoverableError`.
+
+### Mode not recognized
+Ensure the mode name matches a key in `ModeStrategyFactory.STRATEGIES`.
+
+---
+
+## 11) File Structure
+
+```
+app/
+  api/
+    deps.py              # Singleton orchestrator dependency
+    routes/
+      tasks.py           # Task CRUD + execution
+      agents.py          # Agent CRUD
+      tools.py           # Tool registry + dynamic tool execution
+      auth.py            # JWT token generation
+      config.py          # System configuration
+      health.py          # Health, ready, live, metrics
+  orchestrator/
+    core.py              # Thin orchestrator (~182 lines)
+    pipeline.py          # Plan → execute → verify pipeline
+    builder.py           # Workflow DAG persistence
+    executor.py          # Single-step execution service
+    workflow.py          # DAG engine with AST sandbox
+    context.py           # TaskContext dataclass
+    modes/
+      base.py            # ModeStrategy ABC
+      task.py            # Standard mode
+      workflow.py        # Predefined workflow mode
+      autonomous.py      # Replanning loop mode
+      collaboration.py   # Multi-agent mode with MCP
+      factory.py         # Mode registry
+  runtime/
+    runtime.py           # AgentRuntime singleton
+    worker.py            # AgentWorker with inbox
+    factory.py           # AgentFactory
+    pool.py              # AgentPool with semaphore
+  agents/
+    base.py              # BaseAgent, AgentInput, AgentOutput
+    planner.py           # PlannerAgent
+    executor.py          # ExecutorAgent with tool loop
+    verifier.py          # VerifierAgent
+    types.py             # TaskStatus, StepStatus
+  mcp/
+    bus.py               # MCPBus, MemoryMCPBus, RedisMCPBus
+    router.py            # MessageRouter
+    protocol.py          # MCPProtocol
+    message.py           # MCPMessage, Payload, Metadata
+  tools/
+    registry.py          # ToolRegistry singleton
+    sandbox.py           # ToolSandbox with AST validation
+    base.py              # BaseTool, ToolInput, ToolOutput
+    search.py            # SearchTool
+    calculator.py        # CalculatorTool
+    text_processor.py    # TextProcessorTool
+  guardrails/
+    validator.py         # Input/output validation
+    schema.py            # Pydantic schemas
+  logs/
+    tracing.py           # TraceManager
+    metrics.py           # MetricsCollector
+    logger.py            # Structured logger
+  memory/
+    long_term.py         # PostgreSQL + SQLAlchemy
+    short_term.py        # Redis client
+    models.py            # SQLAlchemy models
+  config/
+    settings.py          # Pydantic Settings
+frontend/
+  src/
+    api/client.ts        # API client
+    pages/               # Dashboard, AgentBuilder, Tools, etc.
+  dist/                  # Production build
+tests/                   # pytest suite
+```
