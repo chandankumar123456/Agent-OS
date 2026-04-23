@@ -12,8 +12,8 @@ Agent-OS provides:
 - observability (metrics, traces, node-level execution records).
 
 Primary implementation roots:
-- `/home/runner/work/Agent-OS/Agent-OS/app`
-- `/home/runner/work/Agent-OS/Agent-OS/frontend`
+- `./app`
+- `./frontend`
 
 ## 2. System Architecture
 
