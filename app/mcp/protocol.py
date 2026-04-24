@@ -49,19 +49,43 @@ class MCPProtocol:
         return message
 
     async def send_message(self, message: MCPMessage) -> Any:
-        """Send a message via the router to the receiver agent."""
+        """Send a message via the router to the receiver agent and persist it."""
         receiver = message.receiver_agent
         await self.router.route(receiver, message)
+        await self._persist_message(message)
         return None
+
+    async def _persist_message(self, message: MCPMessage) -> None:
+        """Persist MCP message to the database for audit."""
+        try:
+            from ..memory.long_term import message_repo
+            await message_repo.create(
+                task_id=str(message.task_id),
+                step_id=str(message.step_id) if message.step_id else None,
+                sender=message.sender_agent,
+                receiver=message.receiver_agent,
+                payload={
+                    "input_data": message.payload.input_data if message.payload else None,
+                    "output_data": message.payload.output_data if message.payload else None,
+                    "context_snapshot": message.payload.context_snapshot if message.payload else None,
+                    "metadata": {
+                        "status": message.metadata.status if message.metadata else None,
+                        "priority": message.metadata.priority if message.metadata else None,
+                        "retry_count": message.metadata.retry_count if message.metadata else None,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist MCP message to DB: {e}")
 
     def register_router(self, agent_name: str, handler: Callable):
         """Register a handler for an agent. Async wrapper for router.register."""
         import asyncio
         try:
             loop = asyncio.get_running_loop()
-            asyncio.create_task(self.router.register(agent_name, handler))
         except RuntimeError:
-            pass
+            return
+        asyncio.create_task(self.router.register(agent_name, handler))
 
     def get_message_history(self, task_id: UUID) -> List[MCPMessage]:
         return [m for m in self.message_log if m.task_id == task_id]

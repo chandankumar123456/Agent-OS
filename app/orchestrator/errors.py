@@ -86,3 +86,10 @@ class UnrecoverableError(AgentOSError):
             context=context,
             http_status=http_status
         )
+
+
+class WorkflowPausedForApproval(Exception):
+    def __init__(self, node_id: str, approval_config: Optional[Dict[str, Any]] = None):
+        self.node_id = node_id
+        self.approval_config = approval_config or {}
+        super().__init__(f"Workflow paused for approval at node {node_id}")

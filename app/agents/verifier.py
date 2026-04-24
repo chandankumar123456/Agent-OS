@@ -1,7 +1,7 @@
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
 from uuid import uuid4
 from typing import List, Dict, Any
-from .llm_client import llm_client
+from .llm_client import get_llm_client
 from ..logs.logger import logger
 
 
@@ -37,7 +37,7 @@ class VerifierAgent:
         ]
         
         try:
-            result = await llm_client.complete_json(messages)
+            result = await get_llm_client().complete_json(messages)
             if not isinstance(result, dict):
                 raise ValueError("Verifier output must be an object")
 

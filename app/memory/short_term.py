@@ -12,12 +12,25 @@ class RedisClient:
         self.client: Optional[redis.Redis] = None
 
     async def connect(self):
+        if self.client is not None:
+            try:
+                await self.client.ping()
+                logger.debug("Redis already connected")
+                return
+            except Exception:
+                logger.warning("Existing Redis connection dead, reconnecting")
+                await self.client.close()
+                self.client = None
         if not REDIS_URL:
             raise RuntimeError("REDIS_URL is not configured")
         self.client = redis.from_url(
             REDIS_URL,
             encoding="utf-8",
-            decode_responses=True
+            decode_responses=True,
+            max_connections=50,
+            socket_connect_timeout=10,
+            socket_timeout=30,
+            health_check_interval=30,
         )
         await self.client.ping()
         logger.info("Redis connected")

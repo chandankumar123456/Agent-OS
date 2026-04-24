@@ -1,5 +1,5 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, BrainCircuit, Activity, Wrench, Settings, LogOut, Terminal, Waypoints } from 'lucide-react';
+import { LayoutDashboard, BrainCircuit, Activity, Wrench, Settings, LogOut, Terminal, Waypoints, GitBranch } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
 
@@ -12,6 +12,7 @@ const Layout = () => {
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'Agent Builder', path: '/builder', icon: BrainCircuit },
     { name: 'Workflow Orchestrator', path: '/orchestrator', icon: Waypoints },
+    { name: 'Workflow Builder', path: '/workflows/builder', icon: GitBranch },
     { name: 'Runtime Monitor', path: '/monitor', icon: Activity },
     { name: 'Tool Registry', path: '/tools', icon: Wrench },
     { name: 'Settings', path: '/settings', icon: Settings },

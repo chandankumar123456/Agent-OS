@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
@@ -11,9 +11,9 @@ from .memory.short_term import redis_client
 from .migrations.runner import run_pending_migrations
 from .middleware.auth import APIKeyMiddleware, get_api_keys
 from .middleware.rate_limit import RateLimitMiddleware, get_rate_limit
-from .api.deps import get_current_user
 from .runtime.runtime import AgentRuntime
 from .logs.metrics import metrics_collector
+from .mcp.monitor import mcp_health_monitor
 from fastapi.exceptions import RequestValidationError
 from fastapi import HTTPException
 from .orchestrator.errors import AgentOSError, ErrorCode
@@ -34,9 +34,12 @@ async def lifespan(app: FastAPI):
 
     await _check_dependencies()
 
+    initialized = []
+
     try:
         await db.connect()
         logger.info("Database connected successfully")
+        initialized.append("db")
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         raise RuntimeError(f"Database connection failed: {e}") from e
@@ -51,6 +54,7 @@ async def lifespan(app: FastAPI):
     try:
         await redis_client.connect()
         logger.info("Redis connected successfully")
+        initialized.append("redis")
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
         raise RuntimeError(f"Redis connection failed: {e}") from e
@@ -58,22 +62,61 @@ async def lifespan(app: FastAPI):
     try:
         runtime = AgentRuntime()
         await runtime.initialize()
+        app.state.runtime = runtime
         logger.info("AgentRuntime initialized")
+        initialized.append("runtime")
     except Exception as e:
         logger.error(f"AgentRuntime initialization failed: {e}")
         raise RuntimeError(f"AgentRuntime initialization failed: {e}") from e
 
+    try:
+        mcp_health_monitor.start()
+        logger.info("MCP health monitor started")
+        initialized.append("mcp_monitor")
+    except Exception as e:
+        logger.error(f"MCP health monitor start failed: {e}")
+
+    try:
+        from .mcp.client_manager import mcp_client_manager
+        await mcp_client_manager.start_system_servers()
+        logger.info("MCP system servers started")
+        initialized.append("mcp_servers")
+    except Exception as e:
+        logger.error(f"MCP system servers start failed: {e}")
+
     yield
 
-    try:
-        await db.disconnect()
-    except Exception as e:
-        logger.warning(f"Database disconnect failed: {e}")
+    if "mcp_servers" in initialized:
+        try:
+            from .mcp.client_manager import mcp_client_manager
+            await mcp_client_manager.disconnect_all()
+            logger.info("MCP system servers stopped")
+        except Exception as e:
+            logger.error(f"MCP system servers stop failed: {e}")
 
-    try:
-        await redis_client.disconnect()
-    except Exception as e:
-        logger.warning(f"Redis disconnect failed: {e}")
+    if "mcp_monitor" in initialized:
+        try:
+            mcp_health_monitor.stop()
+        except Exception as e:
+            logger.error(f"MCP health monitor stop failed: {e}")
+
+    if "runtime" in initialized:
+        try:
+            await app.state.runtime.shutdown_all()
+        except Exception as e:
+            logger.error(f"AgentRuntime shutdown failed: {e}")
+
+    if "db" in initialized:
+        try:
+            await db.disconnect()
+        except Exception as e:
+            logger.error(f"Database disconnect failed: {e}")
+
+    if "redis" in initialized:
+        try:
+            await redis_client.disconnect()
+        except Exception as e:
+            logger.error(f"Redis disconnect failed: {e}")
 
     logger.info("Agent-OS shutting down")
 
@@ -88,10 +131,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# CORS: avoid wildcard + credentials combination (browser security anti-pattern)
+_cors_origins = settings.CORS_ORIGINS.split(",") if settings.CORS_ORIGINS != "*" else ["*"]
+_allow_credentials = False if _cors_origins == ["*"] else True
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS.split(",") if settings.CORS_ORIGINS != "*" else ["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -174,23 +221,43 @@ async def unhandled_exception_handler(_: Request, exc: Exception):
 
 
 @app.middleware("http")
+async def logging_middleware(request, call_next):
+    logger.info(f"{request.method} {request.url.path}")
+    try:
+        response = await call_next(request)
+        logger.info(f"{request.method} {request.url.path} -> {response.status_code}")
+        return response
+    except Exception as exc:
+        logger.error(f"{request.method} {request.url.path} -> ERROR: {exc}")
+        raise
+
+
+@app.middleware("http")
 async def metrics_middleware(request, call_next):
     import time
     start_time = time.time()
 
-    response = await call_next(request)
+    exc_to_reraise = None
+    try:
+        response = await call_next(request)
+        status = str(response.status_code)
+    except Exception as exc:
+        status = "500"
+        response = None
+        exc_to_reraise = exc
 
     process_time = time.time() - start_time
     path = request.url.path
     method = request.method
-    status = str(response.status_code)
 
     metrics_collector.inc_counter("http_requests_total", {"method": method, "path": path, "status": status})
     metrics_collector.observe_histogram("http_request_duration_seconds", process_time, {"method": method, "path": path})
 
-    if response.status_code >= 400:
+    if int(status) >= 400:
         metrics_collector.inc_counter("http_errors_total", {"method": method, "path": path, "status": status})
 
+    if exc_to_reraise is not None:
+        raise exc_to_reraise
     return response
 
 

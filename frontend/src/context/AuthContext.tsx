@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
 
 interface User {
   id: string;
@@ -38,6 +38,13 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoading(false);
   }, []);
 
+  const logout = useCallback(() => {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('user');
+    setAccessToken(null);
+    setUser(null);
+  }, []);
+
   useEffect(() => {
     if (!accessToken || !user) {
       return;
@@ -51,7 +58,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     } catch {
       logout();
     }
-  }, [accessToken, user]);
+  }, [accessToken, user, logout]);
 
   useEffect(() => {
     const handleStorage = () => {
@@ -65,7 +72,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     window.addEventListener('storage', handleStorage);
     return () => window.removeEventListener('storage', handleStorage);
-  }, []);
+  }, [logout]);
 
   useEffect(() => {
     const handleAuthExpired = () => {
@@ -74,9 +81,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     window.addEventListener('auth:expired', handleAuthExpired as EventListener);
     return () => window.removeEventListener('auth:expired', handleAuthExpired as EventListener);
-  }, []);
+  }, [logout]);
 
-  const login = async (email: string, password: string) => {
+  const login = useCallback(async (email: string, password: string) => {
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -93,9 +100,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.setItem('user', JSON.stringify(data.user));
     setAccessToken(data.access_token);
     setUser(data.user);
-  };
+  }, []);
 
-  const signup = async (email: string, password: string, name?: string) => {
+  const signup = useCallback(async (email: string, password: string, name?: string) => {
     const response = await fetch(`${API_BASE_URL}/auth/signup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -112,27 +119,20 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.setItem('user', JSON.stringify(data.user));
     setAccessToken(data.access_token);
     setUser(data.user);
-  };
+  }, []);
 
-  const logout = () => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('user');
-    setAccessToken(null);
-    setUser(null);
-  };
+  const value = useMemo(() => ({
+    user,
+    accessToken,
+    isAuthenticated: !!user,
+    isLoading,
+    login,
+    signup,
+    logout,
+  }), [user, accessToken, isLoading, login, signup, logout]);
 
   return (
-    <AuthContext.Provider
-        value={{
-          user,
-          accessToken,
-          isAuthenticated: !!user,
-          isLoading,
-        login,
-        signup,
-        logout,
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

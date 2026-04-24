@@ -8,11 +8,17 @@ const Settings = () => {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [model, setModel] = useState('gpt-4o');
+  const [actionError, setActionError] = useState('');
 
   const load = async () => {
-    const data = await apiClient.getConfig();
-    setConfig(data);
-    setModel(data.OPENAI_MODEL);
+    setActionError('');
+    try {
+      const data = await apiClient.getConfig();
+      setConfig(data);
+      setModel(data.OPENAI_MODEL);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to load config');
+    }
   };
 
   useEffect(() => {
@@ -21,9 +27,12 @@ const Settings = () => {
 
   const saveModel = async (value: string) => {
     setSaving(true);
+    setActionError('');
     try {
       await apiClient.updateConfig('OPENAI_MODEL', value);
       await load();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to save config');
     } finally {
       setSaving(false);
     }
@@ -31,9 +40,12 @@ const Settings = () => {
 
   const reset = async () => {
     setSaving(true);
+    setActionError('');
     try {
       await apiClient.resetConfig();
       await load();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to reset config');
     } finally {
       setSaving(false);
     }
@@ -50,6 +62,12 @@ const Settings = () => {
           <RotateCcw className="w-4 h-4" /> Reset
         </button>
       </div>
+
+      {actionError && (
+        <div className="p-4 rounded-lg border border-[#FF4B4B]/20 bg-[#FF4B4B]/10 text-sm text-[#FF4B4B]">
+          {actionError}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-center py-12 text-secondaryText">Loading config...</div>

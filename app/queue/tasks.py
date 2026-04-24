@@ -1,8 +1,10 @@
 import asyncio
 from celery import Celery
+from celery.signals import worker_process_init
 from ..config.settings import settings
 from ..logs.logger import logger
 from ..agents.types import TaskStatus
+from ..runtime.runtime import AgentRuntime
 
 redis_url = settings.REDIS_URL
 if not redis_url:
@@ -14,6 +16,9 @@ celery_app = Celery(
     backend=redis_url
 )
 
+# Guard against non-positive soft time limit
+task_soft_time_limit = max(1, settings.TIMEOUT_DEFAULT - 30)
+
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -24,11 +29,60 @@ celery_app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     result_expires=3600,
-    task_soft_time_limit=settings.TIMEOUT_DEFAULT - 30,
+    task_soft_time_limit=task_soft_time_limit,
     task_time_limit=settings.TIMEOUT_DEFAULT,
 )
 
 logger.info("Celery app initialized")
+
+_worker_event_loop = None
+
+
+@worker_process_init.connect
+def on_worker_process_init(**kwargs):
+    """Initialize AgentRuntime in each Celery worker child process.
+
+    worker_process_init fires inside every forked child process,
+    ensuring the runtime is available in the correct event loop.
+    """
+    global _worker_event_loop
+    try:
+        # Use the existing loop if available (e.g. solo pool), otherwise create one
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        _worker_event_loop = loop
+
+        # Connect DB and Redis so runtime.load_from_db() can work
+        from ..memory.long_term import db
+        from ..memory.short_term import redis_client
+        loop.run_until_complete(db.connect())
+        loop.run_until_complete(redis_client.connect())
+
+        loop.run_until_complete(_ensure_runtime_initialized())
+        logger.info("AgentRuntime eagerly initialized in Celery worker process")
+    except Exception as e:
+        logger.error(f"Celery worker eager initialization failed: {e}")
+
+
+async def _ensure_runtime_initialized() -> AgentRuntime:
+    """Ensure AgentRuntime singleton is initialized with core agents.
+
+    This is safe to call multiple times (idempotent). Must be invoked
+    in every process boundary that uses the runtime (FastAPI lifespan,
+    Celery worker, standalone scripts, tests).
+    """
+    runtime = AgentRuntime()
+    if not runtime._initialized:
+        logger.info("AgentRuntime not initialized in this process; initializing now")
+        await runtime.initialize()
+        active = runtime.list_active()
+        logger.info(f"AgentRuntime initialized in Celery worker with agents: {[a['agent_id'] for a in active]}")
+    else:
+        logger.debug("AgentRuntime already initialized; skipping redundant initialization")
+    return runtime
 
 
 @celery_app.task(
@@ -40,38 +94,54 @@ logger.info("Celery app initialized")
 def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "system"):
     logger.info(f"Executing task {task_id}: {query}")
 
-    try:
-        from ..orchestrator.core import orchestrator
-        from uuid import UUID
-        from ..memory.long_term import task_repo, db
+    from ..orchestrator.core import orchestrator
+    from uuid import UUID
+    from ..memory.long_term import task_repo, db
+    from ..memory.short_term import redis_client
 
-        async def run():
-            await db.connect()
-            logger.info("Database session available for task execution")
+    async def run():
+        # Re-validate connections on the persistent worker loop; no-ops if healthy
+        await db.connect()
+        await redis_client.connect()
 
-            from ..memory.short_term import redis_client
-            await redis_client.connect()
-            logger.info("Redis connected for task execution")
+        logger.info("Database and Redis connected for task execution")
 
-            await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
-            try:
-                result = await orchestrator.execute_task(
-                    query, config, task_id=UUID(task_id), user_id=user_id
+        runtime = await _ensure_runtime_initialized()
+        worker = runtime.get("core_planner")
+        if not worker:
+            raise RuntimeError(
+                "Agent core_planner not found in runtime. "
+                "Ensure AgentRuntime.initialize() was called at startup."
+            )
+        logger.info("Runtime verified: core_planner available")
+
+        await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
+        try:
+            result = await orchestrator.execute_task(
+                query, config, task_id=UUID(task_id), user_id=user_id
+            )
+            if result.status.value == "success":
+                await task_repo.update(
+                    task_id, status=TaskStatus.COMPLETED.value, result=result.output_data
                 )
-                if result.status.value == "success":
-                    await task_repo.update(
-                        task_id, status=TaskStatus.COMPLETED.value, result=result.output_data
-                    )
-                else:
-                    await task_repo.update(
-                        task_id, status=TaskStatus.FAILED.value, error=result.error_message
-                    )
-                return result
-            except Exception as exc:
-                await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
-                raise
+            else:
+                await task_repo.update(
+                    task_id, status=TaskStatus.FAILED.value, error=result.error_message
+                )
+            return result
+        except Exception as exc:
+            await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
+            raise
 
-        result = asyncio.run(run())
+    loop = _worker_event_loop
+    if loop is None:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+    try:
+        result = loop.run_until_complete(run())
 
         return {
             "task_id": task_id,
@@ -82,6 +152,12 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
         logger.error(f"Task execution failed: {e}")
         retries = getattr(self.request, 'retries', 0)
         max_retries = getattr(self, 'max_retries', settings.MAX_RETRIES)
+
+        # Update DB to FAILED before final return so status is never stuck
+        try:
+            loop.run_until_complete(task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(e)))
+        except Exception as db_err:
+            logger.error(f"Failed to persist final failure status: {db_err}")
 
         if retries < max_retries:
             logger.info(f"Retrying task {task_id}, attempt {retries + 1}")

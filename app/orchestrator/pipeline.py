@@ -8,7 +8,7 @@ from ..memory.long_term import task_repo, trace_repo, node_trace_repo, workflow_
 from ..memory.short_term import short_term_memory
 from ..guardrails.validator import guardrails
 from ..orchestrator.retry import retry_with_backoff, RetryConfig, is_retryable
-from ..orchestrator.errors import ErrorType, UnrecoverableError
+from ..orchestrator.errors import ErrorType, UnrecoverableError, WorkflowPausedForApproval
 from ..tools.registry import tool_registry
 from .workflow import WorkflowEngine, WorkflowNode
 from .builder import WorkflowBuilder
@@ -89,15 +89,17 @@ class PipelineExecutor:
             )
 
             plan_result = await self.orchestrator._execute_with_retry(
-                self.orchestrator._get_agent("planner"), plan_input
+                self.orchestrator._get_agent("planner"), plan_input, role="planner"
             )
 
             trace_manager.end_span(plan_span, "success" if plan_result.status == AgentStatus.SUCCESS else "failure")
+            await trace_manager.persist_span(plan_span)
 
             if plan_result.status != AgentStatus.SUCCESS:
                 await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=plan_result.error_message)
                 await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
                 trace_manager.end_span(main_span, "failure", str(plan_result.error_message))
+                await trace_manager.persist_trace(trace_id)
                 return plan_result
 
             steps = plan_result.output_data.get("steps", [])
@@ -131,6 +133,8 @@ class PipelineExecutor:
                     ],
                     condition=str(node.condition_code) if node.condition_code else None,
                     step_number=int(node.step_number or 0),
+                    node_type=str(node.node_type or "agent"),
+                    approval_config=node.approval_config,
                 )
                 for node in workflow_nodes
             ]
@@ -143,6 +147,8 @@ class PipelineExecutor:
                     "agent_type": node.agent_type,
                     "depends_on": node.depends_on or [],
                     "input_data": node.input_data or {},
+                    "node_type": str(node.node_type or "agent"),
+                    "approval_config": node.approval_config,
                 }
                 for node in workflow_nodes
             ]
@@ -150,6 +156,7 @@ class PipelineExecutor:
 
             async def run_node(node, running_context):
                 node_row = next(item for item in workflow_nodes if item.id == node.id)
+                agent_instance = self.orchestrator.router.resolve(node.agent_type) or self.orchestrator._get_agent("executor")
                 result = await self.step_executor.execute(
                     task_id=task_id,
                     trace_id=trace_id,
@@ -159,10 +166,12 @@ class PipelineExecutor:
                         "step_number": node_row.step_number,
                         "agent_type": node_row.agent_type,
                         "input_data": node_row.input_data or {},
+                        "node_type": str(node_row.node_type or "agent"),
+                        "approval_config": node_row.approval_config,
                     },
                     tools_schema=tools_schema,
                     config=config,
-                    agent_instance=self.orchestrator._get_agent("executor"),
+                    agent_instance=agent_instance,
                 )
                 await workflow_node_repo.update(
                     node_row.id,
@@ -172,11 +181,33 @@ class PipelineExecutor:
                 )
                 return result
 
-            workflow_result = await self.workflow_engine.execute_graph(
-                workflow_node_graph,
-                {"run_node": run_node},
-                context.context
-            )
+            try:
+                workflow_result = await self.workflow_engine.execute_graph(
+                    workflow_node_graph,
+                    {"run_node": run_node},
+                    context.context
+                )
+            except WorkflowPausedForApproval as pause:
+                logger.info(f"Workflow paused for approval at node {pause.node_id}")
+                await task_repo.update(str(task_id), status=TaskStatus.WAITING_APPROVAL.value)
+                await trace_repo.update_status(trace_id, TaskStatus.WAITING_APPROVAL.value)
+                trace_manager.end_span(main_span, "paused", f"Waiting approval at node {pause.node_id}")
+                await trace_manager.persist_trace(trace_id)
+                return AgentOutput(
+                    task_id=task_id,
+                    step_id=uuid4(),
+                    status=AgentStatus.PENDING,
+                    output_data={
+                        "query": query,
+                        "status": "waiting_approval",
+                        "node_id": pause.node_id,
+                        "approval_config": pause.approval_config,
+                        "trace_id": trace_id,
+                        "mode": context.mode,
+                    },
+                    reasoning_trace=[f"Paused for approval at node {pause.node_id}"],
+                )
+
             step_results: List[Dict[str, Any]] = []
             for node_id, node_result in workflow_result["nodes"].items():
                 step_results.append({
@@ -213,15 +244,17 @@ class PipelineExecutor:
             )
 
             verify_result = await self.orchestrator._execute_with_retry(
-                self.orchestrator._get_agent("verifier"), valid_input
+                self.orchestrator._get_agent("verifier"), valid_input, role="verifier"
             )
 
             trace_manager.end_span(verify_span, "success" if verify_result.status == AgentStatus.SUCCESS else "failure")
+            await trace_manager.persist_span(verify_span)
 
             if verify_result.status != AgentStatus.SUCCESS:
                 await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=verify_result.error_message)
                 await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
                 trace_manager.end_span(main_span, "failure", str(verify_result.error_message))
+                await trace_manager.persist_trace(trace_id)
                 return verify_result
 
             combined_result = {
@@ -251,6 +284,7 @@ class PipelineExecutor:
             await short_term_memory.save_context(str(task_id), context.context, expire=1800)
             await trace_repo.update_status(trace_id, TaskStatus.COMPLETED.value)
             trace_manager.end_span(main_span, "success")
+            await trace_manager.persist_trace(trace_id)
 
             return AgentOutput(
                 task_id=task_id,
@@ -274,6 +308,7 @@ class PipelineExecutor:
             await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
             await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
             trace_manager.end_span(main_span, "failure", str(e))
+            await trace_manager.persist_trace(trace_id)
             return AgentOutput(
                 task_id=task_id,
                 step_id=uuid4(),
@@ -290,6 +325,7 @@ class PipelineExecutor:
             await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
             await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
             trace_manager.end_span(main_span, "failure", str(e))
+            await trace_manager.persist_trace(trace_id)
             return AgentOutput(
                 task_id=task_id,
                 step_id=uuid4(),

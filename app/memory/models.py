@@ -1,9 +1,28 @@
-from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean
+from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean, UniqueConstraint, Enum as SQLEnum
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
 from uuid import uuid4
+from enum import Enum as PyEnum
 
 Base = declarative_base()
+
+
+class GuardrailRuleType(str, PyEnum):
+    blocked_keywords = "blocked_keywords"
+    max_length = "max_length"
+    required_fields = "required_fields"
+    allowed_tools = "allowed_tools"
+
+
+class GuardrailRuleAction(str, PyEnum):
+    block = "block"
+    warn = "warn"
+    log = "log"
+
+
+class GuardrailRuleStatus(str, PyEnum):
+    active = "active"
+    inactive = "inactive"
 
 
 class TaskModel(Base):
@@ -61,6 +80,8 @@ class WorkflowNodeModel(Base):
     output_data = Column(JSON, nullable=True)
     confidence = Column(Float, nullable=True)
     condition_code = Column(Text, nullable=True)
+    node_type = Column(String(20), nullable=False, default="agent")
+    approval_config = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -157,6 +178,21 @@ class ToolModel(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class MCPServerModel(Base):
+    __tablename__ = "mcp_servers"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name = Column(String(100), unique=True, nullable=False, index=True)
+    endpoint = Column(String(500), nullable=False)
+    tools_list = Column(JSON, nullable=True)
+    auth_scope = Column(String(255), nullable=True)
+    health_status = Column(String(20), default="unknown")
+    version = Column(String(20), default="1.0.0")
+    status = Column(String(20), default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AgentModel(Base):
     __tablename__ = "agents"
 
@@ -169,9 +205,30 @@ class AgentModel(Base):
     temperature = Column(Float, nullable=True)
     max_tokens = Column(Integer, nullable=True)
     tools = Column(JSON, nullable=True)
+    version = Column(String(20), default="1.0.0")
     status = Column(String(20), default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AgentVersionModel(Base):
+    __tablename__ = "agent_versions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_key = Column(String(100), nullable=False, index=True)
+    version = Column(String(20), nullable=False)
+    name = Column(String(100), nullable=False)
+    role = Column(String(50), nullable=False)
+    system_prompt = Column(Text, nullable=True)
+    model = Column(String(100), nullable=True)
+    temperature = Column(Float, nullable=True)
+    max_tokens = Column(Integer, nullable=True)
+    tools = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("agent_key", "version", name="uq_agent_version"),
+    )
 
 
 class ConfigModel(Base):
@@ -180,6 +237,30 @@ class ConfigModel(Base):
     key = Column(String(100), primary_key=True)
     value = Column(JSON, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class GuardrailRuleModel(Base):
+    __tablename__ = "guardrail_rules"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name = Column(String(100), nullable=False, unique=True, index=True)
+    rule_type = Column(String(30), nullable=False)
+    condition = Column(JSON, nullable=False, default=dict)
+    action = Column(String(20), nullable=False, default="block")
+    status = Column(String(20), nullable=False, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class CheckpointModel(Base):
+    __tablename__ = "checkpoints"
+
+    thread_id = Column(String(100), primary_key=True)
+    checkpoint_ns = Column(String(100), primary_key=True, default="")
+    checkpoint_id = Column(String(100), primary_key=True)
+    parent_checkpoint_id = Column(String(100), nullable=True)
+    checkpoint = Column(Text, nullable=False)
+    checkpoint_metadata = Column("metadata", Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class UserModel(Base):

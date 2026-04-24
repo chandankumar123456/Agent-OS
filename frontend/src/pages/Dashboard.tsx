@@ -100,6 +100,12 @@ const Dashboard = () => {
   const loadTasks = async () => {
     try {
       const allTasks = await apiClient.listTasks();
+      if (!Array.isArray(allTasks)) {
+        console.error('listTasks did not return an array:', allTasks);
+        setTasks([]);
+        setLoadError('Unexpected API response format');
+        return;
+      }
       setTasks(
         [...allTasks].sort((a, b) => {
           const left = a.created_at ? new Date(a.created_at).getTime() : 0;

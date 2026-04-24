@@ -1,3 +1,5 @@
+import os
+import secrets
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, model_validator
 from typing import Optional
@@ -5,7 +7,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     APP_NAME: str = "Agent-OS"
-    VERSION: str = "0.1.0"
+    VERSION: str = "0.2.0"
 
     DATABASE_URL: Optional[str] = None
     REDIS_URL: Optional[str] = None
@@ -31,7 +33,7 @@ class Settings(BaseSettings):
     MAX_ACTIVE_TASKS_PER_USER: int = 5
     MAX_TASK_EXECUTION_ATTEMPTS: int = 3
 
-    SECRET_KEY: str = "change-me-in-production-use-secure-random-key"
+    SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
@@ -85,11 +87,16 @@ class Settings(BaseSettings):
             raise ValueError("REDIS_URL is required")
         if not self.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is required")
+        if not self.SECRET_KEY:
+            raise ValueError(
+                "SECRET_KEY is required. Set a persistent SECRET_KEY in your environment "
+                "so that all processes (FastAPI, Celery workers, runtime) share the same key."
+            )
         return self
 
     class Config:
         env_file = ".env"
-        case_sensitive = True
+        case_sensitive = False
 
 
 settings = Settings()

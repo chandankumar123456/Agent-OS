@@ -10,18 +10,23 @@ import Orchestrator from './pages/Orchestrator';
 import Monitor from './pages/Monitor';
 import Tools from './pages/Tools';
 import Settings from './pages/Settings';
+import WorkflowBuilder from './pages/WorkflowBuilder';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated, isLoading } = useAuth();
-  
+
   if (isLoading) {
     return null;
   }
-  
-  if (!isAuthenticated) {
+
+  // Ground-truth check: localStorage token must exist.
+  // This prevents temporary React state mismatches from causing
+  // unwanted redirects when the token is actually valid.
+  const hasToken = !!localStorage.getItem('accessToken');
+  if (!hasToken && !isAuthenticated) {
     return <Navigate to="/login" replace />;
   }
-  
+
   return <>{children}</>;
 };
 
@@ -48,6 +53,7 @@ function AppRoutes() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/builder" element={<AgentBuilder />} />
         <Route path="/orchestrator" element={<Orchestrator />} />
+        <Route path="/workflows/builder" element={<WorkflowBuilder />} />
         <Route path="/monitor" element={<Monitor />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/settings" element={<Settings />} />

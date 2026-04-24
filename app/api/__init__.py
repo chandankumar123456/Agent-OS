@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from .routes import tasks, auth, tools, agents, config
+from .routes import tasks, auth, tools, agents, config, workflows
+from ..logs.metrics import metrics_collector
 
 api_router = APIRouter()
 api_router.include_router(auth.router)
@@ -7,3 +8,9 @@ api_router.include_router(tasks.router)
 api_router.include_router(tools.router)
 api_router.include_router(agents.router)
 api_router.include_router(config.router)
+api_router.include_router(workflows.router)
+
+
+@api_router.get("/metrics")
+async def metrics():
+    return metrics_collector.get_json_summary()

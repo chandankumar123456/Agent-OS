@@ -1,5 +1,6 @@
 from typing import Dict, Any, Optional, List
 from uuid import UUID, uuid4
+from datetime import datetime
 from ..agents.base import AgentInput, AgentOutput, AgentRole, AgentStatus
 from ..agents.types import TaskStatus, StepStatus
 from ..logs.logger import logger
@@ -17,6 +18,16 @@ from .builder import WorkflowBuilder
 from .executor import StepExecutor
 from .pipeline import PipelineExecutor
 from .context import TaskContext
+from .router import AgentRouter
+from ..langgraph.graphs import (
+    compile_task_graph,
+    compile_autonomous_graph,
+    compile_workflow_graph,
+    compile_collaboration_graph,
+    get_checkpointer,
+)
+from ..langgraph.state import AgentState
+from ..mcp.client_manager import mcp_client_manager
 
 
 class Orchestrator:
@@ -32,6 +43,7 @@ class Orchestrator:
 
     def __init__(self):
         self.runtime = AgentRuntime()
+        self.router = AgentRouter(self.runtime)
         self.workflow_engine = WorkflowEngine()
         self.workflow_builder = WorkflowBuilder()
         self.step_executor = StepExecutor()
@@ -44,15 +56,14 @@ class Orchestrator:
         self.pipeline_executor = PipelineExecutor(self)
 
     def _get_agent(self, agent_type: str):
-        """Get an agent from the Runtime. Runtime is the ONLY execution entry point."""
-        agent_id = f"core_{agent_type}"
-        worker = self.runtime.get(agent_id)
-        if not worker:
+        """Get an agent from the Router. Runtime is the ONLY execution entry point."""
+        agent = self.router.resolve(agent_type)
+        if not agent:
             raise RuntimeError(
-                f"Agent {agent_id} not found in runtime. "
+                f"Agent for role '{agent_type}' not found in runtime. "
                 f"Ensure AgentRuntime.initialize() was called at startup."
             )
-        return worker.agent_instance
+        return agent
 
     async def _load_task_state(self, context: TaskContext) -> None:
         try:
@@ -77,15 +88,23 @@ class Orchestrator:
             raise
 
     async def _hydrate_memory_context(self, context: TaskContext) -> Dict[str, Any]:
-        cached = await short_term_memory.get_context(str(context.task_id))
-        if cached:
-            context.context.update(cached)
-        recent_tasks = await task_repo.list_by_user(context.user_id, limit=3)
-        if recent_tasks:
-            context.context["recent_tasks"] = [
-                {"query": t.query, "status": t.status, "result_summary": str(t.result)[:200] if t.result else None}
-                for t in recent_tasks if t.id != str(context.task_id)
-            ]
+        try:
+            cached = await short_term_memory.get_context(str(context.task_id))
+            if cached:
+                context.context.update(cached)
+        except Exception as e:
+            logger.warning(f"Short-term memory hydration failed: {e}")
+
+        try:
+            recent_tasks = await task_repo.list_by_user(context.user_id, limit=3)
+            if recent_tasks:
+                context.context["recent_tasks"] = [
+                    {"query": t.query, "status": t.status, "result_summary": str(t.result)[:200] if t.result else None}
+                    for t in recent_tasks if t.id != str(context.task_id)
+                ]
+        except Exception as e:
+            logger.warning(f"Recent tasks hydration failed: {e}")
+
         return context.context
 
     async def _validate_input(self, query: str, config: Dict[str, Any]) -> bool:
@@ -110,13 +129,27 @@ class Orchestrator:
             logger.warning(f"Output guardrails error: {e}")
             return False
 
-    async def _execute_with_retry(self, agent, input_data: AgentInput) -> AgentOutput:
-        async def _execute():
-            return await agent.execute(input_data)
+    async def _execute_with_retry(self, agent, input_data: AgentInput, role: Optional[str] = None) -> AgentOutput:
+        async def _execute(target_agent):
+            return await target_agent.execute(input_data)
         try:
-            return await retry_with_backoff(_execute, self.retry_config)
+            return await retry_with_backoff(lambda: _execute(agent), self.retry_config)
         except Exception as e:
-            logger.error(f"Agent execution failed after retries: {e}")
+            logger.error(f"Primary agent execution failed after retries: {e}")
+            # Attempt fallback agent if role is provided
+            if role:
+                fallback_chain = self.router.list_roles().get(role, [])
+                for fallback_id in fallback_chain:
+                    fallback_worker = self.runtime.get(fallback_id)
+                    if fallback_worker and fallback_worker.agent_instance is not agent:
+                        try:
+                            logger.info(f"Trying fallback agent '{fallback_id}' for role '{role}'")
+                            result = await fallback_worker.agent_instance.execute(input_data)
+                            if result.status == AgentStatus.SUCCESS:
+                                logger.info(f"Fallback agent '{fallback_id}' succeeded for role '{role}'")
+                                return result
+                        except Exception as fe:
+                            logger.warning(f"Fallback agent '{fallback_id}' failed: {fe}")
             return AgentOutput(
                 task_id=input_data.task_id,
                 step_id=input_data.step_id,
@@ -166,11 +199,111 @@ class Orchestrator:
         return output_data.get("complete", False)
 
     async def _save_final_state(self, context: TaskContext, combined_result: Dict[str, Any], verify_result) -> None:
+        # Defensively ensure trace_id is present in the result for trace retrieval
+        if context.trace_id and "trace_id" not in combined_result:
+            combined_result["trace_id"] = context.trace_id
         context.result = combined_result
         context.status = TaskStatus.COMPLETED
         await self._save_task_state(context)
         await short_term_memory.save_context(str(context.task_id), context.context, expire=1800)
         await trace_repo.update_status(context.trace_id, TaskStatus.COMPLETED.value)
+
+    def _build_initial_state(
+        self,
+        query: str,
+        config: Dict[str, Any],
+        task_id: UUID,
+        user_id: str,
+    ) -> AgentState:
+        trace_id = self._new_trace_id()
+        return AgentState(
+            task_id=str(task_id),
+            user_id=user_id,
+            trace_id=trace_id,
+            query=query,
+            config=config,
+            messages=[],
+            plan=[],
+            current_step_index=0,
+            steps=[],
+            step_results={},
+            tool_calls=[],
+            verified=False,
+            verification_notes=None,
+            approved=None,
+            approval_reason=None,
+            result={},
+            error=None,
+            created_at=datetime.utcnow().isoformat(),
+            mode=config.get("mode", "task"),
+            status="pending",
+        )
+
+    async def _execute_with_langgraph(
+        self,
+        query: str,
+        config: Dict[str, Any],
+        task_id: UUID,
+        user_id: str,
+        mode: str,
+    ) -> AgentOutput:
+        """Execute a task using LangGraph compiled state graphs."""
+        try:
+            # Ensure MCP tools are discovered
+            await tool_registry.discover_mcp_tools()
+
+            checkpointer = get_checkpointer()
+            state = self._build_initial_state(query, config, task_id, user_id)
+
+            if mode == "task":
+                graph = compile_task_graph(checkpointer=checkpointer)
+            elif mode == "autonomous":
+                graph = compile_autonomous_graph(checkpointer=checkpointer)
+            elif mode == "workflow":
+                workflow_def = None
+                workflow = await workflow_repo.get_by_task(str(task_id))
+                if workflow and workflow.definition:
+                    workflow_def = workflow.definition
+                graph = compile_workflow_graph(workflow_definition=workflow_def, checkpointer=checkpointer)
+            elif mode == "collaboration":
+                graph = compile_collaboration_graph(checkpointer=checkpointer)
+            else:
+                graph = compile_task_graph(checkpointer=checkpointer)
+
+            thread_config = {
+                "configurable": {
+                    "thread_id": str(task_id),
+                    "checkpoint_ns": mode,
+                }
+            }
+
+            logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
+            final_state = await graph.ainvoke(state, config=thread_config)
+
+            result = final_state.get("result", {})
+            error = final_state.get("error")
+            verified = final_state.get("verified", False)
+            status = final_state.get("status", "completed")
+
+            if error or status == "rejected":
+                return AgentOutput(
+                    task_id=str(task_id),
+                    step_id="",
+                    status=AgentStatus.FAILURE,
+                    error_type="execution_error",
+                    error_message=error or "Task was rejected",
+                    output_data=result,
+                )
+
+            return AgentOutput(
+                task_id=str(task_id),
+                step_id="",
+                status=AgentStatus.SUCCESS,
+                output_data=result,
+            )
+        except Exception as e:
+            logger.error(f"[LangGraph] Execution failed for task {task_id}: {e}")
+            raise
 
     async def execute_task(
         self,
@@ -185,6 +318,13 @@ class Orchestrator:
         config = config or {}
         mode = config.get("mode", "task")
 
+        # Try LangGraph execution first
+        try:
+            return await self._execute_with_langgraph(query, config, task_id, user_id, mode)
+        except Exception as langgraph_err:
+            logger.warning(f"LangGraph execution failed, falling back to legacy mode strategy: {langgraph_err}")
+
+        # Fallback to legacy mode strategies
         from .modes import ModeStrategyFactory
         strategy = ModeStrategyFactory.get(mode)
         return await strategy.execute(self.runtime, self, query, config, task_id, user_id)

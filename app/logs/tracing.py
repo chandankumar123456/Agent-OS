@@ -30,6 +30,7 @@ class TraceManager:
         self.spans: Dict[str, Span] = {}
         self.trace_index: Dict[str, List[str]] = {}
         self._pending_db_ops: List[dict] = []
+        self._persisted_span_ids: set = set()
 
     @staticmethod
     def _status_label(status: str) -> str:
@@ -78,6 +79,11 @@ class TraceManager:
         if span_id not in self.spans:
             return
         span = self.spans[span_id]
+        if span_id in self._persisted_span_ids:
+            # Already inserted; only update if ended
+            if span.end_time:
+                await span_repo.update(span_id, status=self._status_label(span.status), error=span.error)
+            return
         await span_repo.create(
             span.trace_id,
             span.span_id,
@@ -85,6 +91,7 @@ class TraceManager:
             span.agent_name,
             span.metadata
         )
+        self._persisted_span_ids.add(span_id)
         if span.end_time:
             await span_repo.update(span_id, status=self._status_label(span.status), error=span.error)
 

@@ -87,14 +87,28 @@ class AgentWorker:
                 input_data = payload.input_data
                 if isinstance(input_data, dict):
                     from ..agents.base import AgentInput, AgentRole
+                    from uuid import UUID
+                    task_id_raw = getattr(message, 'task_id', None)
+                    step_id_raw = getattr(message, 'step_id', None)
+                    # Validate UUIDs
+                    try:
+                        task_id = UUID(str(task_id_raw)) if task_id_raw else UUID(int=0)
+                        step_id = UUID(str(step_id_raw)) if step_id_raw else UUID(int=0)
+                    except (ValueError, TypeError) as uuid_err:
+                        logger.error(f"AgentWorker {self.agent_id} received invalid UUIDs: {uuid_err}")
+                        return
                     agent_input = AgentInput(
-                        task_id=getattr(message, 'task_id', None),
-                        step_id=getattr(message, 'step_id', None),
-                        role=AgentRole.EXECUTOR,
+                        task_id=task_id,
+                        step_id=step_id,
+                        role=AgentRole(self.config.get("role", "executor").upper()),
                         input_data=input_data,
                         context={},
                     )
-                    result = await self.execute(agent_input)
+                    result = await asyncio.wait_for(self.execute(agent_input), timeout=300)
                     logger.info(f"AgentWorker {self.agent_id} processed message with status: {result.status}")
+            else:
+                logger.warning(f"AgentWorker {self.agent_id} dropped message with missing payload or input_data")
+        except asyncio.TimeoutError:
+            logger.error(f"AgentWorker {self.agent_id} timed out processing message")
         except Exception as e:
             logger.error(f"AgentWorker {self.agent_id} failed to process message: {e}")

@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, List
 from ...orchestrator.core import Orchestrator
 from ...agents.types import TaskStatus
 from ...logs.logger import logger
-from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo
+from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo
 from ...config.settings import settings
 from ...orchestrator.errors import ErrorCode
 from ..deps import OrchestratorDep, get_current_user
@@ -109,13 +109,16 @@ def _serialize_node(node) -> Dict[str, Any]:
         "input_data": node.input_data,
         "output_data": node.output_data,
         "confidence": node.confidence,
+        "node_type": getattr(node, "node_type", "agent"),
+        "approval_config": getattr(node, "approval_config", None),
     }
 
 
 async def _task_scoped_workflow_state(task_id: UUID, current_user: object):
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
-    return await Orchestrator()._get_workflow_state(task_id)
+    from ...orchestrator.core import orchestrator
+    return await orchestrator._get_workflow_state(task_id)
 
 
 @router.post("", response_model=TaskCreateResponse)
@@ -181,14 +184,27 @@ async def create_task(
     else:
         async def _run_task():
             try:
-                await orchestrator.execute_task(
+                await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
+                result = await orchestrator.execute_task(
                     query=request.query,
                     config=config,
                     task_id=task_id,
                     user_id=user_id,
                 )
+                if result.status.value == "success":
+                    await task_repo.update(
+                        str(task_id), status=TaskStatus.COMPLETED.value, result=result.output_data
+                    )
+                else:
+                    await task_repo.update(
+                        str(task_id), status=TaskStatus.FAILED.value, error=result.error_message
+                    )
             except Exception as e:
                 logger.error(f"Background task execution failed: {e}")
+                try:
+                    await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
+                except Exception as db_err:
+                    logger.error(f"Failed to persist background task failure: {db_err}")
 
         background_tasks.add_task(_run_task)
         logger.info(f"Started background task {task_id}")
@@ -291,6 +307,44 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
     await task_repo.update(str(task_id), status=TaskStatus.CANCELLED.value)
 
     return {"message": "Task deleted"}
+
+
+@router.post("/{task_id}/approve")
+async def approve_task(task_id: UUID, current_user: object = Depends(get_current_user)):
+    db_task = await task_repo.get(str(task_id))
+    _ensure_task_access(db_task, current_user)
+    if not db_task or db_task.status != TaskStatus.WAITING_APPROVAL.value:
+        raise HTTPException(status_code=400, detail="Task is not waiting for approval")
+
+    workflow = await workflow_repo.get_by_task(str(task_id))
+    if workflow:
+        nodes = await workflow_node_repo.get_by_workflow(workflow.id)
+        for node in nodes:
+            if node.status == StepStatus.WAITING_APPROVAL.value:
+                await workflow_node_repo.update(node.id, status=StepStatus.APPROVED.value)
+
+    await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} approved task {task_id}")
+    return {"task_id": str(task_id), "status": "approved"}
+
+
+@router.post("/{task_id}/reject")
+async def reject_task(task_id: UUID, current_user: object = Depends(get_current_user)):
+    db_task = await task_repo.get(str(task_id))
+    _ensure_task_access(db_task, current_user)
+    if not db_task or db_task.status != TaskStatus.WAITING_APPROVAL.value:
+        raise HTTPException(status_code=400, detail="Task is not waiting for approval")
+
+    workflow = await workflow_repo.get_by_task(str(task_id))
+    if workflow:
+        nodes = await workflow_node_repo.get_by_workflow(workflow.id)
+        for node in nodes:
+            if node.status == StepStatus.WAITING_APPROVAL.value:
+                await workflow_node_repo.update(node.id, status=StepStatus.REJECTED.value)
+
+    await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error="Approval rejected by user")
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} rejected task {task_id}")
+    return {"task_id": str(task_id), "status": "rejected"}
 
 
 @router.get("/{task_id}/trace")

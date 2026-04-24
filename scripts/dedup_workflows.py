@@ -21,7 +21,7 @@ async def deduplicate():
     await db.connect()
     session = db.get_session()
 
-    async with session() as s:
+    async with session as s:
         # Find all task_ids with multiple workflows
         from sqlalchemy import func
         result = await s.execute(

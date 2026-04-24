@@ -15,6 +15,7 @@ class AgentRuntime:
     """
 
     _instance = None
+    _lock = asyncio.Lock()
 
     def __new__(cls, max_agents: int = 100):
         if cls._instance is None:
@@ -23,51 +24,104 @@ class AgentRuntime:
             cls._instance._factory = AgentFactory()
             cls._instance._pool = AgentPool(max_agents)
             cls._instance._initialized = False
+            cls._instance._init_lock = asyncio.Lock()
+            cls._instance._register_locks: Dict[str, asyncio.Lock] = {}
         return cls._instance
 
     async def initialize(self):
-        """Eagerly register core system agents. Called once at app startup."""
-        if self._initialized:
-            return
-        for core_type in ("planner", "executor", "verifier"):
-            agent_id = f"core_{core_type}"
-            if agent_id not in self._workers:
-                await self.register(agent_id, {"role": core_type})
-        self._initialized = True
-        logger.info("AgentRuntime initialized with core agents")
+        """Eagerly register core system agents. Called once at app startup.
+
+        Idempotent: safe to call multiple times. Subsequent calls are no-ops.
+        """
+        async with self._init_lock:
+            if self._initialized:
+                logger.debug("AgentRuntime.initialize() called but already initialized; skipping")
+                return
+            logger.info("AgentRuntime initializing core agents...")
+            for core_type in ("planner", "executor", "verifier"):
+                agent_id = f"core_{core_type}"
+                if agent_id not in self._workers:
+                    try:
+                        await self.register(agent_id, {"role": core_type})
+                        logger.info(f"Registered core agent: {agent_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to register core agent {agent_id}: {e}")
+                else:
+                    logger.debug(f"Core agent already registered: {agent_id}")
+
+            # Persist core agents to database so they appear in API listings
+            try:
+                from ..memory.long_term import agent_repo
+                for core_type in ("planner", "executor", "verifier"):
+                    agent_id = f"core_{core_type}"
+                    await agent_repo.upsert(
+                        agent_key=agent_id,
+                        name=agent_id,
+                        role=core_type,
+                        status="active",
+                    )
+                logger.info("Core agents persisted to database")
+            except Exception as e:
+                logger.warning(f"Failed to persist core agents to database: {e}")
+
+            # Load any additional agents from database into runtime
+            try:
+                await self.load_from_db()
+                logger.info("Agents loaded from database into runtime")
+            except Exception as e:
+                logger.warning(f"Failed to load agents from database: {e}")
+
+            self._initialized = True
+            logger.info("AgentRuntime initialized with core agents")
+
+    async def ensure_initialized(self) -> "AgentRuntime":
+        """Convenience wrapper around initialize(). Returns self."""
+        await self.initialize()
+        return self
 
     def reset(self):
         """Clear all workers. Used ONLY for test isolation."""
         for worker in list(self._workers.values()):
             if worker._task and not worker._task.done():
                 worker._task.cancel()
+        for agent_id in list(self._workers.keys()):
+            try:
+                asyncio.get_event_loop().create_task(mcp_protocol.router.unregister(agent_id))
+            except Exception as e:
+                logger.warning(f"Failed to unregister {agent_id} during reset: {e}")
         self._workers.clear()
         self._initialized = False
         logger.info("AgentRuntime reset")
 
     async def register(self, agent_id: str, config: Dict[str, Any]) -> AgentWorker:
         """Register and start a new agent worker."""
-        if agent_id in self._workers:
-            logger.warning(f"Agent {agent_id} already registered, returning existing")
-            return self._workers[agent_id]
+        # Per-ID lock prevents duplicate registration races
+        if agent_id not in self._register_locks:
+            self._register_locks[agent_id] = asyncio.Lock()
+        async with self._register_locks[agent_id]:
+            if agent_id in self._workers:
+                logger.warning(f"Agent {agent_id} already registered, returning existing")
+                return self._workers[agent_id]
 
-        await self._pool.acquire(agent_id)
+            await self._pool.acquire(agent_id)
 
-        try:
-            agent_type = config.get("role", "custom")
-            agent_instance = self._factory.create_agent(agent_type, config)
-            worker = AgentWorker(agent_id, config, agent_instance)
-            await worker.start()
-            self._workers[agent_id] = worker
+            try:
+                agent_type = config.get("role", "custom")
+                agent_instance = self._factory.create_agent(agent_type, config)
+                worker = AgentWorker(agent_id, config, agent_instance)
+                await worker.start()
+                self._workers[agent_id] = worker
 
-            # Register worker with MCP protocol so it can receive messages
-            await mcp_protocol.router.register(agent_id, worker.on_message)
+                # Register worker with MCP protocol so it can receive messages
+                await mcp_protocol.router.register(agent_id, worker.on_message)
 
-            logger.info(f"Registered agent {agent_id} of type {agent_type}")
-            return worker
-        except Exception:
-            self._pool.release(agent_id)
-            raise
+                logger.info(f"Registered agent {agent_id} of type {agent_type}")
+                return worker
+            except Exception:
+                # Remove worker if it was partially inserted
+                self._workers.pop(agent_id, None)
+                self._pool.release(agent_id)
+                raise
 
     def get(self, agent_id: str) -> Optional[AgentWorker]:
         """Get an agent worker by ID. Returns None if not registered."""
@@ -86,12 +140,24 @@ class AgentRuntime:
 
     async def shutdown_all(self):
         """Stop all workers."""
+        errors = []
         for agent_id, worker in list(self._workers.items()):
-            await mcp_protocol.router.unregister(agent_id)
-            await worker.stop()
-            self._pool.release(agent_id)
+            try:
+                await mcp_protocol.router.unregister(agent_id)
+            except Exception as e:
+                errors.append((agent_id, f"unregister: {e}"))
+            try:
+                await worker.stop()
+            except Exception as e:
+                errors.append((agent_id, f"stop: {e}"))
+            try:
+                self._pool.release(agent_id)
+            except Exception as e:
+                errors.append((agent_id, f"release: {e}"))
         self._workers.clear()
         self._initialized = False
+        if errors:
+            logger.warning(f"Shutdown errors: {errors}")
         logger.info("All agent workers shutdown")
 
     async def load_from_db(self):
@@ -107,5 +173,9 @@ class AgentRuntime:
                 "temperature": agent.temperature,
                 "max_tokens": agent.max_tokens,
                 "tools": agent.tools or [],
+                "version": agent.version or "1.0.0",
             }
-            await self.register(agent.agent_key, config)
+            try:
+                await self.register(agent.agent_key, config)
+            except Exception as e:
+                logger.warning(f"Failed to load agent {agent.agent_key} from DB: {e}")

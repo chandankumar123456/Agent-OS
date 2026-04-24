@@ -8,7 +8,13 @@ from ..logs.logger import logger
 class SearchTool(BaseTool):
     name: str = "web_search"
     description: str = "Search the web for information"
-    
+    parameters_schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"}
+        }
+    }
+
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         query = tool_input.parameters.get("query", "")
         
@@ -48,7 +54,15 @@ class SearchTool(BaseTool):
 class CalculatorTool(BaseTool):
     name: str = "calculator"
     description: str = "Perform calculations"
-    
+    parameters_schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "operation": {"type": "string", "description": "Operation: add, subtract, multiply, divide"},
+            "a": {"type": "number", "description": "First operand"},
+            "b": {"type": "number", "description": "Second operand"}
+        }
+    }
+
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         operation = tool_input.parameters.get("operation", "")
         a = tool_input.parameters.get("a", 0)
@@ -81,7 +95,14 @@ class CalculatorTool(BaseTool):
 class TextProcessorTool(BaseTool):
     name: str = "text_processor"
     description: str = "Process and transform text"
-    
+    parameters_schema: Dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Text to process"},
+            "operation": {"type": "string", "description": "Operation: uppercase, lowercase, length"}
+        }
+    }
+
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         text = tool_input.parameters.get("text", "")
         operation = tool_input.parameters.get("operation", "uppercase")

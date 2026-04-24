@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 import asyncio
 import ast
+from .errors import WorkflowPausedForApproval
 
 
 NodeRunner = Callable[["WorkflowNode", Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -17,6 +18,8 @@ class WorkflowNode:
     depends_on: List[str] = field(default_factory=list)
     condition: Optional[str] = None
     step_number: int = 0
+    node_type: str = "agent"
+    approval_config: Optional[Dict[str, Any]] = None
 
 
 class WorkflowEngine:
@@ -37,6 +40,8 @@ class WorkflowEngine:
                     depends_on=[str(dep) for dep in item.get("depends_on", [])],
                     condition=item.get("condition"),
                     step_number=int(item.get("step_number", index)),
+                    node_type=item.get("node_type", "agent"),
+                    approval_config=item.get("approval_config"),
                 )
             )
         return nodes
@@ -197,6 +202,8 @@ class WorkflowEngine:
                     "step": node.step,
                     "agent_type": node.agent_type,
                     "depends_on": node.depends_on,
+                    "node_type": node.node_type,
+                    "approval_config": node.approval_config,
                 }
             )
         return plan
@@ -232,6 +239,9 @@ class WorkflowEngine:
             runnable: List[WorkflowNode] = []
             for node in ready:
                 if self._evaluate_condition(node, running_context):
+                    if node.node_type == "wait":
+                        results[node.id]["status"] = "waiting_approval"
+                        raise WorkflowPausedForApproval(node.id, node.approval_config)
                     runnable.append(node)
                 else:
                     results[node.id]["status"] = "skipped"

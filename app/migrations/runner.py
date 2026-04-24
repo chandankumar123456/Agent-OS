@@ -54,28 +54,45 @@ def get_migration_files() -> List[Tuple[int, str, Path]]:
 
 def split_sql_statements(sql: str) -> List[str]:
     """Split SQL file into individual statements.
-    
-    asyncpg doesn't support multiple commands in a prepared statement,
-    so we need to execute each statement separately.
+
+    Uses a simple state machine to avoid splitting on semicolons
+    inside string literals.
     """
     statements = []
     current = []
+    in_string = False
+    string_char = None
 
     for line in sql.split("\n"):
         stripped = line.strip()
         if stripped.startswith("--") or not stripped:
             continue
 
-        current.append(line)
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if not in_string and ch in ("'", '"'):
+                in_string = True
+                string_char = ch
+            elif in_string and ch == string_char:
+                # Check for escaped quote
+                if i + 1 < len(line) and line[i + 1] == string_char:
+                    i += 1
+                else:
+                    in_string = False
+                    string_char = None
+            current.append(ch)
+            i += 1
+        current.append("\n")
 
-        if stripped.endswith(";"):
-            stmt = "\n".join(current).strip()
+        if not in_string and stripped.endswith(";"):
+            stmt = "".join(current).strip()
             if stmt:
                 statements.append(stmt)
             current = []
 
     if current:
-        stmt = "\n".join(current).strip()
+        stmt = "".join(current).strip()
         if stmt and not stmt.startswith("--"):
             statements.append(stmt)
 

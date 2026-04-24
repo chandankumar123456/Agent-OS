@@ -3,6 +3,7 @@ from uuid import UUID
 from ...agents.base import AgentOutput, AgentStatus, AgentInput, AgentRole
 from ...agents.types import TaskStatus
 from ...logs.logger import logger
+from ...logs.tracing import trace_manager
 from ...memory.long_term import task_repo
 from .base import ModeStrategy
 
@@ -21,11 +22,25 @@ class AutonomousMode(ModeStrategy):
 
         await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
 
+        main_span = trace_manager.start_span(
+            trace_id=trace_id,
+            operation="autonomous_execution",
+            agent_name="orchestrator",
+            metadata={"query": query, "task_id": str(task_id)}
+        )
+
         step_results = []
         current_query = query
 
         for step_num in range(max_steps):
             logger.info(f"Autonomous step {step_num + 1}/{max_steps} for task {task_id}")
+
+            plan_span = trace_manager.start_span(
+                trace_id=trace_id,
+                operation="planning",
+                agent_name="planner",
+                metadata={"step": step_num}
+            )
 
             # Plan a single step via Runtime
             plan_input = AgentInput(
@@ -37,7 +52,10 @@ class AutonomousMode(ModeStrategy):
                 constraints=config,
             )
             planner_worker = runtime.get("core_planner")
-            plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input)
+            plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input, role="planner")
+
+            trace_manager.end_span(plan_span, "success" if plan_result.status == AgentStatus.SUCCESS else "failure")
+            await trace_manager.persist_span(plan_span)
 
             if plan_result.status != AgentStatus.SUCCESS:
                 logger.error(f"Autonomous planning failed at step {step_num + 1}")
@@ -50,6 +68,13 @@ class AutonomousMode(ModeStrategy):
 
             step = steps[0]
 
+            exec_span = trace_manager.start_span(
+                trace_id=trace_id,
+                operation="execution",
+                agent_name="executor",
+                metadata={"step": step_num}
+            )
+
             # Execute the step via Runtime
             exec_input = AgentInput(
                 task_id=task_id,
@@ -60,7 +85,10 @@ class AutonomousMode(ModeStrategy):
                 constraints=config,
             )
             executor_worker = runtime.get("core_executor")
-            exec_result = await orchestrator._execute_with_retry(executor_worker.agent_instance, exec_input)
+            exec_result = await orchestrator._execute_with_retry(executor_worker.agent_instance, exec_input, role="executor")
+
+            trace_manager.end_span(exec_span, "success" if exec_result.status == AgentStatus.SUCCESS else "failure")
+            await trace_manager.persist_span(exec_span)
 
             if exec_result.status != AgentStatus.SUCCESS:
                 logger.error(f"Autonomous execution failed at step {step_num + 1}")
@@ -82,6 +110,13 @@ class AutonomousMode(ModeStrategy):
             current_query = f"Previous result: {exec_result.output_data}. Original task: {query}"
 
         # Verify final results via Runtime
+        verify_span = trace_manager.start_span(
+            trace_id=trace_id,
+            operation="verification",
+            agent_name="verifier",
+            metadata={"steps": len(step_results)}
+        )
+
         verify_input = AgentInput(
             task_id=task_id,
             step_id=UUID(int=max_steps),
@@ -90,16 +125,22 @@ class AutonomousMode(ModeStrategy):
             context={"steps": step_results},
         )
         verifier_worker = runtime.get("core_verifier")
-        verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input)
+        verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input, role="verifier")
+
+        trace_manager.end_span(verify_span, "success" if verify_result.status == AgentStatus.SUCCESS else "failure")
+        await trace_manager.persist_span(verify_span)
 
         combined_result = {
             "query": query,
             "steps": step_results,
             "mode": "autonomous",
+            "trace_id": trace_id,
             "verified": verify_result.output_data.get("valid", True) if verify_result.status == AgentStatus.SUCCESS else False,
         }
 
         await orchestrator._save_final_state(context, combined_result, verify_result)
+        trace_manager.end_span(main_span, "success")
+        await trace_manager.persist_trace(trace_id)
 
         return AgentOutput(
             task_id=task_id,

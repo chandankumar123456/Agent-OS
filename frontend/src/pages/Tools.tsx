@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Search, Database, Globe, Wrench, Settings2, Plus, Play, Loader2 } from 'lucide-react';
+import { Search, Database, Globe, Wrench, Settings2, Plus, Play, Loader2, Server, Activity } from 'lucide-react';
 import { apiClient } from '../api/client';
 
 const iconMap: Record<string, any> = {
@@ -16,33 +16,62 @@ const Tools = () => {
   const [executingTool, setExecutingTool] = useState<string | null>(null);
   const [executionResult, setExecutionResult] = useState<Record<string, any> | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, string>>({});
+  const [mcpServers, setMcpServers] = useState<Array<{
+    id: string;
+    name: string;
+    endpoint: string;
+    tools_list?: any[];
+    auth_scope?: string | null;
+    health_status: string;
+    version: string;
+    status: string;
+    updated_at?: string | null;
+  }>>([]);
+  const [checkingHealth, setCheckingHealth] = useState<string | null>(null);
 
   const refresh = async () => {
     const tools = await apiClient.getTools();
     setRegistry(tools);
+    try {
+      const servers = await apiClient.getMCPServers();
+      setMcpServers(servers);
+    } catch {
+      setMcpServers([]);
+    }
   };
 
   useEffect(() => {
     refresh().finally(() => setLoading(false));
   }, []);
 
+  const [actionError, setActionError] = useState('');
+
   const createTool = async () => {
     if (!form.name || !form.description) return;
-    await apiClient.createTool({ name: form.name, description: form.description, type: form.type });
-    setForm({ name: '', description: '', type: 'custom' });
-    await refresh();
+    setActionError('');
+    try {
+      await apiClient.createTool({ name: form.name, description: form.description, type: form.type });
+      setForm({ name: '', description: '', type: 'custom' });
+      await refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to create tool');
+    }
   };
 
   const executeTool = async (toolName: string) => {
     setExecutingTool(toolName);
     setExecutionResult(null);
+    setActionError('');
     try {
       const params: Record<string, any> = {};
       Object.entries(paramValues).forEach(([key, value]) => {
-        try {
-          params[key] = JSON.parse(value);
-        } catch {
-          params[key] = value;
+        if (key.startsWith(`${toolName}.`)) {
+          const paramKey = key.slice(toolName.length + 1);
+          try {
+            params[paramKey] = JSON.parse(value);
+          } catch {
+            params[paramKey] = value;
+          }
         }
       });
       const result = await apiClient.executeTool(toolName, params);
@@ -66,6 +95,24 @@ const Tools = () => {
     return [];
   };
 
+  const checkHealth = async (name: string) => {
+    setCheckingHealth(name);
+    try {
+      await apiClient.checkMCPServerHealth(name);
+      await refresh();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setCheckingHealth(null);
+    }
+  };
+
+  const healthColor = (status: string) => {
+    if (status === 'healthy') return 'text-[#00FF88]';
+    if (status === 'degraded') return 'text-amber-400';
+    return 'text-[#FF4B4B]';
+  };
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-6">
       <div className="flex justify-between items-end mb-4">
@@ -84,6 +131,12 @@ const Tools = () => {
         <input className="obsidian-input" placeholder="Type" value={form.type} onChange={(e) => setForm((f) => ({ ...f, type: e.target.value }))} />
       </div>
 
+      {actionError && (
+        <div className="p-4 rounded-lg border border-[#FF4B4B]/20 bg-[#FF4B4B]/10 text-sm text-[#FF4B4B]">
+          {actionError}
+        </div>
+      )}
+
       {executionResult && (
         <div className="obsidian-panel border border-outline/10 p-4">
           <h3 className="text-sm font-semibold mb-2">Execution Result</h3>
@@ -94,7 +147,45 @@ const Tools = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full">
+      {/* MCP Servers Section */}
+      <div className="mt-8">
+        <h2 className="text-xl font-bold tracking-tight mb-4 flex items-center gap-2">
+          <Server className="w-5 h-5 text-primary" /> MCP Servers
+        </h2>
+        {mcpServers.length === 0 ? (
+          <div className="text-sm text-secondaryText">No MCP servers registered.</div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {mcpServers.map((server) => (
+              <div key={server.id} className="obsidian-panel border border-outline/10 p-4 flex flex-col gap-2">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <h3 className="text-sm font-semibold">{server.name}</h3>
+                    <p className="text-xs text-secondaryText truncate">{server.endpoint}</p>
+                  </div>
+                  <span className={`text-xs font-bold uppercase px-2 py-1 rounded bg-background ${healthColor(server.health_status)}`}>
+                    {server.health_status}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-secondaryText">
+                  <span>v{server.version}</span>
+                  <span>{server.status}</span>
+                </div>
+                <button
+                  onClick={() => checkHealth(server.name)}
+                  disabled={checkingHealth === server.name}
+                  className="btn-secondary flex items-center gap-2 text-xs mt-1 disabled:opacity-50"
+                >
+                  {checkingHealth === server.name ? <Loader2 className="w-3 h-3 animate-spin" /> : <Activity className="w-3 h-3" />}
+                  Check Health
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full mt-8">
         {loading ? (
           <div className="col-span-2 text-center py-12 text-secondaryText">Loading tools...</div>
         ) : registry.map((tool, idx) => {

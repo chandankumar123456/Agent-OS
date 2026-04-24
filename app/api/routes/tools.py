@@ -5,12 +5,10 @@ from ...tools.registry import tool_registry
 from ...tools.base import BaseTool, ToolInput, ToolOutput
 from ...api.deps import get_current_user
 from ...memory.long_term import tool_repo
+from ...mcp.registry import mcp_registry
+from ...logs.logger import logger
 
 router = APIRouter(prefix="/tools", tags=["tools"])
-
-
-def _is_admin(user: object) -> bool:
-    return getattr(user, "role", "user") == "admin"
 
 
 class ToolInfo(BaseModel):
@@ -36,6 +34,26 @@ class ToolExecuteRequest(BaseModel):
 class ToolRegisterResponse(BaseModel):
     success: bool
     tool: ToolInfo
+
+
+class MCPServerRegisterRequest(BaseModel):
+    name: str
+    endpoint: str
+    tools_list: Optional[List[Dict[str, Any]]] = None
+    auth_scope: Optional[str] = None
+    version: str = "1.0.0"
+
+
+class MCPServerInfo(BaseModel):
+    id: str
+    name: str
+    endpoint: str
+    tools_list: Optional[List[Dict[str, Any]]] = None
+    auth_scope: Optional[str] = None
+    health_status: str
+    version: str
+    status: str
+    updated_at: Optional[str] = None
 
 
 class DynamicTool(BaseTool):
@@ -111,8 +129,6 @@ async def get_tool(tool_name: str, _: object = Depends(get_current_user)):
 
 @router.post("", response_model=ToolRegisterResponse)
 async def register_tool(request: ToolRegisterRequest, current_user: object = Depends(get_current_user)):
-    if not _is_admin(current_user):
-        raise HTTPException(status_code=403, detail="Forbidden")
     tool = DynamicTool(request.name, request.description, request.parameters_schema, request.template)
     tool_registry.register(tool)
     await tool_repo.upsert(
@@ -123,6 +139,7 @@ async def register_tool(request: ToolRegisterRequest, current_user: object = Dep
         template=request.template,
         status="active",
     )
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} registered tool {request.name}")
     return ToolRegisterResponse(
         success=True,
         tool=ToolInfo(
@@ -136,8 +153,52 @@ async def register_tool(request: ToolRegisterRequest, current_user: object = Dep
 
 
 @router.post("/{tool_name}/execute")
-async def execute_tool(tool_name: str, request: ToolExecuteRequest, _: object = Depends(get_current_user)):
+async def execute_tool(tool_name: str, request: ToolExecuteRequest, current_user: object = Depends(get_current_user)):
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} executing tool {tool_name}")
     result = await tool_registry.execute(tool_name, request.parameters)
     if not result.success:
+        logger.warning(f"Tool {tool_name} execution failed: {result.error}")
         raise HTTPException(status_code=400, detail=result.error or "Tool execution failed")
     return result
+
+
+@router.post("/mcp-servers", response_model=MCPServerInfo)
+async def register_mcp_server(request: MCPServerRegisterRequest, current_user: object = Depends(get_current_user)):
+    try:
+        server = await mcp_registry.register(
+            name=request.name,
+            endpoint=request.endpoint,
+            tools_list=request.tools_list,
+            auth_scope=request.auth_scope,
+            version=request.version,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} registered MCP server {request.name}")
+    return MCPServerInfo(**server)
+
+
+@router.get("/mcp-servers", response_model=List[MCPServerInfo])
+async def list_mcp_servers(_: object = Depends(get_current_user)):
+    servers = await mcp_registry.list_all()
+    return [MCPServerInfo(**s) for s in servers]
+
+
+@router.get("/mcp-servers/{name}", response_model=MCPServerInfo)
+async def get_mcp_server(name: str, _: object = Depends(get_current_user)):
+    server = await mcp_registry.get(name)
+    if not server:
+        raise HTTPException(status_code=404, detail=f"MCP server {name} not found")
+    return MCPServerInfo(**server)
+
+
+@router.get("/mcp-servers/{name}/health")
+async def check_mcp_server_health(name: str, _: object = Depends(get_current_user)):
+    status = await mcp_registry.health_check(name)
+    return {"name": name, "health_status": status}
+
+
+@router.get("/mcp-servers/{name}/tools", response_model=List[Dict[str, Any]])
+async def discover_mcp_server_tools(name: str, _: object = Depends(get_current_user)):
+    tools = await mcp_registry.discover_tools(name)
+    return tools

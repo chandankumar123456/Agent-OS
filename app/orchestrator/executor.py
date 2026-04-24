@@ -5,7 +5,7 @@ from ..agents.types import StepStatus
 from ..memory.long_term import workflow_node_repo, node_trace_repo
 from ..logs.tracing import trace_manager
 from ..logs.logger import logger
-from ..orchestrator.errors import UnrecoverableError, ErrorType
+from ..orchestrator.errors import UnrecoverableError, ErrorType, WorkflowPausedForApproval
 
 
 class StepExecutor:
@@ -27,6 +27,11 @@ class StepExecutor:
     ) -> Dict[str, Any]:
         step_id = step_row["step_id"]
         step_number = step_row["step_number"]
+        node_type = step_row.get("node_type", "agent")
+
+        if node_type == "wait":
+            await workflow_node_repo.update(step_id, status=StepStatus.WAITING_APPROVAL.value)
+            raise WorkflowPausedForApproval(str(step_id), step_row.get("approval_config"))
 
         await workflow_node_repo.update(step_id, status=StepStatus.RUNNING.value)
 
@@ -38,6 +43,7 @@ class StepExecutor:
         )
 
         step_input = step_row.get("input_data", {})
+        allowed_tools = getattr(agent_instance, "allowed_tools", None)
         exec_input = AgentInput(
             task_id=task_id,
             step_id=UUID(step_id) if isinstance(step_id, str) else step_id,
@@ -49,6 +55,7 @@ class StepExecutor:
             },
             context=dict(context.context),
             constraints=config,
+            allowed_tools=allowed_tools,
         )
 
         try:

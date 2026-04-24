@@ -3,6 +3,7 @@ from uuid import UUID
 from ...agents.base import AgentOutput, AgentStatus, AgentInput, AgentRole
 from ...agents.types import TaskStatus
 from ...logs.logger import logger
+from ...logs.tracing import trace_manager
 from ...memory.long_term import task_repo
 from ...mcp.protocol import mcp_protocol
 from .base import ModeStrategy
@@ -21,7 +22,21 @@ class CollaborationMode(ModeStrategy):
 
         await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
 
+        main_span = trace_manager.start_span(
+            trace_id=trace_id,
+            operation="collaboration_execution",
+            agent_name="orchestrator",
+            metadata={"query": query, "task_id": str(task_id)}
+        )
+
         # Plan with varying agent_types via Runtime
+        plan_span = trace_manager.start_span(
+            trace_id=trace_id,
+            operation="planning",
+            agent_name="planner",
+            metadata={}
+        )
+
         plan_input = AgentInput(
             task_id=task_id,
             step_id=UUID(int=0),
@@ -31,9 +46,14 @@ class CollaborationMode(ModeStrategy):
             constraints=config,
         )
         planner_worker = runtime.get("core_planner")
-        plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input)
+        plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input, role="planner")
+
+        trace_manager.end_span(plan_span, "success" if plan_result.status == AgentStatus.SUCCESS else "failure")
+        await trace_manager.persist_span(plan_span)
 
         if plan_result.status != AgentStatus.SUCCESS:
+            trace_manager.end_span(main_span, "failure", plan_result.error_message)
+            await trace_manager.persist_trace(trace_id)
             return plan_result
 
         steps = plan_result.output_data.get("steps", [])
@@ -41,14 +61,21 @@ class CollaborationMode(ModeStrategy):
 
         for idx, step in enumerate(steps):
             agent_type = step.get("agent_type", "executor")
-            agent_id = f"core_{agent_type}"
 
-            # Get agent from Runtime (the ONLY execution entry point)
-            worker = runtime.get(agent_id)
+            # Resolve agent via Router with fallback support
+            worker = orchestrator.router.resolve_worker(agent_type)
+            agent_id = worker.agent_id if hasattr(worker, "agent_id") else f"core_{agent_type}"
             if not worker:
-                logger.warning(f"Collaboration mode: agent {agent_id} not found, falling back to core_executor")
+                logger.warning(f"Collaboration mode: agent for role '{agent_type}' not found, falling back to core_executor")
                 worker = runtime.get("core_executor")
                 agent_id = "core_executor"
+
+            exec_span = trace_manager.start_span(
+                trace_id=trace_id,
+                operation="execution",
+                agent_name=agent_id,
+                metadata={"step": idx}
+            )
 
             # Send MCP message to the agent worker
             message = mcp_protocol.create_message(
@@ -75,7 +102,10 @@ class CollaborationMode(ModeStrategy):
                 context={"query": query, "previous_results": step_results},
                 constraints=config,
             )
-            exec_result = await orchestrator._execute_with_retry(worker.agent_instance, exec_input)
+            exec_result = await orchestrator._execute_with_retry(worker.agent_instance, exec_input, role=agent_type)
+
+            trace_manager.end_span(exec_span, "success" if exec_result.status == AgentStatus.SUCCESS else "failure")
+            await trace_manager.persist_span(exec_span)
 
             step_results.append({
                 "step_id": str(idx),
@@ -86,6 +116,13 @@ class CollaborationMode(ModeStrategy):
             })
 
         # Verify via Runtime
+        verify_span = trace_manager.start_span(
+            trace_id=trace_id,
+            operation="verification",
+            agent_name="verifier",
+            metadata={"steps": len(step_results)}
+        )
+
         verify_input = AgentInput(
             task_id=task_id,
             step_id=UUID(int=len(steps)),
@@ -94,16 +131,22 @@ class CollaborationMode(ModeStrategy):
             context={"steps": step_results},
         )
         verifier_worker = runtime.get("core_verifier")
-        verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input)
+        verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input, role="verifier")
+
+        trace_manager.end_span(verify_span, "success" if verify_result.status == AgentStatus.SUCCESS else "failure")
+        await trace_manager.persist_span(verify_span)
 
         combined_result = {
             "query": query,
             "steps": step_results,
             "mode": "collaboration",
+            "trace_id": trace_id,
             "verified": verify_result.output_data.get("valid", True) if verify_result.status == AgentStatus.SUCCESS else False,
         }
 
         await orchestrator._save_final_state(context, combined_result, verify_result)
+        trace_manager.end_span(main_span, "success")
+        await trace_manager.persist_trace(trace_id)
 
         return AgentOutput(
             task_id=task_id,

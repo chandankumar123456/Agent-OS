@@ -1,5 +1,6 @@
 from fastapi import APIRouter, status
 from fastapi.responses import PlainTextResponse
+from sqlalchemy import text
 from ...logs.metrics import metrics_collector
 from ...memory.long_term import db
 from ...memory.short_term import redis_client
@@ -21,7 +22,7 @@ async def readiness_check():
     try:
         if db.engine:
             async with db.engine.connect() as conn:
-                await conn.execute("SELECT 1")
+                await conn.execute(text("SELECT 1"))
             checks["database"] = "ok"
         else:
             checks["database"] = "not_initialized"

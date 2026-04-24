@@ -1,11 +1,12 @@
-from typing import Annotated
+from typing import Annotated, Any
 from fastapi import Depends, HTTPException, Header, status
-from ..orchestrator.core import orchestrator as _orchestrator_singleton
+from ..orchestrator.core import Orchestrator, orchestrator as _orchestrator_singleton
 from ..auth.utils import verify_access_token
 from ..memory.long_term import user_repo
+from ..logs.logger import logger
 
 
-def get_orchestrator():
+def get_orchestrator() -> Orchestrator:
     """Return the module-level orchestrator singleton.
 
     This ensures that AgentRuntime, WorkflowEngine, and RetryConfig
@@ -14,7 +15,7 @@ def get_orchestrator():
     return _orchestrator_singleton
 
 
-OrchestratorDep = Annotated[type(_orchestrator_singleton), Depends(get_orchestrator)]
+OrchestratorDep = Annotated[Orchestrator, Depends(get_orchestrator)]
 
 
 async def get_current_user(
@@ -26,6 +27,11 @@ async def get_current_user(
             user = await user_repo.get_by_id(str(payload["sub"]))
             if user and getattr(user, "is_active", True):
                 return user
+            logger.warning(f"Auth failed: user not found or inactive for sub={payload.get('sub')}")
+        else:
+            logger.warning("Auth failed: invalid or expired token")
+    else:
+        logger.warning("Auth failed: missing or malformed Authorization header")
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -33,4 +39,4 @@ async def get_current_user(
     )
 
 
-CurrentUserDep = Annotated[object, Depends(get_current_user)]
+CurrentUserDep = Annotated[Any, Depends(get_current_user)]

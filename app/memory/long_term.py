@@ -17,8 +17,12 @@ from .models import (
     NodeTraceModel,
     SpanModel,
     ToolModel,
+    MCPServerModel,
     AgentModel,
+    AgentVersionModel,
     ConfigModel,
+    GuardrailRuleModel,
+    CheckpointModel,
 )
 from ..config.settings import settings
 from ..logs.logger import logger
@@ -47,6 +51,7 @@ class Database:
             max_overflow=40,
             pool_pre_ping=True,
             pool_recycle=3600,
+            pool_timeout=30,
         )
         self.session_factory = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
         self._loop = current_loop
@@ -123,13 +128,15 @@ class TaskRepository:
             return result.scalars().all()
 
     async def count_active_by_user(self, user_id: str) -> int:
+        from sqlalchemy import func
         async with db.get_session() as session:
             result = await session.execute(
-                select(TaskModel)
+                select(func.count())
+                .select_from(TaskModel)
                 .where(TaskModel.user_id == user_id)
                 .where(TaskModel.status.in_(["pending", "running"]))
             )
-            return len(result.scalars().all())
+            return result.scalar() or 0
 
 
 class WorkflowRepository:
@@ -148,6 +155,11 @@ class WorkflowRepository:
             await session.refresh(workflow)
             return workflow
 
+    async def get_by_id(self, workflow_id: str) -> Optional[WorkflowModel]:
+        async with db.get_session() as session:
+            result = await session.execute(select(WorkflowModel).where(WorkflowModel.id == workflow_id))
+            return result.scalar_one_or_none()
+
     async def get_by_task(self, task_id: str) -> Optional[WorkflowModel]:
         async with db.get_session() as session:
             result = await session.execute(
@@ -161,6 +173,15 @@ class WorkflowRepository:
     async def get_by_task_ids(self, task_ids: List[str]) -> List[WorkflowModel]:
         async with db.get_session() as session:
             result = await session.execute(select(WorkflowModel).where(WorkflowModel.task_id.in_(task_ids)))
+            return result.scalars().all()
+
+    async def list_by_user(self, user_id: str) -> List[WorkflowModel]:
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(WorkflowModel)
+                .where(WorkflowModel.user_id == user_id)
+                .order_by(WorkflowModel.created_at.desc())
+            )
             return result.scalars().all()
 
     async def update(
@@ -191,6 +212,8 @@ class WorkflowNodeRepository:
         depends_on: Optional[List[int]] = None,
         input_data: Optional[Dict[str, Any]] = None,
         condition_code: Optional[str] = None,
+        node_type: str = "agent",
+        approval_config: Optional[Dict[str, Any]] = None,
     ) -> WorkflowNodeModel:
         async with db.get_session() as session:
             node = WorkflowNodeModel(
@@ -200,6 +223,8 @@ class WorkflowNodeRepository:
                 depends_on=depends_on or [],
                 input_data=input_data,
                 condition_code=condition_code,
+                node_type=node_type,
+                approval_config=approval_config,
             )
             session.add(node)
             await session.commit()
@@ -454,6 +479,10 @@ class SpanRepository:
         metadata: Optional[Dict[str, Any]] = None,
     ):
         async with db.get_session() as session:
+            existing = await session.execute(select(SpanModel).where(SpanModel.span_id == span_id))
+            span = existing.scalar_one_or_none()
+            if span:
+                return span
             span = SpanModel(trace_id=trace_id, span_id=span_id, operation=operation, agent_name=agent_name, metadata_json=metadata)
             session.add(span)
             await session.commit()
@@ -515,6 +544,82 @@ class ToolRepository:
             return result.scalar_one_or_none()
 
 
+class MCPServerRepository:
+    async def create(
+        self,
+        name: str,
+        endpoint: str,
+        tools_list: Optional[List[Dict[str, Any]]] = None,
+        auth_scope: Optional[str] = None,
+        health_status: str = "unknown",
+        version: str = "1.0.0",
+        status: str = "active",
+    ):
+        async with db.get_session() as session:
+            existing = await session.execute(select(MCPServerModel).where(MCPServerModel.name == name))
+            if existing.scalar_one_or_none():
+                raise ValueError(f"MCP server '{name}' already exists")
+            server = MCPServerModel(
+                name=name, endpoint=endpoint, tools_list=tools_list,
+                auth_scope=auth_scope, health_status=health_status,
+                version=version, status=status,
+            )
+            session.add(server)
+            await session.commit()
+            await session.refresh(server)
+            return server
+
+    async def update(
+        self,
+        server_id: str,
+        endpoint: Optional[str] = None,
+        tools_list: Optional[List[Dict[str, Any]]] = None,
+        auth_scope: Optional[str] = None,
+        health_status: Optional[str] = None,
+        version: Optional[str] = None,
+        status: Optional[str] = None,
+    ):
+        async with db.get_session() as session:
+            result = await session.execute(select(MCPServerModel).where(MCPServerModel.id == server_id))
+            server = result.scalar_one_or_none()
+            if not server:
+                return None
+            if endpoint is not None:
+                server.endpoint = endpoint
+            if tools_list is not None:
+                server.tools_list = tools_list
+            if auth_scope is not None:
+                server.auth_scope = auth_scope
+            if health_status is not None:
+                server.health_status = health_status
+            if version is not None:
+                server.version = version
+            if status is not None:
+                server.status = status
+            await session.commit()
+            await session.refresh(server)
+            return server
+
+    async def get_by_name(self, name: str):
+        async with db.get_session() as session:
+            result = await session.execute(select(MCPServerModel).where(MCPServerModel.name == name))
+            return result.scalar_one_or_none()
+
+    async def list_all(self):
+        async with db.get_session() as session:
+            result = await session.execute(select(MCPServerModel).order_by(MCPServerModel.created_at.desc()))
+            return result.scalars().all()
+
+    async def delete(self, server_id: str):
+        async with db.get_session() as session:
+            result = await session.execute(select(MCPServerModel).where(MCPServerModel.id == server_id))
+            server = result.scalar_one_or_none()
+            if server:
+                await session.delete(server)
+                await session.commit()
+            return server
+
+
 class AgentRepository:
     async def upsert(
         self,
@@ -526,13 +631,20 @@ class AgentRepository:
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
         tools: Optional[List[str]] = None,
+        version: Optional[str] = None,
         status: str = "active",
     ):
         async with db.get_session() as session:
             result = await session.execute(select(AgentModel).where(AgentModel.agent_key == agent_key))
             agent = result.scalar_one_or_none()
             if not agent:
-                agent = AgentModel(agent_key=agent_key, name=name, role=role, system_prompt=system_prompt, model=model, temperature=temperature, max_tokens=max_tokens, tools=tools, status=status)
+                agent = AgentModel(
+                    agent_key=agent_key, name=name, role=role,
+                    system_prompt=system_prompt, model=model,
+                    temperature=temperature, max_tokens=max_tokens,
+                    tools=tools, version=version or "1.0.0",
+                    status=status,
+                )
                 session.add(agent)
             else:
                 agent.name = name
@@ -542,6 +654,8 @@ class AgentRepository:
                 agent.temperature = temperature
                 agent.max_tokens = max_tokens
                 agent.tools = tools
+                if version:
+                    agent.version = version
                 agent.status = status
             await session.commit()
             await session.refresh(agent)
@@ -564,6 +678,85 @@ class AgentRepository:
     async def list_all(self):
         async with db.get_session() as session:
             result = await session.execute(select(AgentModel).order_by(AgentModel.created_at.desc()))
+            return result.scalars().all()
+
+    async def list_versions(self, agent_key: str):
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(AgentVersionModel)
+                .where(AgentVersionModel.agent_key == agent_key)
+                .order_by(AgentVersionModel.created_at.desc())
+            )
+            return result.scalars().all()
+
+    async def get_version(self, agent_key: str, version: str):
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(AgentVersionModel)
+                .where(AgentVersionModel.agent_key == agent_key)
+                .where(AgentVersionModel.version == version)
+            )
+            return result.scalar_one_or_none()
+
+    async def create_version(
+        self,
+        agent_key: str,
+        version: str,
+        name: str,
+        role: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        tools: Optional[List[str]] = None,
+    ):
+        async with db.get_session() as session:
+            existing = await session.execute(
+                select(AgentVersionModel)
+                .where(AgentVersionModel.agent_key == agent_key)
+                .where(AgentVersionModel.version == version)
+            )
+            if existing.scalar_one_or_none():
+                raise ValueError(f"Version {version} already exists for agent {agent_key}")
+            v = AgentVersionModel(
+                agent_key=agent_key, version=version, name=name, role=role,
+                system_prompt=system_prompt, model=model,
+                temperature=temperature, max_tokens=max_tokens,
+                tools=tools,
+            )
+            session.add(v)
+            await session.commit()
+            await session.refresh(v)
+            return v
+
+
+class MessageRepository:
+    async def create(
+        self,
+        task_id: str,
+        step_id: Optional[str] = None,
+        sender: str = "system",
+        receiver: str = "system",
+        payload: Optional[Dict[str, Any]] = None,
+    ):
+        async with db.get_session() as session:
+            msg = MessageModel(
+                task_id=task_id,
+                step_id=step_id,
+                sender=sender,
+                receiver=receiver,
+                payload=payload,
+            )
+            session.add(msg)
+            await session.commit()
+            await session.refresh(msg)
+            return msg
+
+    async def get_by_task(self, task_id: str):
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(MessageModel).where(MessageModel.task_id == task_id).order_by(MessageModel.created_at)
+            )
             return result.scalars().all()
 
 
@@ -596,6 +789,55 @@ class ConfigRepository:
             return defaults
 
 
+class GuardrailRuleRepository:
+    async def create(
+        self,
+        name: str,
+        rule_type: str,
+        condition: Dict[str, Any],
+        action: str = "block",
+        status: str = "active",
+    ) -> GuardrailRuleModel:
+        async with db.get_session() as session:
+            rule = GuardrailRuleModel(
+                name=name,
+                rule_type=rule_type,
+                condition=condition,
+                action=action,
+                status=status,
+            )
+            session.add(rule)
+            await session.commit()
+            await session.refresh(rule)
+            return rule
+
+    async def list_active(self) -> List[GuardrailRuleModel]:
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(GuardrailRuleModel).where(GuardrailRuleModel.status == "active")
+            )
+            return result.scalars().all()
+
+    async def get_by_name(self, name: str) -> Optional[GuardrailRuleModel]:
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(GuardrailRuleModel).where(GuardrailRuleModel.name == name)
+            )
+            return result.scalar_one_or_none()
+
+    async def update_status(self, rule_id: str, status: str) -> Optional[GuardrailRuleModel]:
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(GuardrailRuleModel).where(GuardrailRuleModel.id == rule_id)
+            )
+            rule = result.scalar_one_or_none()
+            if rule:
+                rule.status = status
+                await session.commit()
+                await session.refresh(rule)
+            return rule
+
+
 task_repo = TaskRepository()
 workflow_repo = WorkflowRepository()
 workflow_node_repo = WorkflowNodeRepository()
@@ -605,5 +847,8 @@ trace_repo = TraceRepository()
 node_trace_repo = NodeTraceRepository()
 span_repo = SpanRepository()
 tool_repo = ToolRepository()
+mcp_server_repo = MCPServerRepository()
 agent_repo = AgentRepository()
+message_repo = MessageRepository()
 config_repo = ConfigRepository()
+guardrail_rule_repo = GuardrailRuleRepository()

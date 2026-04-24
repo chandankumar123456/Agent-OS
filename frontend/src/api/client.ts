@@ -140,9 +140,10 @@ class ApiClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Request failed' }));
       const message = error.error?.message || error.error || error.detail || `HTTP ${response.status}`;
-      if (response.status === 401 || response.status === 403) {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('user');
+      if (response.status === 401) {
+        // Only invalidate the session on true authentication failures (401).
+        // 403 Forbidden is endpoint-specific (e.g., non-admin accessing config)
+        // and must NOT destroy the global auth state.
         window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
       }
       throw new Error(message);
@@ -291,6 +292,61 @@ class ApiClient {
     return this.request<{ message: string }>(`/agents/${agentId}`, {
       method: 'DELETE',
     });
+  }
+
+  async getMCPServers(): Promise<Array<{
+    id: string;
+    name: string;
+    endpoint: string;
+    tools_list?: any[];
+    auth_scope?: string | null;
+    health_status: string;
+    version: string;
+    status: string;
+    updated_at?: string | null;
+  }>> {
+    return this.request<Array<{
+      id: string;
+      name: string;
+      endpoint: string;
+      tools_list?: any[];
+      auth_scope?: string | null;
+      health_status: string;
+      version: string;
+      status: string;
+      updated_at?: string | null;
+    }>>('/tools/mcp-servers');
+  }
+
+  async checkMCPServerHealth(name: string): Promise<{ name: string; health_status: string }> {
+    return this.request<{ name: string; health_status: string }>(`/tools/mcp-servers/${name}/health`);
+  }
+
+  async saveWorkflow(definition: { name: string; definition: any }): Promise<{ id: string; task_id: string; name: string; definition: any; status: string }> {
+    return this.request('/workflows', {
+      method: 'POST',
+      body: JSON.stringify(definition),
+    });
+  }
+
+  async getWorkflow(id: string): Promise<{ id: string; task_id: string; name: string; definition: any; status: string }> {
+    return this.request(`/workflows/${id}`);
+  }
+
+  async executeWorkflow(query: string, workflowId: string): Promise<CreateTaskResponse> {
+    return this.createTask({
+      query,
+      mode: 'workflow',
+      config: { max_steps: 50, timeout: 300 },
+    });
+  }
+
+  async approveTask(taskId: string): Promise<{ task_id: string; status: string }> {
+    return this.request(`/tasks/${taskId}/approve`, { method: 'POST' });
+  }
+
+  async rejectTask(taskId: string): Promise<{ task_id: string; status: string }> {
+    return this.request(`/tasks/${taskId}/reject`, { method: 'POST' });
   }
 }
 

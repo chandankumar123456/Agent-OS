@@ -16,6 +16,7 @@ class AgentStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILURE = "failure"
+    PAUSED = "paused"
 
 
 class AgentInput(BaseModel):
@@ -25,6 +26,7 @@ class AgentInput(BaseModel):
     input_data: Dict[str, Any] = Field(default_factory=dict)
     context: Dict[str, Any] = Field(default_factory=dict)
     constraints: Optional[Dict[str, Any]] = None
+    allowed_tools: Optional[List[str]] = None
 
 
 class AgentOutput(BaseModel):

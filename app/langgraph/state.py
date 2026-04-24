@@ -1,0 +1,47 @@
+"""LangGraph state definitions for AgentOS."""
+from typing import TypedDict, List, Dict, Any, Optional, Annotated
+from datetime import datetime
+from langgraph.graph.message import add_messages
+from langchain_core.messages import BaseMessage
+
+
+class AgentState(TypedDict, total=False):
+    """Shared state passed between all LangGraph nodes."""
+
+    # Identity
+    task_id: str
+    user_id: str
+    trace_id: str
+
+    # Input
+    query: str
+    config: Dict[str, Any]
+
+    # Conversation / reasoning
+    messages: Annotated[List[BaseMessage], add_messages]
+
+    # Planning
+    plan: List[Dict[str, Any]]
+    current_step_index: int
+
+    # Execution
+    steps: List[Dict[str, Any]]
+    step_results: Dict[str, Any]
+    tool_calls: List[Dict[str, Any]]
+
+    # Verification
+    verified: bool
+    verification_notes: Optional[str]
+
+    # Human-in-the-loop
+    approved: Optional[bool]
+    approval_reason: Optional[str]
+
+    # Final output
+    result: Dict[str, Any]
+    error: Optional[str]
+
+    # Metadata
+    created_at: str
+    mode: str
+    status: str

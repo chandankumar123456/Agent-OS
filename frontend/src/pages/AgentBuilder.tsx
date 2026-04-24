@@ -8,6 +8,7 @@ const AgentBuilder = () => {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [tools, setTools] = useState<Array<{name: string; description: string}>>([]);
   const [loading, setLoading] = useState(true);
+  const [actionError, setActionError] = useState('');
 
   // Form state
   const [name, setName] = useState('');
@@ -19,9 +20,14 @@ const AgentBuilder = () => {
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
 
   const refresh = async () => {
-    const [agentData, toolData] = await Promise.all([apiClient.listAgents(), apiClient.getTools()]);
-    setAgents(agentData);
-    setTools(toolData.map((tool) => ({ name: tool.name, description: tool.description })));
+    setActionError('');
+    try {
+      const [agentData, toolData] = await Promise.all([apiClient.listAgents(), apiClient.getTools()]);
+      setAgents(agentData);
+      setTools(toolData.map((tool) => ({ name: tool.name, description: tool.description })));
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to load agents');
+    }
   };
 
   const resetForm = () => {
@@ -36,38 +42,53 @@ const AgentBuilder = () => {
 
   const createAgent = async () => {
     if (!name.trim()) return;
-    await apiClient.createAgent({
-      name: name.trim(),
-      role: 'custom',
-      system_prompt: prompt.trim() || undefined,
-      model,
-      temperature,
-      max_tokens: maxTokens,
-      tools: assignedTools,
-    });
-    resetForm();
-    await refresh();
+    setActionError('');
+    try {
+      await apiClient.createAgent({
+        name: name.trim(),
+        role: 'custom',
+        system_prompt: prompt.trim() || undefined,
+        model,
+        temperature,
+        max_tokens: maxTokens,
+        tools: assignedTools,
+      });
+      resetForm();
+      await refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to create agent');
+    }
   };
 
   const updateAgent = async () => {
     if (!editingAgentId || !name.trim()) return;
-    await apiClient.updateAgent(editingAgentId, {
-      name: name.trim(),
-      role: 'custom',
-      system_prompt: prompt.trim() || undefined,
-      model,
-      temperature,
-      max_tokens: maxTokens,
-      tools: assignedTools,
-    });
-    resetForm();
-    await refresh();
+    setActionError('');
+    try {
+      await apiClient.updateAgent(editingAgentId, {
+        name: name.trim(),
+        role: 'custom',
+        system_prompt: prompt.trim() || undefined,
+        model,
+        temperature,
+        max_tokens: maxTokens,
+        tools: assignedTools,
+      });
+      resetForm();
+      await refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to update agent');
+    }
   };
 
   const deleteAgent = async (agentId: string) => {
     if (!confirm('Are you sure you want to delete this agent?')) return;
-    await apiClient.deleteAgent(agentId);
-    await refresh();
+    setActionError('');
+    try {
+      await apiClient.deleteAgent(agentId);
+      await refresh();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to delete agent');
+    }
   };
 
   const startEdit = (agent: AgentInfo) => {
@@ -92,6 +113,12 @@ const AgentBuilder = () => {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col gap-8 h-full pb-10">
+      {actionError && (
+        <div className="p-4 rounded-lg border border-[#FF4B4B]/20 bg-[#FF4B4B]/10 text-sm text-[#FF4B4B]">
+          {actionError}
+        </div>
+      )}
+
       <div className="flex justify-between items-end">
         <div>
           <h1 className="text-3xl font-bold tracking-tight mb-1 cursor-default">Agent Builder</h1>

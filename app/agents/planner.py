@@ -1,7 +1,7 @@
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
 from uuid import uuid4
 from typing import List, Dict, Any
-from .llm_client import llm_client
+from .llm_client import get_llm_client
 from ..logs.logger import logger
 
 
@@ -115,7 +115,7 @@ class PlannerAgent:
         ]
         
         try:
-            result = await llm_client.complete_json(messages)
+            result = await get_llm_client().complete_json(messages)
             steps = self._normalize_plan_response(result)
             
             return AgentOutput(

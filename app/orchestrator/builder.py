@@ -40,6 +40,8 @@ class WorkflowBuilder:
                 depends_on=[str(dep) for dep in step.get("depends_on", []) if dep is not None],
                 input_data={"step": step.get("step", ""), "raw_step": step},
                 condition_code=step.get("condition"),
+                node_type=step.get("node_type", "agent"),
+                approval_config=step.get("approval_config"),
             )
             node_rows.append(node)
             node_by_step[str(step.get("id", index))] = node.id
@@ -80,6 +82,8 @@ class WorkflowBuilder:
                     "input_data": node.input_data,
                     "output_data": node.output_data,
                     "confidence": node.confidence,
+                    "node_type": getattr(node, "node_type", "agent"),
+                    "approval_config": getattr(node, "approval_config", None),
                 }
                 for node in state.get("nodes", [])
             ],
