@@ -52,3 +52,6 @@ class AgentState(TypedDict, total=False):
     created_at: str
     mode: str
     status: str
+
+    # Execution config
+    max_tool_rounds: int

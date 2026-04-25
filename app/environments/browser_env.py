@@ -1,5 +1,6 @@
 """Browser Environment — real browser UI automation via Playwright."""
 import os
+import re
 import tempfile
 import urllib.parse
 from typing import Optional, Dict, Any, List
@@ -71,6 +72,10 @@ class BrowserSession:
         self._current_url: Optional[str] = None
 
     async def launch(self, headless: bool = False) -> ToolOutput:
+        if self.is_alive():
+            logger.info(f"BrowserSession[{self.task_id}]: already alive, skipping launch")
+            return ToolOutput(success=True, result={"message": "Browser already launched"})
+
         self._headless = headless
         try:
             self._playwright = await async_playwright().start()
@@ -109,25 +114,57 @@ class BrowserSession:
     async def navigate(self, url: str) -> ToolOutput:
         try:
             page = await self._ensure_page()
-            await page.goto(url, wait_until="domcontentloaded")
-            self._current_url = url
+            # Try networkidle for SPAs, fall back to domcontentloaded if it hangs
+            try:
+                await page.goto(url, wait_until="networkidle", timeout=30000)
+            except Exception:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            self._current_url = page.url
             title = await page.title()
-            return ToolOutput(success=True, result={"url": url, "title": title})
+            return ToolOutput(success=True, result={"url": self._current_url, "title": title})
         except Exception as e:
             logger.error(f"BrowserSession[{self.task_id}]: navigate error: {e}")
             return ToolOutput(success=False, error=str(e))
 
+    async def _dismiss_interstitials(self, page: Page) -> None:
+        """Click common consent / cookie / age-gate buttons so the real page surface is reachable."""
+        consent_buttons = [
+            'button:has-text("Accept all")',
+            'button:has-text("Reject all")',
+            'button:has-text("I agree")',
+            'button:has-text("Agree")',
+            'button:has-text("Continue")',
+            'button[aria-label*="Accept" i]',
+            'form[action*="consent"] button',
+            '[data-testid="reject-all-button"]',
+        ]
+        for sel in consent_buttons:
+            try:
+                btn = page.locator(sel).first
+                await btn.wait_for(state="visible", timeout=3000)
+                await btn.click()
+                await page.wait_for_load_state("networkidle", timeout=10000)
+                logger.info(f"BrowserSession[{self.task_id}]: dismissed interstitial ({sel})")
+                return
+            except Exception:
+                continue
+
     async def search(self, query: str) -> ToolOutput:
+        import re
         page = await self._ensure_page()
+
+        # Dismiss Google/YouTube consent or cookie interstitials first
+        await self._dismiss_interstitials(page)
+
         domain = self._detect_domain()
-        selectors = DOMAIN_SELECTORS.get(domain, [])
-        selectors = selectors + FALLBACK_SELECTORS
+        selectors = DOMAIN_SELECTORS.get(domain, []) + FALLBACK_SELECTORS
 
         last_error = None
-        for selector in selectors:
+        for idx, selector in enumerate(selectors):
             try:
-                # Wait for element with short timeout
-                await page.wait_for_selector(selector, timeout=5000)
+                # Give heavy SPAs (YouTube) more time on the first few selectors
+                timeout = 10000 if idx < 3 else 5000
+                await page.wait_for_selector(selector, timeout=timeout, state="visible")
                 await page.fill(selector, query)
                 await page.press(selector, "Enter")
                 await page.wait_for_load_state("networkidle", timeout=15000)
@@ -144,32 +181,69 @@ class BrowserSession:
                 last_error = e
                 continue
 
-        # All selectors failed — screenshot and list inputs
+        # Semantic locators (bypass shadow DOM via accessibility tree)
+        semantic_strategies = [
+            lambda p: p.get_by_role("combobox", name=re.compile("Search", re.IGNORECASE)),
+            lambda p: p.get_by_placeholder(re.compile("Search", re.IGNORECASE)),
+            lambda p: p.get_by_label(re.compile("Search", re.IGNORECASE)),
+        ]
+        for strategy in semantic_strategies:
+            try:
+                locator = strategy(page)
+                await locator.fill(query, timeout=5000)
+                await locator.press("Enter")
+                await page.wait_for_load_state("networkidle", timeout=15000)
+                self._current_url = page.url
+                title = await page.title()
+                return ToolOutput(success=True, result={
+                    "query": query,
+                    "domain": domain,
+                    "selector_used": "semantic_locator",
+                    "page_title": title,
+                    "message": f"Searched for '{query}' on {domain}"
+                })
+            except Exception as e:
+                last_error = e
+                continue
+
+        # Improved failure diagnostics
         screenshot_path = os.path.join(tempfile.gettempdir(), f"agentos_search_fail_{self.task_id}.png")
         try:
             await page.screenshot(path=screenshot_path, full_page=True)
         except Exception:
             screenshot_path = None
 
-        # List all input elements
+        # Use JS to pierce shadow DOM so we don't falsely report "no inputs"
         inputs_info = []
         try:
-            inputs = await page.query_selector_all("input, textarea")
-            for inp in inputs:
-                attrs = await inp.evaluate("""el => ({
+            inputs_info = await page.evaluate("""() => {
+                function deepQuery(root, selector) {
+                    let results = Array.from(root.querySelectorAll(selector));
+                    root.querySelectorAll('*').forEach(el => {
+                        if (el.shadowRoot) {
+                            results = results.concat(deepQuery(el.shadowRoot, selector));
+                        }
+                    });
+                    return results;
+                }
+                return deepQuery(document, 'input, textarea').map(el => ({
                     tag: el.tagName.toLowerCase(),
                     type: el.type,
                     name: el.name,
                     placeholder: el.placeholder,
                     id: el.id,
-                    class: el.className
-                })""")
-                inputs_info.append(attrs)
+                    class: el.className,
+                    ariaLabel: el.getAttribute('aria-label')
+                }));
+            }""")
         except Exception:
             pass
 
+        current_url = page.url
+        current_title = await page.title()
         error_msg = (
-            f"Search failed on {domain}. Tried {len(selectors)} selectors. "
+            f"Search failed on '{domain}' (url={current_url}, title={current_title}). "
+            f"Tried {len(selectors)} CSS selectors and {len(semantic_strategies)} semantic locators. "
             f"Last error: {last_error}. Available inputs: {inputs_info}"
         )
         if screenshot_path:

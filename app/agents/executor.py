@@ -150,7 +150,7 @@ If no tool is needed, return:
 class ExecutorAgent:
     name: str = "executor"
     role: AgentRole = AgentRole.EXECUTOR
-    MAX_TOOL_ROUNDS: int = 3
+    MAX_TOOL_ROUNDS: int = 5
     allowed_tools: Optional[List[str]] = None
 
     def _get_allowed_tools(self, input_data: AgentInput) -> Optional[List[str]]:
