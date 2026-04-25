@@ -16,6 +16,7 @@ class Capability(str, Enum):
     RESEARCH = "research"
     COMMUNICATION = "communication"
     DATA_PROCESSING = "data_processing"
+    DESKTOP = "desktop"
 
 
 class FeasibilityResult(str, Enum):
@@ -36,8 +37,19 @@ class RecoveryAction(str, Enum):
     RETRY = "retry"
     REPLAN = "replan"
     SWITCH_TOOL = "switch_tool"
+    SWITCH_ENVIRONMENT = "switch_environment"
     ESCALATE = "escalate"
     SKIP = "skip"
+
+
+class ExecutionEnvironment(str, Enum):
+    LOCAL = "local"
+    SHELL = "shell"
+    BROWSER_UI = "browser_ui"      # NEW: real browser automation
+    CLOUD_API = "cloud_api"        # RENAMED from BROWSER
+    FILE = "file"                  # NEW
+    SANDBOX = "sandbox"
+    DESKTOP = "desktop"
 
 
 class CapabilityRequirement(BaseModel):
@@ -86,18 +98,9 @@ class RecoveryDecision(BaseModel):
     action: RecoveryAction
     reason: str
     next_tool: Optional[str] = None
+    next_environment: Optional[ExecutionEnvironment] = None
     max_retries_reached: bool = False
     escalation_reason: Optional[str] = None
-
-
-class ExecutionEnvironment(str, Enum):
-    LOCAL = "local"
-    SHELL = "shell"
-    BROWSER_UI = "browser_ui"      # NEW: real browser automation
-    CLOUD_API = "cloud_api"        # RENAMED from BROWSER
-    FILE = "file"                  # NEW
-    SANDBOX = "sandbox"
-    DESKTOP = "desktop"            # Future
 
 
 class EnvironmentConfig(BaseModel):

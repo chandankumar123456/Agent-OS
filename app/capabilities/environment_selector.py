@@ -21,6 +21,14 @@ FILE_KEYWORDS = [
     "list directory", "search files", "file content", "save file",
 ]
 
+DESKTOP_KEYWORDS = [
+    "open app", "launch app", "click on", "click button", "right click",
+    "double click", "type text", "press key", "hotkey", "screenshot",
+    "screen capture", "focus window", "minimize window", "maximize window",
+    "close window", "clipboard", "paste", "copy", "gui", "native app",
+    "desktop", "start menu", "taskbar", "notification",
+]
+
 
 class ExecutionEnvironmentSelector:
     def select(self, query: str, assessment: CapabilityAssessment) -> ExecutionEnvironment:
@@ -38,6 +46,10 @@ class ExecutionEnvironmentSelector:
             if kw in q:
                 return ExecutionEnvironment.FILE
 
+        for kw in DESKTOP_KEYWORDS:
+            if kw in q:
+                return ExecutionEnvironment.DESKTOP
+
         primary = assessment.primary_capability
         if primary == Capability.WEB:
             return ExecutionEnvironment.CLOUD_API
@@ -49,6 +61,8 @@ class ExecutionEnvironmentSelector:
             return ExecutionEnvironment.SANDBOX
         elif primary == Capability.DEPLOYMENT:
             return ExecutionEnvironment.SHELL
+        elif primary == Capability.DESKTOP:
+            return ExecutionEnvironment.DESKTOP
 
         return ExecutionEnvironment.LOCAL
 

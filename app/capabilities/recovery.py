@@ -1,7 +1,13 @@
 """Recovery Engine — decides what to do when execution fails."""
 from typing import Dict, Any, Optional, List
 
-from .models import RecoveryAction, RecoveryDecision, VerificationReport, VerificationResult
+from .models import (
+    RecoveryAction,
+    RecoveryDecision,
+    VerificationReport,
+    VerificationResult,
+    ExecutionEnvironment,
+)
 from ..logs.logger import logger
 from ..memory.short_term import redis_client
 
@@ -13,17 +19,63 @@ class RecoveryEngine:
     - RETRY: transient failure, try again
     - REPLAN: plan was wrong, generate new plan
     - SWITCH_TOOL: tool failed, try alternative
+    - SWITCH_ENVIRONMENT: environment failure, try fallback environment
     - ESCALATE: unrecoverable, needs human attention
     - SKIP: non-critical step, continue without it
     """
+
+    # Mapping of environment to ordered list of fallback environments.
+    ENVIRONMENT_FALLBACKS: Dict[ExecutionEnvironment, List[ExecutionEnvironment]] = {
+        ExecutionEnvironment.DESKTOP: [
+            ExecutionEnvironment.BROWSER_UI,
+            ExecutionEnvironment.CLOUD_API,
+            ExecutionEnvironment.SHELL,
+        ],
+        ExecutionEnvironment.BROWSER_UI: [
+            ExecutionEnvironment.CLOUD_API,
+            ExecutionEnvironment.SHELL,
+            ExecutionEnvironment.LOCAL,
+        ],
+        ExecutionEnvironment.CLOUD_API: [
+            ExecutionEnvironment.SHELL,
+            ExecutionEnvironment.LOCAL,
+        ],
+        ExecutionEnvironment.SHELL: [
+            ExecutionEnvironment.LOCAL,
+        ],
+        ExecutionEnvironment.LOCAL: [
+            ExecutionEnvironment.SHELL,
+        ],
+        ExecutionEnvironment.FILE: [
+            ExecutionEnvironment.SHELL,
+        ],
+        ExecutionEnvironment.SANDBOX: [
+            ExecutionEnvironment.SHELL,
+        ],
+    }
+
+    # Environment-specific error substrings that trigger a fallback.
+    _ENV_ERROR_PATTERNS: Dict[ExecutionEnvironment, List[str]] = {
+        ExecutionEnvironment.BROWSER_UI: ["playwright_timeout"],
+        ExecutionEnvironment.DESKTOP: ["pyautogui_fail", "display_not_found"],
+        ExecutionEnvironment.SHELL: ["permission_denied"],
+        ExecutionEnvironment.CLOUD_API: ["network_unreachable"],
+    }
 
     def __init__(self, max_retries: int = 3):
         self.max_retries = max_retries
         self._tool_alternatives: Dict[str, List[str]] = {
             "filesystem__write_file": ["shell__execute_command"],
             "shell__execute_command": ["filesystem__write_file"],
-            "browser__scrape_page": ["browser__http_request"],
-            "browser__http_request": ["browser__scrape_page"],
+            "browser__scrape_page": ["browser__http_request", "cloud_api__scrape_page"],
+            "browser__http_request": ["browser__scrape_page", "cloud_api__http_request"],
+            "browser__search": ["cloud_api__search"],
+            "cloud_api__search": ["browser__search"],
+            "desktop__screenshot": ["browser__screenshot"],
+            "desktop__click": ["browser__click"],
+            "desktop__type": ["shell__execute_command"],
+            "cloud_api__scrape_page": ["browser__scrape_page"],
+            "cloud_api__http_request": ["browser__http_request"],
         }
 
     def _retry_key(self, task_id: str, step_id: Optional[str]) -> str:
@@ -68,6 +120,7 @@ class RecoveryEngine:
         error: Optional[str],
         verification_report: Optional[VerificationReport] = None,
         current_tool: Optional[str] = None,
+        current_environment: Optional[ExecutionEnvironment] = None,
     ) -> RecoveryDecision:
         """Decide the recovery action for a failure."""
         current_retries = await self._get_retry_count(task_id, step_id)
@@ -116,10 +169,26 @@ class RecoveryEngine:
         if error:
             error_lower = error.lower()
 
+            # Environment-specific failures → switch environment (checked before generic transient retry)
+            if current_environment:
+                fallback = self._suggest_environment_fallback(current_environment, error_lower)
+                if fallback:
+                    return RecoveryDecision(
+                        task_id=task_id,
+                        step_id=step_id,
+                        action=RecoveryAction.SWITCH_ENVIRONMENT,
+                        reason=(
+                            f"{current_environment.value} environment failure detected ({error}), "
+                            f"switching to {fallback.value}"
+                        ),
+                        next_environment=fallback,
+                    )
+
             # Transient errors → retry
             transient_patterns = [
                 "timeout", "connection", "temporarily", "rate limit",
                 "503", "502", "504", "429", "reset", "refused",
+                "playwright_timeout", "network_unreachable",
             ]
             if any(p in error_lower for p in transient_patterns):
                 await self._increment_retry(task_id, step_id)
@@ -183,6 +252,18 @@ class RecoveryEngine:
             return None
         alternatives = self._tool_alternatives.get(tool_name, [])
         return alternatives[0] if alternatives else None
+
+    def _suggest_environment_fallback(
+        self,
+        current_environment: ExecutionEnvironment,
+        error_lower: str,
+    ) -> Optional[ExecutionEnvironment]:
+        """Return the next fallback environment if the error is environment-specific."""
+        patterns = self._ENV_ERROR_PATTERNS.get(current_environment, [])
+        if not any(p in error_lower for p in patterns):
+            return None
+        fallbacks = self.ENVIRONMENT_FALLBACKS.get(current_environment, [])
+        return fallbacks[0] if fallbacks else None
 
 
 # Global singleton

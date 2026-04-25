@@ -72,6 +72,12 @@ class CapabilityRouter:
             "compute", "calculate", "statistics", "dataset", "dataframe",
             "csv", "excel", "spreadsheet", "table", "column", "row",
         ],
+        Capability.DESKTOP: [
+            "desktop", "gui", "window", "click", "type", "press key", "hotkey",
+            "screenshot", "screen", "clipboard", "open app", "launch app",
+            "menu", "dialog", "notification", "focus", "minimize", "maximize",
+            "drag", "scroll", "right-click", "double-click", "form", "native",
+        ],
     }
 
     # Safety flags — tasks that need extra scrutiny
@@ -174,6 +180,7 @@ class CapabilityRouter:
             Capability.RESEARCH: ["cloud_api__search_web", "cloud_api__http_request"],
             Capability.COMMUNICATION: ["cloud_api__send_email", "cloud_api__send_message"],
             Capability.DATA_PROCESSING: ["local__process_data", "local__compute_statistics"],
+            Capability.DESKTOP: ["desktop__screenshot", "desktop__click", "desktop__type_text", "desktop__press_key", "desktop__get_window_list", "desktop__focus_window"],
         }
         return suggestions.get(cap, [])
 
@@ -193,6 +200,7 @@ class IntentRouter:
         Capability.KNOWLEDGE: ExecutionEnvironment.CLOUD_API,
         Capability.CHAT: ExecutionEnvironment.LOCAL,
         Capability.WORKFLOW: ExecutionEnvironment.LOCAL,
+        Capability.DESKTOP: ExecutionEnvironment.DESKTOP,
     }
 
     def select_environment(self, assessment: CapabilityAssessment) -> ExecutionEnvironment:
