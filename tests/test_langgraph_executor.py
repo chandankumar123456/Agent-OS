@@ -46,7 +46,7 @@ async def test_executor_node_invokes_tool_when_llm_requests_it():
                     "parameters": {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
                 }
             ])
-            mock_registry.get = AsyncMock(return_value=AsyncMock())
+            mock_registry.get = MagicMock(return_value=AsyncMock())
             mock_tool_output = AsyncMock()
             mock_tool_output.success = True
             mock_tool_output.result = {"output": "File written: /tmp/test.txt"}
@@ -100,7 +100,7 @@ async def test_executor_node_falls_back_to_answer_without_tool():
         with patch("app.langgraph.nodes.tool_registry") as mock_registry:
             mock_registry.discover_mcp_tools = AsyncMock()
             mock_registry.list_tools = MagicMock(return_value=[])
-            mock_registry.get = AsyncMock(return_value=None)
+            mock_registry.get = MagicMock(return_value=None)
             mock_registry.execute = AsyncMock()
 
             result = await executor_node(state)

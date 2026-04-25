@@ -32,9 +32,15 @@ class StressResult:
 class StressTestRunner:
     """Runs stress test scenarios against the AgentOS API."""
 
-    def __init__(self, base_url: str = "http://localhost:8000", token: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8000",
+        token: Optional[str] = None,
+        client: Optional[httpx.AsyncClient] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.client = client
         self._headers: Dict[str, str] = {"Content-Type": "application/json"}
         if token:
             self._headers["Authorization"] = f"Bearer {token}"
@@ -63,13 +69,21 @@ class StressTestRunner:
             async with semaphore:
                 start = time.perf_counter()
                 try:
-                    async with httpx.AsyncClient(timeout=60.0) as client:
-                        resp = await client.post(
+                    if self.client is not None:
+                        resp = await self.client.post(
                             f"{self.base_url}/api/v1/tasks",
                             json={"query": query},
                             headers=self._headers,
                         )
                         resp.raise_for_status()
+                    else:
+                        async with httpx.AsyncClient(timeout=60.0) as client:
+                            resp = await client.post(
+                                f"{self.base_url}/api/v1/tasks",
+                                json={"query": query},
+                                headers=self._headers,
+                            )
+                            resp.raise_for_status()
                 except Exception as exc:
                     errors.append(str(exc))
                 finally:
@@ -115,21 +129,36 @@ class StressTestRunner:
                 start = time.perf_counter()
                 try:
                     import random
-                    async with httpx.AsyncClient(timeout=60.0) as client:
+
+                    if self.client is not None:
                         if random.random() < failure_rate:
-                            # Inject malformed payload
-                            resp = await client.post(
+                            resp = await self.client.post(
                                 f"{self.base_url}/api/v1/tasks",
                                 content=b"not-json",
                                 headers=self._headers,
                             )
                         else:
-                            resp = await client.post(
+                            resp = await self.client.post(
                                 f"{self.base_url}/api/v1/tasks",
                                 json={"query": query},
                                 headers=self._headers,
                             )
                         resp.raise_for_status()
+                    else:
+                        async with httpx.AsyncClient(timeout=60.0) as client:
+                            if random.random() < failure_rate:
+                                resp = await client.post(
+                                    f"{self.base_url}/api/v1/tasks",
+                                    content=b"not-json",
+                                    headers=self._headers,
+                                )
+                            else:
+                                resp = await client.post(
+                                    f"{self.base_url}/api/v1/tasks",
+                                    json={"query": query},
+                                    headers=self._headers,
+                                )
+                            resp.raise_for_status()
                 except Exception as exc:
                     errors.append(str(exc))
                 finally:
