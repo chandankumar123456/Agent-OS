@@ -61,6 +61,14 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Redis connection failed: {e}") from e
 
     try:
+        from .memory.redis_pubsub import redis_pubsub_client
+        await redis_pubsub_client.connect()
+        logger.info("Redis PubSub client connected")
+        initialized.append("redis_pubsub")
+    except Exception as e:
+        logger.error(f"Redis PubSub client connection failed: {e}")
+
+    try:
         runtime = AgentRuntime()
         await runtime.initialize()
         app.state.runtime = runtime
@@ -127,6 +135,13 @@ async def lifespan(app: FastAPI):
             await redis_client.disconnect()
         except Exception as e:
             logger.error(f"Redis disconnect failed: {e}")
+
+    if "redis_pubsub" in initialized:
+        try:
+            from .memory.redis_pubsub import redis_pubsub_client
+            await redis_pubsub_client.disconnect()
+        except Exception as e:
+            logger.error(f"Redis PubSub disconnect failed: {e}")
 
     logger.info("Agent-OS shutting down")
 

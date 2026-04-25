@@ -1,56 +1,71 @@
 import asyncio
 import json
-from typing import AsyncIterator, Dict, Any
-from ...memory.short_term import redis_client
+from typing import AsyncIterator, Dict, Any, Optional
+from datetime import datetime
+
+from ...memory.redis_pubsub import redis_pubsub_client
 from ...logs.logger import logger
 
+
 class Event:
-    def __init__(self, event_type: str, payload: Dict[str, Any], source: str = ""):
+    def __init__(
+        self,
+        event_type: str,
+        payload: Dict[str, Any],
+        source: str = "",
+        timestamp: Optional[str] = None,
+    ):
         self.event_type = event_type
         self.payload = payload
         self.source = source
-    
+        self.timestamp = timestamp or datetime.utcnow().isoformat()
+
     def json(self) -> str:
-        return json.dumps({"type": self.event_type, "payload": self.payload, "source": self.source})
-    
+        return json.dumps(
+            {
+                "type": self.event_type,
+                "payload": self.payload,
+                "source": self.source,
+                "timestamp": self.timestamp,
+            },
+            default=str,
+        )
+
     @classmethod
     def parse(cls, raw: str) -> "Event":
         data = json.loads(raw)
-        return cls(data["type"], data.get("payload", {}), data.get("source", ""))
+        return cls(
+            data["type"],
+            data.get("payload", {}),
+            data.get("source", ""),
+            data.get("timestamp"),
+        )
+
 
 class RedisEventBus:
-    async def publish(self, channel: str, event: Event):
+    """Reliable event bus backed by a dedicated Redis pub/sub connection pool."""
+
+    async def publish(self, channel: str, event: Event) -> None:
         try:
-            await redis_client.client.publish(f"agentos:{channel}", event.json())
+            await redis_pubsub_client.publish(f"agentos:{channel}", event.json())
         except Exception as e:
             logger.error(f"Event publish failed: {e}")
-    
+
     async def subscribe(self, channel: str) -> AsyncIterator[Event]:
-        pubsub = None
+        """Yield events from a channel.  Propagates CancelledError and unexpected exceptions
+        so that callers can decide whether to reconnect.
+        """
         try:
-            if not redis_client.client:
-                raise RuntimeError("Redis client is not connected")
-            pubsub = redis_client.client.pubsub()
-            await pubsub.subscribe(f"agentos:{channel}")
-            async for message in pubsub.listen():
-                if message["type"] == "message":
-                    try:
-                        yield Event.parse(message["data"])
-                    except Exception as e:
-                        logger.warning(f"Failed to parse event: {e}")
+            async for raw in redis_pubsub_client.subscribe(f"agentos:{channel}"):
+                try:
+                    yield Event.parse(raw)
+                except Exception as e:
+                    logger.warning(f"Failed to parse event: {e}")
         except asyncio.CancelledError:
             raise
         except Exception as e:
             logger.error(f"Event subscribe failed: {e}")
-        finally:
-            if pubsub is not None:
-                try:
-                    await pubsub.unsubscribe(f"agentos:{channel}")
-                except Exception:
-                    pass
-                try:
-                    await pubsub.close()
-                except Exception:
-                    pass
+            raise
+
 
 event_bus = RedisEventBus()

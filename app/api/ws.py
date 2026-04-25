@@ -92,13 +92,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     subscription_task: asyncio.Task | None = None
 
     async def _subscribe() -> None:
-        try:
-            async for event in event_bus.subscribe(f"task:{task_id}"):
-                await manager.broadcast(task_id, event.json())
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"WebSocket subscription error for task {task_id}: {e}")
+        backoff = 1.0
+        max_backoff = 30.0
+        while True:
+            try:
+                async for event in event_bus.subscribe(f"task:{task_id}"):
+                    await manager.broadcast(task_id, event.json())
+                    backoff = 1.0  # Reset backoff on successful delivery
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"WebSocket subscription error for task {task_id}: {e}")
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, max_backoff)
 
     try:
         subscription_task = asyncio.create_task(_subscribe())
