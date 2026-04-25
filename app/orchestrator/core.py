@@ -252,6 +252,7 @@ class Orchestrator:
             created_at=datetime.utcnow().isoformat(),
             mode=config.get("mode", "task"),
             status="pending",
+            max_tool_rounds=config.get("max_tool_rounds", 5),
         )
 
     async def _execute_with_langgraph(

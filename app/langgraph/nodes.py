@@ -234,7 +234,7 @@ To provide a direct answer (only if no tool is needed):
         HumanMessage(content=f"Step to execute: {description}"),
     ]
 
-    MAX_ROUNDS = 5
+    MAX_ROUNDS = state.get("max_tool_rounds", 5)
     # Track calls within this step to prevent exact duplicates
     calls_this_step: set = set()
     tool_calls = state.get("tool_calls", [])
