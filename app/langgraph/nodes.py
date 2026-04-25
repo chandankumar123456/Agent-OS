@@ -12,6 +12,7 @@ from ..tools.registry import tool_registry
 from ..capabilities import verification_engine, recovery_engine
 from ..capabilities.models import VerificationResult, RecoveryAction
 from ..observability import observability_bus, ObservabilityEventType
+from ..safety.gate import SafetyGate, ActionSeverity
 from .state import AgentState
 
 
@@ -304,6 +305,16 @@ To provide a direct answer (only if no tool is needed):
                 messages.append(AIMessage(content=json.dumps(response)))
                 messages.append(HumanMessage(content=f"Error: {error_msg}. Use a valid tool or provide a direct answer."))
                 continue
+
+            severity = SafetyGate().check_tool_call(tool_name, tool_params, state.get("query", ""))
+            if severity == ActionSeverity.IRREVERSIBLE:
+                await observability_bus.emit_safe(
+                    ObservabilityEventType.SAFETY_CHECK,
+                    task_id=task_id,
+                    trace_id=state.get("trace_id"),
+                    payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
+                    source="safety_gate",
+                )
 
             logger.info(f"[executor_node] Invoking tool '{tool_name}' with params: {tool_params}")
             await observability_bus.emit_safe(

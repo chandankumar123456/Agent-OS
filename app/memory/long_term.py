@@ -269,6 +269,11 @@ class WorkflowNodeRepository:
                 await session.refresh(node)
             return node
 
+    async def get_by_id(self, node_id: str):
+        async with db.get_session() as session:
+            result = await session.execute(select(WorkflowNodeModel).where(WorkflowNodeModel.id == node_id))
+            return result.scalar_one_or_none()
+
     async def get_by_workflow(self, workflow_id: str):
         async with db.get_session() as session:
             result = await session.execute(
@@ -781,6 +786,12 @@ class ConfigRepository:
             await session.commit()
             await session.refresh(item)
             return item
+
+    async def get(self, key: str):
+        async with db.get_session() as session:
+            result = await session.execute(select(ConfigModel).where(ConfigModel.key == key))
+            item = result.scalar_one_or_none()
+            return item.value if item else None
 
     async def reset(self, defaults: Dict[str, Any]):
         async with db.get_session() as session:
