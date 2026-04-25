@@ -48,6 +48,15 @@ services:
     volumes:
       - ..:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
   worker:
     build:
@@ -66,6 +75,15 @@ services:
     volumes:
       - ..:/app
     command: celery -A app.queue.tasks worker --loglevel=info --concurrency=4 --prefetch-multiplier=1
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
 
 volumes:
   postgres_data:

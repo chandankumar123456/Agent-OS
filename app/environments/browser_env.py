@@ -1,10 +1,20 @@
 """Browser Environment — real browser UI automation via Playwright."""
+import asyncio
+import functools
 import os
 import re
 import tempfile
 import urllib.parse
-from typing import Optional, Dict, Any, List
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext, Locator
+from typing import Optional, Dict, Any, List, Callable, TypeVar
+from playwright.async_api import (
+    async_playwright,
+    Page,
+    Browser,
+    BrowserContext,
+    Locator,
+    TimeoutError as PlaywrightTimeoutError,
+    Error as PlaywrightError,
+)
 
 from ..logs.logger import logger
 from ..tools.base import ToolInput, ToolOutput
@@ -59,6 +69,45 @@ FALLBACK_SELECTORS: List[str] = [
 ]
 
 
+def _is_transient_playwright_error(exc: Exception) -> bool:
+    """Return True if the exception is a transient network/timeout error."""
+    if isinstance(exc, PlaywrightTimeoutError):
+        return True
+    msg = str(exc).lower()
+    transient_keywords = ("net::", "err_network", "timeout", "connection", "socket")
+    return any(k in msg for k in transient_keywords)
+
+
+T = TypeVar("T")
+
+
+def _retry(max_retries: int = 3, base_delay: float = 1.0, max_delay: float = 10.0):
+    """Async retry decorator for transient Playwright errors with exponential backoff."""
+
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
+        async def wrapper(*args, **kwargs):
+            last_exception: Optional[Exception] = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as exc:
+                    last_exception = exc
+                    if not _is_transient_playwright_error(exc):
+                        raise
+                    delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+                    logger.warning(
+                        f"BrowserSession: transient error on {func.__name__} "
+                        f"(attempt {attempt}/{max_retries}): {exc}. Retrying in {delay}s..."
+                    )
+                    await asyncio.sleep(delay)
+            raise last_exception  # type: ignore[misc]
+
+        return wrapper
+
+    return decorator
+
+
 class BrowserSession:
     """A single browser session scoped to one task."""
 
@@ -95,7 +144,14 @@ class BrowserSession:
             return ToolOutput(success=False, error=str(e))
 
     def is_alive(self) -> bool:
-        return self._page is not None and not self._page.is_closed()
+        if self._page is None or self._page.is_closed():
+            return False
+        if self._browser is not None:
+            try:
+                return self._browser.is_connected()
+            except Exception:
+                return False
+        return True
 
     async def _ensure_page(self) -> Page:
         if self.is_alive():
@@ -111,14 +167,27 @@ class BrowserSession:
         await self.launch(headless=self._headless)
         return self._page
 
+    @_retry(max_retries=3, base_delay=1.0)
     async def navigate(self, url: str) -> ToolOutput:
         try:
             page = await self._ensure_page()
-            # Try networkidle for SPAs, fall back to domcontentloaded if it hangs
-            try:
-                await page.goto(url, wait_until="networkidle", timeout=30000)
-            except Exception:
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            # Try networkidle for SPAs, fall back to domcontentloaded, then load
+            load_states = ["networkidle", "domcontentloaded", "load"]
+            last_err = None
+            for state in load_states:
+                try:
+                    await page.goto(url, wait_until=state, timeout=30000)
+                    break
+                except PlaywrightTimeoutError as exc:
+                    last_err = exc
+                    logger.warning(
+                        f"BrowserSession[{self.task_id}]: navigate wait_until={state} timed out, trying next fallback"
+                    )
+                    continue
+            else:
+                # All fallbacks exhausted within one attempt — let the retry decorator handle it
+                raise last_err
+
             self._current_url = page.url
             title = await page.title()
             return ToolOutput(success=True, result={"url": self._current_url, "title": title})
@@ -149,6 +218,7 @@ class BrowserSession:
             except Exception:
                 continue
 
+    @_retry(max_retries=3, base_delay=1.0)
     async def search(self, query: str) -> ToolOutput:
         import re
         page = await self._ensure_page()
@@ -160,26 +230,31 @@ class BrowserSession:
         selectors = DOMAIN_SELECTORS.get(domain, []) + FALLBACK_SELECTORS
 
         last_error = None
-        for idx, selector in enumerate(selectors):
-            try:
-                # Give heavy SPAs (YouTube) more time on the first few selectors
-                timeout = 10000 if idx < 3 else 5000
-                await page.wait_for_selector(selector, timeout=timeout, state="visible")
-                await page.fill(selector, query)
-                await page.press(selector, "Enter")
-                await page.wait_for_load_state("networkidle", timeout=15000)
-                self._current_url = page.url
-                title = await page.title()
-                return ToolOutput(success=True, result={
-                    "query": query,
-                    "domain": domain,
-                    "selector_used": selector,
-                    "page_title": title,
-                    "message": f"Searched for '{query}' on {domain}"
-                })
-            except Exception as e:
-                last_error = e
-                continue
+        for attempt in range(2):  # Hydration retry loop
+            for idx, selector in enumerate(selectors):
+                try:
+                    # Give heavy SPAs (YouTube) more time on the first few selectors
+                    timeout = 10000 if idx < 3 else 5000
+                    await page.wait_for_selector(selector, timeout=timeout, state="visible")
+                    await page.fill(selector, query)
+                    await page.press(selector, "Enter")
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                    self._current_url = page.url
+                    title = await page.title()
+                    return ToolOutput(success=True, result={
+                        "query": query,
+                        "domain": domain,
+                        "selector_used": selector,
+                        "page_title": title,
+                        "message": f"Searched for '{query}' on {domain}"
+                    })
+                except Exception as e:
+                    last_error = e
+                    continue
+            # SPA hydration fallback: short sleep before second attempt
+            if attempt == 0:
+                logger.info(f"BrowserSession[{self.task_id}]: search retrying after short hydration delay")
+                await asyncio.sleep(1.5)
 
         # Semantic locators (bypass shadow DOM via accessibility tree)
         semantic_strategies = [
@@ -264,18 +339,22 @@ class BrowserSession:
         except Exception:
             return "unknown"
 
+    @_retry(max_retries=3, base_delay=1.0)
     async def click(self, selector: str) -> ToolOutput:
         try:
             page = await self._ensure_page()
+            await page.wait_for_selector(selector, state="visible", timeout=10000)
             await page.click(selector)
             self._current_url = page.url
             return ToolOutput(success=True, result={"message": f"Clicked {selector}"})
         except Exception as e:
             return ToolOutput(success=False, error=str(e))
 
+    @_retry(max_retries=3, base_delay=1.0)
     async def type_text(self, selector: str, text: str) -> ToolOutput:
         try:
             page = await self._ensure_page()
+            await page.wait_for_selector(selector, state="visible", timeout=10000)
             await page.fill(selector, text)
             return ToolOutput(success=True, result={"message": f"Typed into {selector}"})
         except Exception as e:
@@ -299,6 +378,21 @@ class BrowserSession:
             else:
                 text = await page.inner_text("body")
             return ToolOutput(success=True, result={"text": text[:5000]})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
+
+    async def get_url(self) -> ToolOutput:
+        try:
+            page = await self._ensure_page()
+            return ToolOutput(success=True, result={"url": page.url})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
+
+    async def get_title(self) -> ToolOutput:
+        try:
+            page = await self._ensure_page()
+            title = await page.title()
+            return ToolOutput(success=True, result={"title": title})
         except Exception as e:
             return ToolOutput(success=False, error=str(e))
 
