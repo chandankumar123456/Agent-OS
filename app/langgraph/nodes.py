@@ -58,6 +58,11 @@ When the task involves running commands, always use the shell__execute_command t
 
 Respond ONLY with valid JSON in this format:
 {{"plan": [{{"step_number": 1, "description": "...", "tool": "...", "expected_output": "..."}}]}}
+
+Execution Environment Awareness:
+- If the user asks to "open chrome", "open browser", "search in browser", "login to", "click", "fill form", or "navigate website", use browser_env__* tools (e.g., browser_env__launch, browser_env__search).
+- If the user asks for general information retrieval ("search latest AI news", "find research papers", "summarize topic"), use cloud__search_web or cloud__http_request.
+- Do NOT use cloud__search_web when the user explicitly wants browser UI interaction.
 """
 
 
@@ -335,6 +340,9 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
 
     if not steps:
         return {"verified": False, "verification_notes": "No steps were executed"}
+
+    env_config = state.get("environment_config", {})
+    env_type = env_config.get("environment", "local") if isinstance(env_config, dict) else getattr(env_config, "environment", "local")
 
     # ── Deterministic Verification ───────────────────────────────────
     det_reports = []

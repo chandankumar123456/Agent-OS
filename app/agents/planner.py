@@ -101,7 +101,13 @@ When tasks involve file paths, use the EXACT paths provided above. On Windows us
 
 Query to process: {query}
 
-Return ONLY valid JSON. No explanation."""
+Return ONLY valid JSON. No explanation.
+
+Execution Environment Awareness:
+- Browser UI tasks (open chrome, search in browser, login, click, fill forms) MUST use browser_env__* tools.
+- Information retrieval tasks (general search, summarize, fetch data) MUST use cloud__search_web or cloud__http_request.
+- Do NOT confuse browser UI automation with backend web search.
+"""
 
 
 class PlannerAgent:
