@@ -90,9 +90,11 @@ class RecoveryDecision(BaseModel):
 class ExecutionEnvironment(str, Enum):
     LOCAL = "local"
     SHELL = "shell"
-    BROWSER = "browser"
+    BROWSER_UI = "browser_ui"      # NEW: real browser automation
+    CLOUD_API = "cloud_api"        # RENAMED from BROWSER
+    FILE = "file"                  # NEW
     SANDBOX = "sandbox"
-    DESKTOP = "desktop"
+    DESKTOP = "desktop"            # Future
 
 
 class EnvironmentConfig(BaseModel):
@@ -102,3 +104,5 @@ class EnvironmentConfig(BaseModel):
     blocked_commands: List[str] = []
     network_access: bool = True
     timeout_seconds: int = 300
+    headless: bool = True          # NEW: for browser env
+    screenshot_on_complete: bool = False  # NEW
