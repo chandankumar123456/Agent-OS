@@ -1,6 +1,6 @@
 import asyncio
 import urllib.parse
-from typing import Dict, List
+from typing import Dict, List, Optional
 from fastapi import WebSocket, WebSocketDisconnect, Query
 from ..orchestrator.v2.event_bus import event_bus, Event
 from ..logs.logger import logger
@@ -51,13 +51,13 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)) -> None:
+async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(None)) -> None:
     task_id = websocket.path_params.get("task_id", "")
     if not task_id:
         await websocket.close(code=1008)
         return
 
-    # Coerce token to string (FastAPI Query object may be passed if param missing)
+    # FastAPI dependency injection resolves Query param to actual string value
     token_str = str(token) if token else ""
     if not token_str or token_str == "None":
         logger.warning(f"WebSocket missing token for task {task_id}")

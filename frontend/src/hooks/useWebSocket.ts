@@ -14,6 +14,8 @@ interface UseWebSocketReturn {
 }
 
 const WS_BASE_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000';
+const MAX_RECONNECT_ATTEMPTS = 5;
+const TERMINAL_CLOSE_CODES = new Set([1008, 1011]);
 
 export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWebSocketReturn {
   const [messages, setMessages] = useState<any[]>([]);
@@ -22,6 +24,11 @@ export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWeb
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUnmountingRef = useRef(false);
+  const onMessageRef = useRef(onMessage);
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
 
   const clearReconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -66,13 +73,13 @@ export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWeb
       try {
         const parsed = JSON.parse(event.data);
         setMessages((prev) => [...prev, parsed]);
-        if (onMessage) {
-          onMessage(parsed);
+        if (onMessageRef.current) {
+          onMessageRef.current(parsed);
         }
       } catch {
         setMessages((prev) => [...prev, event.data]);
-        if (onMessage) {
-          onMessage(event.data);
+        if (onMessageRef.current) {
+          onMessageRef.current(event.data);
         }
       }
     };
@@ -90,6 +97,17 @@ export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWeb
       // Don't reconnect on clean closure
       if (event.code === 1000) return;
 
+      // Don't reconnect on terminal errors (auth failures, server errors)
+      if (TERMINAL_CLOSE_CODES.has(event.code)) {
+        console.error(`WebSocket closed with terminal code ${event.code}: ${event.reason}`);
+        return;
+      }
+
+      if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+        console.error(`WebSocket max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached`);
+        return;
+      }
+
       if (taskId) {
         const delay = Math.min(1000 * 2 ** reconnectAttemptsRef.current, 30000);
         reconnectAttemptsRef.current += 1;
@@ -100,7 +118,7 @@ export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWeb
         }, delay);
       }
     };
-  }, [taskId, onMessage, clearReconnect]);
+  }, [taskId, clearReconnect]);
 
   const send = useCallback((data: string) => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
