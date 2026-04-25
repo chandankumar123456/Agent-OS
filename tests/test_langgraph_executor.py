@@ -1,7 +1,7 @@
 """Tests for LangGraph executor node tool invocation."""
 import pytest
 import json
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.langgraph.nodes import executor_node, planner_node
 from app.langgraph.state import AgentState
@@ -39,7 +39,7 @@ async def test_executor_node_invokes_tool_when_llm_requests_it():
 
         with patch("app.langgraph.nodes.tool_registry") as mock_registry:
             mock_registry.discover_mcp_tools = AsyncMock()
-            mock_registry.list_tools = AsyncMock(return_value=[
+            mock_registry.list_tools = MagicMock(return_value=[
                 {
                     "name": "filesystem__write_file",
                     "description": "Write a file",
@@ -53,7 +53,13 @@ async def test_executor_node_invokes_tool_when_llm_requests_it():
             mock_tool_output.error = None
             mock_registry.execute = AsyncMock(return_value=mock_tool_output)
 
-            result = await executor_node(state)
+            with patch("app.langgraph.nodes.recovery_engine") as mock_recovery:
+                mock_recovery.decide = AsyncMock(return_value=AsyncMock(
+                    action=AsyncMock(value="retry"),
+                    reason="Mock recovery",
+                    next_tool=None,
+                ))
+                result = await executor_node(state)
 
     assert result["status"] == "step_executed"
     assert result["current_step_index"] == 1
@@ -93,7 +99,7 @@ async def test_executor_node_falls_back_to_answer_without_tool():
 
         with patch("app.langgraph.nodes.tool_registry") as mock_registry:
             mock_registry.discover_mcp_tools = AsyncMock()
-            mock_registry.list_tools = AsyncMock(return_value=[])
+            mock_registry.list_tools = MagicMock(return_value=[])
             mock_registry.get = AsyncMock(return_value=None)
             mock_registry.execute = AsyncMock()
 
