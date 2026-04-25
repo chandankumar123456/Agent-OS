@@ -33,3 +33,41 @@ async def test_websocket_valid_token():
                 pass
     
     mock_verify.assert_called_once_with("valid.jwt.token")
+
+
+@pytest.mark.asyncio
+async def test_websocket_url_encoded_token():
+    mock_ws = AsyncMock(spec=WebSocket)
+    mock_ws.path_params = {"task_id": "abc-123"}
+    # Token with URL-encoded dots
+    url_encoded = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9%2EeyJzdWIiOiIxIn0%2ErTCH8cLoGxAm_xw68z-zXVKi9ie6xJn9tnVWjd_9ftE"
+    
+    with patch("app.api.ws.verify_access_token", return_value={"sub": "user-1"}) as mock_verify:
+        await websocket_endpoint(mock_ws, url_encoded)
+    
+    mock_verify.assert_called_once()
+    call_args = mock_verify.call_args[0][0]
+    assert "." in call_args
+
+
+@pytest.mark.asyncio
+async def test_websocket_bearer_prefix_token():
+    mock_ws = AsyncMock(spec=WebSocket)
+    mock_ws.path_params = {"task_id": "abc-123"}
+    
+    with patch("app.api.ws.verify_access_token", return_value={"sub": "user-1"}) as mock_verify:
+        await websocket_endpoint(mock_ws, "Bearer valid.jwt.token")
+    
+    mock_verify.assert_called_once_with("valid.jwt.token")
+
+
+@pytest.mark.asyncio
+async def test_websocket_malformed_token():
+    mock_ws = AsyncMock(spec=WebSocket)
+    mock_ws.path_params = {"task_id": "abc-123"}
+    
+    with patch("app.api.ws.verify_access_token") as mock_verify:
+        await websocket_endpoint(mock_ws, "not.a.valid.jwt.too.many.segments")
+    
+    mock_ws.close.assert_called_once_with(code=1008, reason="Malformed token")
+    mock_verify.assert_not_called()

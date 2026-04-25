@@ -1,4 +1,5 @@
 import asyncio
+import urllib.parse
 from typing import Dict, List
 from fastapi import WebSocket, WebSocketDisconnect, Query
 from ..orchestrator.v2.event_bus import event_bus, Event
@@ -61,6 +62,21 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)) -> N
     if not token_str or token_str == "None":
         logger.warning(f"WebSocket missing token for task {task_id}")
         await websocket.close(code=1008, reason="Missing token")
+        return
+
+    # URL-decode and strip Bearer prefix
+    token_str = urllib.parse.unquote(token_str)
+    token_str = token_str.replace("Bearer ", "").replace("bearer ", "").strip()
+
+    # Validate JWT structure (3 dot-separated segments)
+    segments = token_str.split(".")
+    if len(segments) != 3:
+        logger.warning(
+            f"WebSocket malformed token for task {task_id}: "
+            f"{len(segments)} segments, length={len(token_str)}, "
+            f"preview={token_str[:20]}..."
+        )
+        await websocket.close(code=1008, reason="Malformed token")
         return
 
     # Validate JWT token before accepting connection
