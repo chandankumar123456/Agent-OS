@@ -4,11 +4,12 @@ from uuid import UUID, uuid4
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 from ...orchestrator.core import Orchestrator
-from ...agents.types import TaskStatus
+from ...agents.types import TaskStatus, StepStatus
 from ...logs.logger import logger
 from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo
 from ...config.settings import settings
 from ...orchestrator.errors import ErrorCode
+from ...orchestrator.v2.event_bus import event_bus, Event
 from ..deps import OrchestratorDep, get_current_user
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -39,6 +40,13 @@ class TaskStatusResponse(BaseModel):
     workflow_state: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
     created_at: Optional[datetime] = None
+
+
+def _safe_task_status(status_str: str) -> TaskStatus:
+    try:
+        return TaskStatus(status_str)
+    except ValueError:
+        return TaskStatus.PENDING
 
 
 def _step_dependencies(step: Dict[str, Any]) -> List[int]:
@@ -159,6 +167,10 @@ async def create_task(
         status=TaskStatus.PENDING.value
     )
     created_at = db_task.created_at
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.status_changed", {"status": TaskStatus.PENDING.value, "task_id": str(task_id)})
+    )
 
     if use_celery():
         try:
@@ -185,6 +197,10 @@ async def create_task(
         async def _run_task():
             try:
                 await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.status_changed", {"status": TaskStatus.RUNNING.value, "task_id": str(task_id)})
+                )
                 result = await orchestrator.execute_task(
                     query=request.query,
                     config=config,
@@ -195,14 +211,26 @@ async def create_task(
                     await task_repo.update(
                         str(task_id), status=TaskStatus.COMPLETED.value, result=result.output_data
                     )
+                    await event_bus.publish(
+                        f"task:{task_id}",
+                        Event("task.status_changed", {"status": TaskStatus.COMPLETED.value, "task_id": str(task_id)})
+                    )
                 else:
                     await task_repo.update(
                         str(task_id), status=TaskStatus.FAILED.value, error=result.error_message
+                    )
+                    await event_bus.publish(
+                        f"task:{task_id}",
+                        Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
                     )
             except Exception as e:
                 logger.error(f"Background task execution failed: {e}")
                 try:
                     await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
+                    await event_bus.publish(
+                        f"task:{task_id}",
+                        Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
+                    )
                 except Exception as db_err:
                     logger.error(f"Failed to persist background task failure: {db_err}")
 
@@ -226,7 +254,7 @@ async def get_task(task_id: UUID, current_user: object = Depends(get_current_use
         workflow_state = await _task_scoped_workflow_state(task_id, current_user)
         return TaskStatusResponse(
             task_id=UUID(db_task.id),
-            status=TaskStatus(db_task.status),
+            status=_safe_task_status(db_task.status),
             result=db_task.result,
             steps=[_serialize_node(node) for node in workflow_state["nodes"]],
             workflow_state={
@@ -276,7 +304,7 @@ async def list_tasks(
         workflow_state = await _task_scoped_workflow_state(UUID(db_task.id), current_user)
         all_tasks.append(TaskStatusResponse(
             task_id=UUID(db_task.id),
-            status=TaskStatus(db_task.status),
+            status=_safe_task_status(db_task.status),
             result=db_task.result,
             steps=[_serialize_node(node) for node in workflow_state["nodes"]],
             workflow_state={
@@ -305,6 +333,10 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
     await task_repo.update(str(task_id), status=TaskStatus.CANCELLED.value)
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.status_changed", {"status": TaskStatus.CANCELLED.value, "task_id": str(task_id)})
+    )
 
     return {"message": "Task deleted"}
 
@@ -324,6 +356,10 @@ async def approve_task(task_id: UUID, current_user: object = Depends(get_current
                 await workflow_node_repo.update(node.id, status=StepStatus.APPROVED.value)
 
     await task_repo.update(str(task_id), status=TaskStatus.RUNNING.value)
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.status_changed", {"status": TaskStatus.RUNNING.value, "task_id": str(task_id)})
+    )
     logger.info(f"User {getattr(current_user, 'id', 'unknown')} approved task {task_id}")
     return {"task_id": str(task_id), "status": "approved"}
 
@@ -343,6 +379,10 @@ async def reject_task(task_id: UUID, current_user: object = Depends(get_current_
                 await workflow_node_repo.update(node.id, status=StepStatus.REJECTED.value)
 
     await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error="Approval rejected by user")
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
+    )
     logger.info(f"User {getattr(current_user, 'id', 'unknown')} rejected task {task_id}")
     return {"task_id": str(task_id), "status": "rejected"}
 

@@ -302,7 +302,9 @@ class Orchestrator:
                 output_data=result,
             )
         except Exception as e:
-            logger.error(f"[LangGraph] Execution failed for task {task_id}: {e}")
+            logger.error(f"[LangGraph] Execution failed for task {task_id}: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise
 
     async def execute_task(
@@ -325,9 +327,20 @@ class Orchestrator:
             logger.warning(f"LangGraph execution failed, falling back to legacy mode strategy: {langgraph_err}")
 
         # Fallback to legacy mode strategies
-        from .modes import ModeStrategyFactory
-        strategy = ModeStrategyFactory.get(mode)
-        return await strategy.execute(self.runtime, self, query, config, task_id, user_id)
+        try:
+            from .modes import ModeStrategyFactory
+            strategy = ModeStrategyFactory.get(mode)
+            return await strategy.execute(self.runtime, self, query, config, task_id, user_id)
+        except ValueError as mode_err:
+            logger.error(f"Unknown mode '{mode}': {mode_err}")
+            return AgentOutput(
+                task_id=task_id,
+                step_id=uuid4(),
+                status=AgentStatus.FAILURE,
+                error_type="invalid_mode",
+                error_message=f"Unknown execution mode: {mode}",
+                recoverable=False,
+            )
 
     async def _execute_pipeline(self, query, config=None, task_id=None, user_id=None):
         return await self.pipeline_executor.execute(query, config, task_id, user_id)

@@ -7,79 +7,112 @@ from ..config.settings import settings
 from ..logs.logger import logger
 from ..memory.short_term import redis_client
 
+# Rate limits per minute
+DEFAULT_LIMIT = 60
+FREE_USER_LIMIT = 60
+PREMIUM_USER_LIMIT = 300
+API_KEY_LIMIT = 120
+BURST_SIZE = 10
+
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
         app,
-        requests_per_minute: int = 60,
-        burst_size: int = 10
+        requests_per_minute: int = DEFAULT_LIMIT,
+        burst_size: int = BURST_SIZE
     ):
         super().__init__(app)
         self.requests_per_minute = requests_per_minute
         self.burst_size = burst_size
 
-    async def _get_user_id(self, request: Request) -> Optional[str]:
+    async def _get_client_info(self, request: Request) -> tuple[str, int]:
+        """Returns (client_id, limit)"""
+        # Check API key first
+        api_key = request.headers.get("x-api-key", "")
+        if api_key:
+            return f"ratelimit:apikey:{api_key}", API_KEY_LIMIT
+
+        # Check bearer token for user info
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             from ..auth.utils import verify_access_token
             payload = verify_access_token(auth_header.removeprefix("Bearer ").strip())
             if payload and payload.get("sub"):
-                return str(payload["sub"])
-        return request.client.host if request.client else "unknown"
+                user_id = str(payload["sub"])
+                role = payload.get("role", "user")
+                if role == "admin":
+                    return f"ratelimit:user:{user_id}", PREMIUM_USER_LIMIT
+                return f"ratelimit:user:{user_id}", FREE_USER_LIMIT
 
-    async def _is_rate_limited(self, client_id: str) -> bool:
-        current_time = time.time()
-        key = f"agentos:ratelimit:{client_id}"
+        # Fallback to IP
+        ip = request.client.host if request.client else "unknown"
+        return f"ratelimit:ip:{ip}", self.requests_per_minute
+
+    async def _is_rate_limited(self, client_id: str, limit: int) -> tuple[bool, int, int]:
+        if not redis_client.client:
+            return False, 0, limit
+
+        current_time = int(time.time())
+        window = current_time // 60
+        key = f"agentos:{client_id}:{window}"
 
         try:
-            if redis_client.client:
-                pipe = redis_client.client.pipeline()
-                pipe.zremrangebyscore(key, 0, current_time - 60)
-                pipe.zadd(key, {str(current_time): current_time})
-                pipe.zcard(key)
-                pipe.expire(key, 60)
-                results = await pipe.execute()
-                request_count = results[2]
+            pipe = redis_client.client.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, 60)
+            results = await pipe.execute()
+            count = results[0]
 
-                if request_count > self.requests_per_minute:
-                    return True
+            remaining = max(0, limit - count)
 
-                recent_count = await redis_client.client.zcount(
-                    key, current_time - 1, current_time
-                )
-                if recent_count > self.burst_size:
-                    return True
+            if count > limit:
+                retry_after = 60 - (current_time % 60)
+                return True, retry_after, remaining
 
-                return False
+            # Burst check: count requests in the last 1 second
+            burst_key = f"agentos:{client_id}:burst:{current_time}"
+            burst_pipe = redis_client.client.pipeline()
+            burst_pipe.incr(burst_key)
+            burst_pipe.expire(burst_key, 1)
+            burst_results = await burst_pipe.execute()
+            burst_count = burst_results[0]
+
+            if burst_count > self.burst_size:
+                retry_after = 1
+                return True, retry_after, remaining
+
+            return False, 0, remaining
         except Exception as e:
             logger.warning(f"Redis rate limit check failed, allowing request: {e}")
-            return False
-
-        return False
+            return False, 0, limit
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ["/health", "/docs", "/openapi.json"]:
             return await call_next(request)
 
-        client_id = await self._get_user_id(request)
+        client_id, limit = await self._get_client_info(request)
+        is_limited, retry_after, remaining = await self._is_rate_limited(client_id, limit)
 
-        if await self._is_rate_limited(client_id):
+        if is_limited:
             logger.warning(f"Rate limit exceeded for {client_id}")
             return JSONResponse(
                 status_code=429,
+                headers={"Retry-After": str(retry_after)},
                 content={
                     "error": {
                         "code": "RATE_LIMIT_EXCEEDED",
                         "message": "Rate limit exceeded",
-                        "context": {"retry_after": 60}
+                        "context": {"retry_after": retry_after}
                     }
                 }
             )
 
         response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(limit)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
         return response
 
 
 def get_rate_limit() -> int:
-    return getattr(settings, 'RATE_LIMIT_PER_MINUTE', 60)
+    return getattr(settings, 'RATE_LIMIT_PER_MINUTE', DEFAULT_LIMIT)

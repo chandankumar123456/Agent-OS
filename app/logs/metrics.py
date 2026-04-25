@@ -42,6 +42,13 @@ class MetricsCollector:
                     lines.append(f'{name}_count {count}')
         return "\n".join(lines)
 
+    def record_tokens(self, model: str, input_tokens: int, output_tokens: int):
+        """Record token usage for a model invocation."""
+        total = input_tokens + output_tokens
+        self.inc_counter("tokens_total", {"model": model}, total)
+        self.inc_counter("tokens_input_total", {"model": model}, input_tokens)
+        self.inc_counter("tokens_output_total", {"model": model}, output_tokens)
+
     def get_json_summary(self) -> dict:
         """Return aggregated metrics as JSON for the dashboard."""
         requests_total = sum(self._counters.get("http_requests_total", {}).values())
@@ -54,11 +61,14 @@ class MetricsCollector:
             all_values.extend(values)
         avg_response_time = sum(all_values) / len(all_values) if all_values else 0.0
 
+        tokens_total = sum(self._counters.get("tokens_total", {}).values())
+
         return {
             "requests_total": requests_total,
             "errors_total": errors_total,
             "error_rate": error_rate,
             "avg_response_time": avg_response_time,
+            "tokens_total": tokens_total,
         }
 
     def reset(self):

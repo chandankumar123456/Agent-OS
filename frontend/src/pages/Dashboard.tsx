@@ -1,8 +1,18 @@
-import React, { useState } from 'react';
-import { motion } from 'framer-motion';
-import { Activity, Cpu, Server, AlertCircle, CheckCircle2, Play, Loader2, ChevronRight } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Activity, Cpu, Server, AlertCircle, CheckCircle2, Play, Loader2, ChevronRight, Radio, ClipboardList } from 'lucide-react';
 import { apiClient } from '../api/client';
 import type { Task, CreateTaskRequest, TaskTrace } from '../api/client';
+import OnboardingModal from '../components/OnboardingModal';
+import QuickStartPanel from '../components/QuickStartPanel';
+import EmptyState from '../components/EmptyState';
+import { TourProvider, dashboardTourSteps } from '../components/Onboarding';
+import { useToast } from '../components/ToastProvider';
+import { useWebSocket } from '../hooks/useWebSocket';
+import { AnimatedNumber } from '../components/ui/AnimatedNumber';
+import { SkeletonTaskItem, Skeleton } from '../components/ui/Skeleton';
+import { StatusBadge } from '../components/ui/StatusBadge';
+import { cardInteractions } from '../lib/animations';
 
 const Dashboard = () => {
   const [query, setQuery] = useState('');
@@ -21,6 +31,97 @@ const Dashboard = () => {
     error_rate: 0,
     avg_response_time: 0,
   });
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showTour, setShowTour] = useState(false);
+  const { showToast } = useToast();
+  const processedTaskIds = useRef<Set<string>>(new Set());
+
+  const wsTaskId = currentTask?.task_id && (currentTask.status === 'pending' || currentTask.status === 'running')
+    ? currentTask.task_id
+    : null;
+
+  const { messages, status: wsStatus } = useWebSocket({ taskId: wsTaskId });
+
+  useEffect(() => {
+    if (messages.length === 0) return;
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage?.type !== 'task.status_changed') return;
+
+    const payload = lastMessage.payload || {};
+    const newStatus = payload.status as string;
+    const taskId = payload.task_id as string;
+    if (!taskId || !newStatus) return;
+
+    setCurrentTask((prev) => {
+      if (!prev || prev.task_id !== taskId) return prev;
+      return { ...prev, status: newStatus } as Task;
+    });
+
+    if (newStatus === 'completed' || newStatus === 'failed' || newStatus === 'cancelled') {
+      if (!processedTaskIds.current.has(taskId)) {
+        processedTaskIds.current.add(taskId);
+        setIsSubmitting(false);
+        setShowResult(true);
+        showToast(
+          newStatus === 'completed' ? 'Task completed successfully' : `Task ${newStatus}`,
+          newStatus === 'completed' ? 'success' : 'error'
+        );
+        apiClient.getTask(taskId)
+          .then((task) => {
+            setCurrentTask(task);
+            setTasks((prev) =>
+              prev.some((t) => t.task_id === task.task_id)
+                ? prev.map((t) => (t.task_id === task.task_id ? task : t))
+                : [task, ...prev]
+            );
+          })
+          .catch(() => {});
+        loadTaskTrace(taskId);
+      }
+    }
+  }, [messages, showToast]);
+
+  useEffect(() => {
+    const checkOnboarding = async () => {
+      try {
+        const state = await apiClient.getOnboardingState();
+        if (!state.onboarding_complete) {
+          setShowOnboarding(true);
+        } else {
+          const hasSeenTour = localStorage.getItem('tour_dashboard');
+          if (!hasSeenTour) {
+            setShowTour(true);
+          }
+        }
+      } catch {
+        // Fallback to localStorage if API fails
+        const hasCompleted = localStorage.getItem('hasCompletedOnboarding');
+        if (!hasCompleted || hasCompleted === 'false') {
+          setShowOnboarding(true);
+        }
+      }
+    };
+    checkOnboarding();
+  }, []);
+
+  useEffect(() => {
+    const handler = (e: CustomEvent<{ query: string }>) => {
+      setQuery(e.detail.query);
+      setShowOnboarding(false);
+    };
+    window.addEventListener('onboarding:set-demo-task', handler as EventListener);
+    return () => window.removeEventListener('onboarding:set-demo-task', handler as EventListener);
+  }, []);
+
+  const handleExecuteTask = useCallback((taskQuery: string) => {
+    setQuery(taskQuery);
+    setTimeout(() => {
+      const form = document.getElementById('dashboard-task-form') as HTMLFormElement | null;
+      if (form) {
+        form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      }
+    }, 300);
+  }, []);
 
   const loadMetrics = async () => {
     try {
@@ -122,6 +223,7 @@ const Dashboard = () => {
   React.useEffect(() => {
     loadDashboardData();
   }, []);
+
   const containerVariants = {
     hidden: { opacity: 0 },
     visible: { 
@@ -135,13 +237,20 @@ const Dashboard = () => {
     visible: { opacity: 1, y: 0, transition: { duration: 0.4 } }
   };
 
+  const handleOnboardingClose = () => {
+    setShowOnboarding(false);
+    setShowTour(true);
+  };
+
   return (
-    <motion.div 
-      variants={containerVariants}
-      initial="hidden"
-      animate="visible"
-      className="flex flex-col gap-8"
-    >
+    <>
+      {showTour && <TourProvider tourId="dashboard" steps={dashboardTourSteps} onComplete={() => setShowTour(false)} />}
+      <motion.div 
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="flex flex-col gap-8"
+      >
       <div className="flex justify-between items-end">
         <div>
           <h1 className="text-3xl font-bold tracking-tight mb-1 cursor-default">System Overview</h1>
@@ -162,7 +271,7 @@ const Dashboard = () => {
       {/* Task Submission Form */}
       <motion.div variants={itemVariants} className="obsidian-panel border border-outline/10 p-6">
         <h2 className="text-lg font-semibold tracking-tight mb-4">Execute New Task</h2>
-        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <form id="dashboard-task-form" onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex gap-4">
             <input
               type="text"
@@ -183,14 +292,17 @@ const Dashboard = () => {
               <option value="autonomous">Autonomous</option>
               <option value="collaboration">Collaboration</option>
             </select>
-            <button
+            <motion.button
               type="submit"
               disabled={isSubmitting || !query.trim()}
+              whileTap={{ scale: 0.96 }}
+              whileHover={{ scale: 1.02 }}
+              transition={{ type: 'spring', stiffness: 500, damping: 30 }}
               className="btn-primary flex items-center gap-2 shadow-glow-cyan disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
               {isSubmitting ? 'Running...' : 'Execute'}
-            </button>
+            </motion.button>
           </div>
         </form>
         
@@ -209,7 +321,7 @@ const Dashboard = () => {
               </div>
               <div className="flex items-center gap-2">
                 {currentTask.status === 'running' || currentTask.status === 'pending' ? (
-                  <button
+                  <motion.button
                     onClick={async () => {
                       try {
                         await apiClient.deleteTask(currentTask.task_id);
@@ -218,20 +330,19 @@ const Dashboard = () => {
                         console.error('Failed to cancel task:', e);
                       }
                     }}
+                    whileTap={{ scale: 0.95 }}
                     className="text-xs px-2 py-1 rounded bg-[#FF4B4B]/10 text-[#FF4B4B] hover:bg-[#FF4B4B]/20 transition-colors"
                   >
                     Cancel
-                  </button>
+                  </motion.button>
                 ) : null}
-                <span className={`text-xs font-bold uppercase tracking-widest px-2 py-1 rounded ${
-                  currentTask.status === 'completed' ? 'bg-[#00FF88]/10 text-[#00FF88]' :
-                  currentTask.status === 'failed' ? 'bg-[#FF4B4B]/10 text-[#FF4B4B]' :
-                  currentTask.status === 'running' ? 'bg-primary/10 text-primary' :
-                  'bg-surface-low text-secondaryText'
-                }`}>
-                  {currentTask.status === 'running' && <Loader2 className="w-3 h-3 inline mr-1 animate-spin" />}
-                  {currentTask.status}
-                </span>
+                {wsTaskId && wsStatus === 'open' && (
+                  <span className="flex items-center gap-1 text-xs text-[#00FF88] font-medium">
+                    <Radio className="w-3 h-3 animate-pulse" />
+                    Live
+                  </span>
+                )}
+                <StatusBadge status={currentTask.status} />
               </div>
             </div>
             
@@ -255,8 +366,9 @@ const Dashboard = () => {
             )}
 
             {isLoadingTrace && (
-              <div className="mt-3 text-xs text-secondaryText flex items-center gap-2">
-                <Loader2 className="w-3 h-3 animate-spin" /> Loading trace...
+              <div className="mt-3 space-y-2">
+                <Skeleton className="h-3 w-3/4" />
+                <Skeleton className="h-3 w-1/2" />
               </div>
             )}
             
@@ -264,9 +376,15 @@ const Dashboard = () => {
             {currentTask.steps?.length > 0 && (
               <div className="mt-3">
                 <h4 className="text-sm font-semibold mb-2">Workflow Nodes:</h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {currentTask.steps.map((node) => (
-                    <div key={node.id} className="flex flex-col gap-2 px-3 py-3 bg-surface-low rounded-lg text-xs border border-outline/10">
+                <motion.div layout className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {currentTask.steps.map((node, idx) => (
+                    <motion.div
+                      key={node.id}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: idx * 0.05, type: 'spring', stiffness: 400, damping: 30 }}
+                      className="flex flex-col gap-2 px-3 py-3 bg-surface-low rounded-lg text-xs border border-outline/10"
+                    >
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2 min-w-0">
                           <ChevronRight className="w-3 h-3 text-primary shrink-0" />
@@ -279,9 +397,9 @@ const Dashboard = () => {
                       <div className="text-secondaryText">
                         <span className="font-medium text-primaryText">Dependency:</span> {node.depends_on?.length > 0 ? node.depends_on.join(', ') : 'None'}
                       </div>
-                    </div>
+                    </motion.div>
                   ))}
-                </div>
+                </motion.div>
               </div>
             )}
 
@@ -327,20 +445,38 @@ const Dashboard = () => {
         )}
       </motion.div>
 
+      {/* Quick Start - Collapsible */}
+      <QuickStartPanel onExecuteTask={handleExecuteTask} collapsible />
+
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div id="metrics-panel" className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {[
           { label: 'Active Agents', value: tasks.length > 0 ? String(tasks.filter(t => t.status === 'running').length + 2) : '2', icon: Activity, trend: '+3 this hour' },
           { label: 'Avg Execution Latency', value: `${Math.round(metrics.avg_response_time * 1000)}ms`, icon: Cpu, trend: `${metrics.requests_total} requests total` },
           { label: 'Error Rate', value: `${(metrics.error_rate * 100).toFixed(2)}%`, icon: Server, trend: `${metrics.errors_total} errors total` },
           { label: 'Total Tasks', value: String(tasks.length), icon: AlertCircle, trend: `${tasks.filter(t => t.status === 'completed').length} completed`, highlight: 'text-primary' }
         ].map((stat, i) => (
-          <motion.div key={i} variants={itemVariants} className="obsidian-panel p-5 border border-outline/5 hover:border-outline/20 transition-colors">
+          <motion.div
+            key={i}
+            variants={itemVariants}
+            {...cardInteractions}
+            className="obsidian-panel p-5 border border-outline/5 hover:border-outline/20 hover:shadow-glow-cyan/50 transition-colors cursor-pointer"
+          >
             <div className="flex justify-between items-start mb-4">
               <span className="text-secondaryText text-sm font-medium">{stat.label}</span>
               <stat.icon className="w-5 h-5 text-primary opacity-80" />
             </div>
-            <div className={`text-3xl font-bold tracking-tight ${stat.highlight || ''}`}>{stat.value}</div>
+            <div className={`text-3xl font-bold tracking-tight ${stat.highlight || ''}`}>
+              {stat.label === 'Avg Execution Latency' ? (
+                <AnimatedNumber value={parseInt(stat.value) || 0} suffix="ms" />
+              ) : stat.label === 'Error Rate' ? (
+                <AnimatedNumber value={parseFloat(stat.value) || 0} suffix="%" decimals={2} />
+              ) : stat.label === 'Total Tasks' ? (
+                <AnimatedNumber value={parseInt(stat.value) || 0} />
+              ) : (
+                stat.value
+              )}
+            </div>
             <div className="text-xs text-secondaryText mt-2">{stat.trend}</div>
           </motion.div>
         ))}
@@ -348,7 +484,7 @@ const Dashboard = () => {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Active Workflows */}
-        <motion.div variants={itemVariants} className="lg:col-span-2 obsidian-panel border border-outline/5 p-6 relative overflow-hidden">
+        <motion.div variants={itemVariants} id="recent-tasks-panel" className="lg:col-span-2 obsidian-panel border border-outline/5 p-6 relative overflow-hidden">
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-lg font-semibold tracking-tight">Recent Tasks</h2>
             <button onClick={loadTasks} className="text-primary text-sm hover:underline">Refresh</button>
@@ -356,13 +492,19 @@ const Dashboard = () => {
           
           <div className="flex flex-col gap-3 max-h-80 overflow-y-auto">
             {isLoadingTasks ? (
-              <div className="text-center py-8 text-secondaryText text-sm flex items-center justify-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading tasks...
+              <div className="flex flex-col gap-3">
+                <SkeletonTaskItem />
+                <SkeletonTaskItem />
+                <SkeletonTaskItem />
               </div>
             ) : tasks.length === 0 ? (
-              <div className="text-center py-8 text-secondaryText text-sm">
-                No tasks yet. Submit a task above to get started.
-              </div>
+              <EmptyState
+                icon={ClipboardList}
+                title="No tasks yet"
+                description="Get started by creating your first task using the form above."
+                actionLabel="Create Your First Task"
+                actionHref="#dashboard-task-form"
+              />
             ) : (
               tasks.slice(0, 5).map((task) => (
                 <div key={task.task_id} className="flex flex-col gap-2 p-4 bg-surface-highest rounded-lg">
@@ -375,15 +517,10 @@ const Dashboard = () => {
                         ) : (
                         <Loader2 className="w-4 h-4 text-primary animate-spin" />
                       )}
-                      <span className="font-medium text-sm truncate max-w-xs">{task.task_id}</span>
-                      <span className="text-xs text-secondaryText font-mono bg-background px-2 py-0.5 rounded">{task.task_id.slice(0, 8)}</span>
+                      <span className="font-medium text-sm truncate max-w-xs">{task.task_id || 'unknown'}</span>
+                      <span className="text-xs text-secondaryText font-mono bg-background px-2 py-0.5 rounded">{(task.task_id || 'unknown').slice(0, 8)}</span>
                     </div>
-                      <span className={`text-xs font-bold uppercase tracking-widest px-2 py-1 rounded ${
-                        task.status === 'completed' ? 'bg-[#00FF88]/10 text-[#00FF88]' :
-                        task.status === 'failed' ? 'bg-[#FF4B4B]/10 text-[#FF4B4B]' :
-                        task.status === 'cancelled' ? 'bg-secondaryText/10 text-secondaryText' :
-                        'bg-primary/10 text-primary'
-                      }`}>{task.status}</span>
+                      <StatusBadge status={task.status} />
                   </div>
                   {task.result && (
                     <div className="text-xs text-secondaryText mt-1 truncate">
@@ -437,7 +574,13 @@ const Dashboard = () => {
         </motion.div>
       </div>
 
-    </motion.div>
+      <AnimatePresence>
+        {showOnboarding && (
+          <OnboardingModal onClose={handleOnboardingClose} />
+        )}
+      </AnimatePresence>
+      </motion.div>
+    </>
   );
 };
 

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from .config.settings import settings
 from .api import api_router
 from .api.routes.health import router as health_router
+from .api.routes.public import router as public_router
 from .logs.logger import logger
 from .memory.long_term import db
 from .memory.short_term import redis_client
@@ -77,11 +78,20 @@ async def lifespan(app: FastAPI):
         logger.error(f"MCP health monitor start failed: {e}")
 
     try:
+        from .tools.builtin import register_builtin_tools
+        from .tools.registry import tool_registry
+        register_builtin_tools(tool_registry)
+        logger.info("Built-in tools registered")
+        initialized.append("builtin_tools")
+    except Exception as e:
+        logger.error(f"Built-in tools registration failed: {e}")
+
+    try:
         from .mcp.client_manager import mcp_client_manager
         await mcp_client_manager.start_system_servers()
         logger.info("MCP system servers started")
         initialized.append("mcp_servers")
-    except Exception as e:
+    except BaseException as e:
         logger.error(f"MCP system servers start failed: {e}")
 
     yield
@@ -151,6 +161,10 @@ if api_keys:
 
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(health_router)
+app.include_router(public_router)
+
+from .api.ws import websocket_endpoint
+app.add_websocket_route("/ws/tasks/{task_id}", websocket_endpoint)
 
 
 @app.exception_handler(AgentOSError)

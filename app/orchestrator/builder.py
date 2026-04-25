@@ -60,6 +60,64 @@ class WorkflowBuilder:
         }
 
     @staticmethod
+    def validate_definition(definition: Dict[str, Any]) -> List[str]:
+        errors: List[str] = []
+        nodes = definition.get("nodes", [])
+        edges = definition.get("edges", [])
+
+        if not nodes:
+            errors.append("Workflow must have at least one node")
+            return errors
+
+        node_ids = {str(node.get("id")) for node in nodes if node.get("id") is not None}
+
+        for edge in edges:
+            from_node = str(edge.get("from")) if edge.get("from") is not None else None
+            to_node = str(edge.get("to")) if edge.get("to") is not None else None
+            if from_node not in node_ids:
+                errors.append(f"Edge references missing source node: {from_node}")
+            if to_node not in node_ids:
+                errors.append(f"Edge references missing target node: {to_node}")
+
+        adj: Dict[str, List[str]] = {node_id: [] for node_id in node_ids}
+        for edge in edges:
+            src = str(edge.get("from"))
+            dst = str(edge.get("to"))
+            if src in adj and dst in adj:
+                adj[src].append(dst)
+
+        if not edges:
+            for node in nodes:
+                node_id = str(node.get("id"))
+                for dep in node.get("depends_on", []):
+                    dep_str = str(dep)
+                    if dep_str in adj:
+                        adj[dep_str].append(node_id)
+
+        visiting: set[str] = set()
+        visited: set[str] = set()
+
+        def visit(node_id: str) -> None:
+            if node_id in visiting:
+                raise ValueError("Cycle detected")
+            if node_id in visited:
+                return
+            visiting.add(node_id)
+            for neighbor in adj.get(node_id, []):
+                visit(neighbor)
+            visiting.remove(node_id)
+            visited.add(node_id)
+
+        try:
+            for node_id in adj:
+                if node_id not in visited:
+                    visit(node_id)
+        except ValueError:
+            errors.append("Workflow contains a cycle")
+
+        return errors
+
+    @staticmethod
     def serialize_state(state: Dict[str, Any]) -> Dict[str, Any]:
         workflow = state.get("workflow")
         def _status_label(value) -> str:

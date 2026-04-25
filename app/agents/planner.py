@@ -12,7 +12,7 @@ STRICT RULES (must be followed exactly):
 1. Node Structure:
    - Each step object MUST have:
      * "id" (string, unique within the plan, e.g., "step_1", "step_2")
-     * "step" (clear action description)
+     * "step" (clear action description — be specific about what tool to use)
      * "agent_type" (always "executor")
      * "depends_on" (list of node IDs this step depends on)
 
@@ -34,7 +34,11 @@ STRICT RULES (must be followed exactly):
    - Avoid over-decomposition.
    - If the task is simple, use 1 node with empty depends_on.
 
-5. Consistency:
+5. Tool Awareness:
+   - You have access to the following tools. When a step requires a tool, mention the exact tool name in the step description so the executor knows which one to use.
+   - Available tools: {tools}
+
+6. Consistency:
    - IDs must be consistent and reused correctly.
    - No duplicate IDs.
    - All dependencies must match EXACT node IDs.
@@ -72,10 +76,14 @@ class PlannerAgent:
         steps: List[Dict[str, Any]] = []
         for index, item in enumerate(result, start=1):
             if not isinstance(item, dict):
-                raise ValueError("Each planner step must be an object")
-            step_name = item.get("step") or item.get("task") or item.get("result")
+                logger.warning(f"Planner step {index} is not a dict, skipping: {item}")
+                continue
+            step_name = item.get("step") or item.get("task") or item.get("description") or item.get("result") or item.get("action")
             if not step_name:
-                raise ValueError("Planner step missing 'step'")
+                # If the item has an 'id', generate a generic step name rather than failing
+                step_id = str(item.get("id", f"step_{index}"))
+                logger.warning(f"Planner step {step_id} missing name fields, using generic description")
+                step_name = f"Execute step {step_id}"
             step_id = str(item.get("id", f"step_{index}"))
             normalized = {
                 "id": step_id,
@@ -84,6 +92,10 @@ class PlannerAgent:
                 "depends_on": item.get("depends_on", []),
             }
             steps.append(normalized)
+
+        if not steps:
+            logger.warning("Planner produced no valid steps, falling back to single-step plan")
+            steps = [{"id": "step_1", "step": "Process the request", "agent_type": "executor", "depends_on": []}]
 
         # Validate and sanitize dependencies
         valid_ids = {step["id"] for step in steps}
@@ -107,11 +119,18 @@ class PlannerAgent:
     
     async def execute(self, input_data: AgentInput) -> AgentOutput:
         query = input_data.input_data.get("query", "")
+        tools = input_data.input_data.get("tools", [])
+        tools_summary = ""
+        if tools:
+            tool_names = [t.get("name", "unknown") for t in tools]
+            tools_summary = ", ".join(tool_names)
+        else:
+            tools_summary = "none"
         
         logger.info(f"Planner executing for query: {query}")
         
         messages = [
-            {"role": "system", "content": PLANNER_PROMPT.format(query=query)}
+            {"role": "system", "content": PLANNER_PROMPT.format(query=query, tools=tools_summary)}
         ]
         
         try:

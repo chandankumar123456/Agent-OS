@@ -5,8 +5,11 @@ from typing import Optional
 from ..config.settings import settings
 from ..logs.logger import logger
 from ..auth.utils import verify_access_token
-from ..memory.long_term import user_repo
-import time
+from ..memory.long_term import db
+from ..memory.models import APIKeyModel
+from sqlalchemy import select
+import hashlib
+from datetime import datetime
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -18,15 +21,37 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
         if request.url.path in {"/api/v1/auth/login", "/api/v1/auth/signup"}:
             return await call_next(request)
 
-        if request.url.path.startswith("/api/v1") or request.url.path in {"/health", "/metrics"}:
+        if request.url.path.startswith("/api/v1"):
             bearer_token = request.headers.get("authorization", "").replace("Bearer ", "") if request.headers.get("authorization", "").startswith("Bearer ") else None
+            api_key = request.headers.get("x-api-key", "")
 
-            if not bearer_token:
-                return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized"})
+            authenticated = False
 
-            payload = verify_access_token(bearer_token)
-            if not payload:
-                logger.warning(f"Invalid auth attempt from {request.client.host}")
+            if bearer_token:
+                payload = verify_access_token(bearer_token)
+                if payload:
+                    request.state.user = payload
+                    request.state.auth_type = "bearer"
+                    authenticated = True
+
+            if not authenticated and api_key:
+                key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+                try:
+                    async with db.get_session() as session:
+                        result = await session.execute(select(APIKeyModel).where(APIKeyModel.key_hash == key_hash))
+                        key_obj = result.scalar_one_or_none()
+                        if key_obj:
+                            key_obj.last_used_at = datetime.utcnow()
+                            await session.commit()
+                            request.state.user = {"sub": key_obj.user_id}
+                            request.state.auth_type = "api_key"
+                            request.state.api_key_permissions = key_obj.permissions or []
+                            authenticated = True
+                except Exception as e:
+                    logger.warning(f"API key validation error: {e}")
+
+            if not authenticated:
+                logger.warning(f"Invalid auth attempt from {getattr(request.client, 'host', 'unknown') if request.client else 'unknown'}")
                 return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized"})
 
         response = await call_next(request)

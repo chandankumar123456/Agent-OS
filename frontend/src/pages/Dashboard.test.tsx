@@ -1,6 +1,8 @@
 import React from 'react';
 import { render, waitFor } from '@testing-library/react';
+import { BrowserRouter } from 'react-router-dom';
 import Dashboard from './Dashboard';
+import { ToastProvider } from '../components/ToastProvider';
 
 beforeAll(() => {
   class MockIntersectionObserver {
@@ -24,7 +26,13 @@ vi.mock('../api/client', () => ({
 }));
 
 test('api failure is shown in the dashboard', async () => {
-  render(<Dashboard />);
+  render(
+    <BrowserRouter>
+      <ToastProvider>
+        <Dashboard />
+      </ToastProvider>
+    </BrowserRouter>
+  );
 
   await waitFor(() => expect(document.body.textContent).toContain('tasks failed'));
 });

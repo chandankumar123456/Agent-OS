@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime
 from .base import BaseTool, ToolInput, ToolOutput
 from .search import SearchTool, CalculatorTool, TextProcessorTool
 from ..logs.logger import logger
@@ -12,6 +13,12 @@ class RegisteredTool:
     type: str
     tool: Optional[BaseTool]
     mcp_tool: bool = False
+    category: str = "general"
+    version: str = "1.0.0"
+    health_status: str = "unknown"
+    use_count: int = 0
+    tags: List[str] = field(default_factory=list)
+    last_used: Optional[str] = None
 
 
 class MCPWrappedTool:
@@ -42,7 +49,7 @@ class MCPWrappedTool:
                 )
             else:
                 content = str(result)
-            return ToolOutput(success=True, data={"output": content})
+            return ToolOutput(success=True, result={"output": content})
         except Exception as e:
             logger.error(f"MCP tool execution error: {e}")
             return ToolOutput(success=False, error=str(e))
@@ -72,6 +79,9 @@ class ToolRegistry:
 
     def register_mcp_tools(self, mcp_tools: List[Dict[str, Any]]):
         """Register tools discovered from MCP servers."""
+        if not mcp_tools:
+            logger.warning("No MCP tools to register")
+            return
         for tool_info in mcp_tools:
             name = tool_info["name"]
             self.tools[name] = RegisteredTool(
@@ -112,9 +122,36 @@ class ToolRegistry:
                 **(registered.tool.get_schema() if registered.tool else {}),
                 "type": registered.type,
                 "status": "active",
+                "category": registered.category,
+                "version": registered.version,
+                "health_status": registered.health_status,
+                "tags": registered.tags,
+                "use_count": registered.use_count,
+                "last_used": registered.last_used,
             }
             for registered in self.tools.values()
         ]
+
+    def list_by_category(self, category: str) -> List[Dict[str, Any]]:
+        return [tool for tool in self.list_tools() if tool.get("category") == category]
+
+    def get_categories(self) -> List[str]:
+        return sorted({t.category for t in self.tools.values()})
+
+    async def health_check(self, tool_name: str) -> Dict[str, str]:
+        registered = self.tools.get(tool_name)
+        if not registered:
+            return {"name": tool_name, "status": "not_found"}
+        try:
+            result = await self.execute(tool_name, {})
+            if result.success:
+                registered.health_status = "healthy"
+            else:
+                registered.health_status = "unhealthy"
+        except Exception as e:
+            logger.error(f"Health check failed for {tool_name}: {e}")
+            registered.health_status = "unhealthy"
+        return {"name": tool_name, "status": registered.health_status}
 
     async def execute(
         self,
@@ -131,7 +168,11 @@ class ToolRegistry:
 
         if registered.mcp_tool and registered.tool:
             tool_input = ToolInput(parameters=parameters)
-            return await registered.tool.execute(tool_input)
+            result = await registered.tool.execute(tool_input)
+            if result.success:
+                registered.use_count += 1
+                registered.last_used = datetime.utcnow().isoformat()
+            return result
 
         if not registered.tool:
             return ToolOutput(success=False, error=f"Tool '{tool_name}' has no implementation")
@@ -139,6 +180,9 @@ class ToolRegistry:
         try:
             tool_input = ToolInput(parameters=parameters)
             result = await registered.tool.execute(tool_input)
+            if result.success:
+                registered.use_count += 1
+                registered.last_used = datetime.utcnow().isoformat()
             return result
         except Exception as e:
             logger.error(f"Tool execution error: {e}")

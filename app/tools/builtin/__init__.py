@@ -1,0 +1,23 @@
+from typing import List
+from ..base import BaseTool
+from .github import GitHubSearchReposTool, GitHubGetRepoTool
+from .slack import SlackSendMessageTool
+from .notion import NotionSearchPagesTool
+from .web_scraper import WebScraperExtractTextTool
+from .code_executor import CodeExecutorRunPythonTool
+
+
+BUILTIN_TOOLS: List[BaseTool] = [
+    GitHubSearchReposTool(),
+    GitHubGetRepoTool(),
+    SlackSendMessageTool(),
+    NotionSearchPagesTool(),
+    WebScraperExtractTextTool(),
+    CodeExecutorRunPythonTool(),
+]
+
+
+def register_builtin_tools(registry) -> None:
+    """Register all built-in tools with the provided registry."""
+    for tool in BUILTIN_TOOLS:
+        registry.register(tool)

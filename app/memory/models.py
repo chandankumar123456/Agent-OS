@@ -1,10 +1,38 @@
 from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean, UniqueConstraint, Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from datetime import datetime
+import uuid
 from uuid import uuid4
 from enum import Enum as PyEnum
 
 Base = declarative_base()
+
+
+class ToolV2Model(Base):
+    __tablename__ = "tools_v2"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tool_id = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    version = Column(String, default="1.0.0")
+    input_schema = Column(JSON, default=dict)
+    output_schema = Column(JSON, nullable=True)
+    implementation_type = Column(String, nullable=False)
+    implementation_config = Column(JSON, default=dict)
+    category = Column(String, default="general", index=True)
+    tags = Column(JSON, default=list)
+    author = Column(String, default="system")
+    dependencies = Column(JSON, default=list)
+    sandboxed = Column(Boolean, default=False)
+    timeout = Column(Integer, default=30)
+    max_retries = Column(Integer, default=2)
+    invocation_count = Column(Integer, default=0)
+    avg_latency_ms = Column(Float, default=0.0)
+    error_rate = Column(Float, default=0.0)
+    status = Column(String, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class GuardrailRuleType(str, PyEnum):
@@ -274,3 +302,146 @@ class UserModel(Base):
     api_key = Column(String(64), unique=True, nullable=True, index=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkspaceModel(Base):
+    __tablename__ = "workspaces"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    name = Column(String(100), nullable=False)
+    owner_id = Column(String(36), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class WorkspaceMemberModel(Base):
+    __tablename__ = "workspace_members"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    workspace_id = Column(String(36), nullable=False, index=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    role = Column(String(20), nullable=False, default="member")
+    joined_at = Column(DateTime, default=datetime.utcnow)
+
+
+class APIKeyModel(Base):
+    __tablename__ = "api_keys"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String(36), nullable=False, index=True)
+    workspace_id = Column(String(36), nullable=True, index=True)
+    key_hash = Column(String(255), nullable=False)
+    name = Column(String(100), nullable=False)
+    permissions = Column(JSON, default=list)
+    last_used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class UserOnboardingState(Base):
+    __tablename__ = "user_onboarding_state"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(String, unique=True, nullable=False, index=True)
+    has_completed_tour = Column(Boolean, default=False)
+    has_created_first_task = Column(Boolean, default=False)
+    has_created_first_agent = Column(Boolean, default=False)
+    has_created_first_workflow = Column(Boolean, default=False)
+    dismissed_prompts = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class TokenUsageModel(Base):
+    __tablename__ = "token_usage"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    task_id = Column(String(36), nullable=False, index=True)
+    model = Column(String(100), nullable=False)
+    input_tokens = Column(Integer, nullable=False, default=0)
+    output_tokens = Column(Integer, nullable=False, default=0)
+    total_tokens = Column(Integer, nullable=False, default=0)
+    cost_usd = Column(Float, nullable=False, default=0.0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class AgentConfigV2Model(Base):
+    __tablename__ = "agent_config_v2"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    agent_id = Column(String, unique=True, nullable=False, index=True)
+    name = Column(String, nullable=False)
+    role = Column(String, nullable=False)
+    goal = Column(Text, default="")
+    backstory = Column(Text, default="")
+    model = Column(String, default="gpt-4o")
+    temperature = Column(Float, default=0.7)
+    max_tokens = Column(Integer, default=2048)
+    reasoning = Column(Boolean, default=False)
+    max_reasoning_attempts = Column(Integer, default=3)
+    tools = Column(JSON, default=list)
+    allow_delegation = Column(Boolean, default=False)
+    memory_enabled = Column(Boolean, default=True)
+    knowledge_sources = Column(JSON, default=list)
+    max_iter = Column(Integer, default=20)
+    max_execution_time = Column(Integer, default=300)
+    max_retry_limit = Column(Integer, default=2)
+    system_template = Column(Text, nullable=True)
+    prompt_template = Column(Text, nullable=True)
+    response_template = Column(Text, nullable=True)
+    status = Column(String, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ChatSessionModel(Base):
+    __tablename__ = "chat_sessions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String(36), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    title = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ChatMessageModel(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    session_id = Column(String(36), nullable=False, index=True)
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeSourceModel(Base):
+    __tablename__ = "knowledge_sources"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String(36), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    type = Column(String(20), nullable=False)
+    content_preview = Column(Text, nullable=True)
+    chunk_count = Column(Integer, default=0)
+    status = Column(String(20), default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class KnowledgeChunkModel(Base):
+    __tablename__ = "knowledge_chunks"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    source_id = Column(String(36), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    chunk_metadata = Column("metadata", JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class DeploymentModel(Base):
+    __tablename__ = "deployments"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String(36), nullable=False, index=True)
+    workflow_id = Column(String(36), nullable=False, index=True)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    endpoint_path = Column(String(200), unique=True, nullable=False, index=True)
+    api_key_hash = Column(String(255), nullable=True)
+    auth_type = Column(String(20), nullable=False, default="none")
+    status = Column(String(20), default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -1,9 +1,20 @@
 """PostgreSQL checkpointer for LangGraph state persistence."""
+import base64
 import json
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointMetadata, CheckpointTuple
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+try:
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+except ImportError:
+    # Fallback for different langgraph versions
+    from langgraph.checkpoint.serde.base import SerializerProtocol
+    class JsonPlusSerializer:
+        def dumps_typed(self, obj):
+            return json.loads(json.dumps(obj, default=str))
+        def loads_typed(self, data):
+            return data
 from sqlalchemy import select, delete
 
 from ..memory.models import CheckpointModel
@@ -14,12 +25,29 @@ from ..logs.logger import logger
 _serde = JsonPlusSerializer()
 
 
+class _AgentOSJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bytes):
+            return {"__type__": "bytes", "data": base64.b64encode(obj).decode("utf-8")}
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, set):
+            return list(obj)
+        return super().default(obj)
+
+
+def _agentos_object_hook(obj):
+    if obj.get("__type__") == "bytes":
+        return base64.b64decode(obj["data"])
+    return obj
+
+
 def _encode(data: Any) -> str:
-    return json.dumps(_serde.dumps_typed(data))
+    return json.dumps(_serde.dumps_typed(data), cls=_AgentOSJSONEncoder)
 
 
 def _decode(text: str) -> Any:
-    return _serde.loads_typed(json.loads(text))
+    return _serde.loads_typed(json.loads(text, object_hook=_agentos_object_hook))
 
 
 class PostgresCheckpointSaver(BaseCheckpointSaver):
@@ -131,7 +159,6 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                 metadata=metadata,
                 parent_config=parent_config,
                 pending_writes=None,
-                pending_sends=None,
             )
 
     async def alist(
@@ -184,7 +211,6 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     metadata=metadata,
                     parent_config=parent_config,
                     pending_writes=None,
-                    pending_sends=None,
                 )
 
     async def adelete(self, config: Dict[str, Any]) -> None:

@@ -86,7 +86,11 @@ class AgentRuntime:
                 worker._task.cancel()
         for agent_id in list(self._workers.keys()):
             try:
-                asyncio.get_event_loop().create_task(mcp_protocol.router.unregister(agent_id))
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(mcp_protocol.router.unregister(agent_id))
+                except RuntimeError:
+                    pass
             except Exception as e:
                 logger.warning(f"Failed to unregister {agent_id} during reset: {e}")
         self._workers.clear()

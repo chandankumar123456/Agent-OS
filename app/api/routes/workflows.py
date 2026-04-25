@@ -5,6 +5,7 @@ from uuid import uuid4
 from ...api.deps import get_current_user
 from ...memory.long_term import workflow_repo
 from ...logs.logger import logger
+from ...orchestrator.workflow import WorkflowEngine
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
 
@@ -67,6 +68,12 @@ async def create_workflow(
         "status": workflow.status,
         "created_at": workflow.created_at.isoformat() if getattr(workflow, "created_at", None) else None,
     }
+
+
+@router.get("/templates")
+async def list_workflow_templates(current_user: object = Depends(get_current_user)):
+    engine = WorkflowEngine()
+    return {"templates": engine.list_templates()}
 
 
 @router.get("/{workflow_id}")

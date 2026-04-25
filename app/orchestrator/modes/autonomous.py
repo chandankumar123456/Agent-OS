@@ -52,6 +52,8 @@ class AutonomousMode(ModeStrategy):
                 constraints=config,
             )
             planner_worker = runtime.get("core_planner")
+            if not planner_worker:
+                raise RuntimeError("core_planner not available in runtime")
             plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input, role="planner")
 
             trace_manager.end_span(plan_span, "success" if plan_result.status == AgentStatus.SUCCESS else "failure")
@@ -85,6 +87,8 @@ class AutonomousMode(ModeStrategy):
                 constraints=config,
             )
             executor_worker = runtime.get("core_executor")
+            if not executor_worker:
+                raise RuntimeError("core_executor not available in runtime")
             exec_result = await orchestrator._execute_with_retry(executor_worker.agent_instance, exec_input, role="executor")
 
             trace_manager.end_span(exec_span, "success" if exec_result.status == AgentStatus.SUCCESS else "failure")
@@ -125,6 +129,8 @@ class AutonomousMode(ModeStrategy):
             context={"steps": step_results},
         )
         verifier_worker = runtime.get("core_verifier")
+        if not verifier_worker:
+            raise RuntimeError("core_verifier not available in runtime")
         verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input, role="verifier")
 
         trace_manager.end_span(verify_span, "success" if verify_result.status == AgentStatus.SUCCESS else "failure")

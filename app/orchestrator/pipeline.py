@@ -155,7 +155,9 @@ class PipelineExecutor:
             logger.info(f"Generated {len(workflow_nodes)} persisted workflow nodes")
 
             async def run_node(node, running_context):
-                node_row = next(item for item in workflow_nodes if item.id == node.id)
+                node_row = next((item for item in workflow_nodes if item.id == node.id), None)
+                if not node_row:
+                    raise RuntimeError(f"Workflow node {node.id} not found in persisted nodes")
                 agent_instance = self.orchestrator.router.resolve(node.agent_type) or self.orchestrator._get_agent("executor")
                 result = await self.step_executor.execute(
                     task_id=task_id,

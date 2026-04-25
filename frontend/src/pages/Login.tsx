@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { Layers, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -53,12 +53,13 @@ const Login = () => {
 
       {/* Login Form */}
       <div className="flex-1 flex items-center justify-center p-6 relative">
-        <button 
+        <motion.button
+          whileTap={{ scale: 0.95 }}
           onClick={() => navigate('/')}
           className="absolute top-8 left-8 text-secondaryText hover:text-primaryText flex items-center gap-2 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" /> Back
-        </button>
+        </motion.button>
 
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
@@ -72,20 +73,27 @@ const Login = () => {
           </div>
 
           <form className="space-y-6" onSubmit={handleSubmit}>
-            {error && (
-              <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
-                {error}
-              </div>
-            )}
+            <AnimatePresence>
+              {error && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm"
+                >
+                  {error}
+                </motion.div>
+              )}
+            </AnimatePresence>
             
             <div className="space-y-4">
               <div>
                 <label className="block text-xs font-semibold tracking-widest uppercase text-secondaryText mb-2">Email</label>
-                <input 
-                  type="email" 
+                <input
+                  type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  className="w-full obsidian-input"
+                  className="w-full obsidian-input transition-transform duration-200 focus:scale-[1.01]"
                   placeholder="admin@agentos.io"
                   required
                 />
@@ -94,34 +102,37 @@ const Login = () => {
                 <div className="flex justify-between items-center mb-2">
                   <label className="block text-xs font-semibold tracking-widest uppercase text-secondaryText">Password</label>
                 </div>
-                <input 
-                  type="password" 
+                <input
+                  type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full obsidian-input"
+                  className="w-full obsidian-input transition-transform duration-200 focus:scale-[1.01]"
                   placeholder="••••••••"
                   required
                 />
               </div>
             </div>
 
-            <button 
-              type="submit" 
+            <motion.button
+              type="submit"
               disabled={isLoading}
+              whileTap={{ scale: 0.96 }}
+              whileHover={{ scale: 1.01 }}
               className="w-full btn-primary py-3 flex justify-center items-center shadow-glow-cyan mt-8 disabled:opacity-50"
             >
               {isLoading ? 'Authenticating...' : 'Authenticate Session'}
-            </button>
+            </motion.button>
             
             <p className="text-center text-sm text-secondaryText mt-6">
               No access protocol?{' '}
-              <button 
+              <motion.button
                 type="button"
+                whileTap={{ scale: 0.95 }}
                 onClick={() => navigate('/signup')}
                 className="text-primary hover:text-primary-container"
               >
                 Sign Up
-              </button>
+              </motion.button>
             </p>
           </form>
         </motion.div>

@@ -9,7 +9,7 @@ from typing import List, Tuple
 
 from sqlalchemy import text
 
-from app.memory.long_term import db
+from ..memory.long_term import db
 
 
 MIGRATIONS_DIR = Path(__file__).parent.parent.parent / "migrations"

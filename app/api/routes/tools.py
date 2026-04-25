@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
@@ -17,6 +18,10 @@ class ToolInfo(BaseModel):
     type: str
     status: str
     parameters: Dict[str, Any]
+    category: str = "general"
+    version: str = "1.0.0"
+    health_status: str = "unknown"
+    tags: List[str] = []
 
 
 class ToolRegisterRequest(BaseModel):
@@ -96,70 +101,13 @@ async def list_tools(_: object = Depends(get_current_user)):
                 type=getattr(t, "type", getattr(t, "tool_type", "unknown")),
                 status=getattr(t, "status", "active"),
                 parameters=getattr(t, "parameters_schema", {}) or {},
+                category=getattr(t, "category", "general"),
+                version=getattr(t, "version", "1.0.0"),
+                health_status=getattr(t, "health_status", "unknown"),
+                tags=getattr(t, "tags", []),
             ).model_dump())
 
     return combined
-
-
-@router.get("/{tool_name}", response_model=ToolInfo)
-async def get_tool(tool_name: str, _: object = Depends(get_current_user)):
-    registry_tool = tool_registry.get(tool_name)
-    if registry_tool:
-        schema = registry_tool.get_schema()
-        return ToolInfo(
-            name=schema["name"],
-            description=schema["description"],
-            type=getattr(registry_tool, "tool_type", "builtin"),
-            status="active",
-            parameters=schema.get("parameters", {}),
-        )
-
-    tool = await tool_repo.get_by_name(tool_name)
-    if not tool:
-        raise HTTPException(status_code=404, detail=f"Tool {tool_name} not found")
-
-    return ToolInfo(
-        name=tool.name,
-        description=tool.description,
-        type=getattr(tool, "type", getattr(tool, "tool_type", "builtin")),
-        status=getattr(tool, "status", "active"),
-        parameters=getattr(tool, "parameters_schema", {}) or {},
-    )
-
-
-@router.post("", response_model=ToolRegisterResponse)
-async def register_tool(request: ToolRegisterRequest, current_user: object = Depends(get_current_user)):
-    tool = DynamicTool(request.name, request.description, request.parameters_schema, request.template)
-    tool_registry.register(tool)
-    await tool_repo.upsert(
-        name=request.name,
-        description=request.description,
-        tool_type=request.type,
-        parameters_schema=request.parameters_schema,
-        template=request.template,
-        status="active",
-    )
-    logger.info(f"User {getattr(current_user, 'id', 'unknown')} registered tool {request.name}")
-    return ToolRegisterResponse(
-        success=True,
-        tool=ToolInfo(
-            name=tool.name,
-            description=tool.description,
-            type=request.type,
-            status="active",
-            parameters=request.parameters_schema,
-        ),
-    )
-
-
-@router.post("/{tool_name}/execute")
-async def execute_tool(tool_name: str, request: ToolExecuteRequest, current_user: object = Depends(get_current_user)):
-    logger.info(f"User {getattr(current_user, 'id', 'unknown')} executing tool {tool_name}")
-    result = await tool_registry.execute(tool_name, request.parameters)
-    if not result.success:
-        logger.warning(f"Tool {tool_name} execution failed: {result.error}")
-        raise HTTPException(status_code=400, detail=result.error or "Tool execution failed")
-    return result
 
 
 @router.post("/mcp-servers", response_model=MCPServerInfo)
@@ -202,3 +150,100 @@ async def check_mcp_server_health(name: str, _: object = Depends(get_current_use
 async def discover_mcp_server_tools(name: str, _: object = Depends(get_current_user)):
     tools = await mcp_registry.discover_tools(name)
     return tools
+
+
+@router.get("/categories")
+async def list_tool_categories(_: object = Depends(get_current_user)):
+    categories = tool_registry.get_categories()
+    return {"categories": categories}
+
+
+@router.get("/health")
+async def list_tools_health(_: object = Depends(get_current_user)):
+    tool_names = list(tool_registry.tools.keys())
+    results = await asyncio.gather(*(tool_registry.health_check(name) for name in tool_names))
+    return results
+
+
+@router.get("/{tool_name}/health")
+async def get_tool_health(tool_name: str, _: object = Depends(get_current_user)):
+    result = await tool_registry.health_check(tool_name)
+    if result["status"] == "not_found":
+        raise HTTPException(status_code=404, detail=f"Tool {tool_name} not found")
+    return result
+
+
+@router.get("/{tool_name}", response_model=ToolInfo)
+async def get_tool(tool_name: str, _: object = Depends(get_current_user)):
+    registered = tool_registry.tools.get(tool_name)
+    if registered and registered.tool:
+        schema = registered.tool.get_schema()
+        return ToolInfo(
+            name=schema["name"],
+            description=schema["description"],
+            type=getattr(registered.tool, "tool_type", "builtin"),
+            status="active",
+            parameters=schema.get("parameters", {}),
+            category=registered.category,
+            version=registered.version,
+            health_status=registered.health_status,
+            tags=registered.tags,
+        )
+
+    tool = await tool_repo.get_by_name(tool_name)
+    if not tool:
+        raise HTTPException(status_code=404, detail=f"Tool {tool_name} not found")
+
+    return ToolInfo(
+        name=tool.name,
+        description=tool.description,
+        type=getattr(tool, "type", getattr(tool, "tool_type", "builtin")),
+        status=getattr(tool, "status", "active"),
+        parameters=getattr(tool, "parameters_schema", {}) or {},
+        category=getattr(tool, "category", "general"),
+        version=getattr(tool, "version", "1.0.0"),
+        health_status=getattr(tool, "health_status", "unknown"),
+        tags=getattr(tool, "tags", []),
+    )
+
+
+@router.post("", response_model=ToolRegisterResponse)
+async def register_tool(request: ToolRegisterRequest, current_user: object = Depends(get_current_user)):
+    tool = DynamicTool(request.name, request.description, request.parameters_schema, request.template)
+    tool_registry.register(tool)
+    await tool_repo.upsert(
+        name=request.name,
+        description=request.description,
+        tool_type=request.type,
+        parameters_schema=request.parameters_schema,
+        template=request.template,
+        status="active",
+    )
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} registered tool {request.name}")
+    return ToolRegisterResponse(
+        success=True,
+        tool=ToolInfo(
+            name=tool.name,
+            description=tool.description,
+            type=request.type,
+            status="active",
+            parameters=request.parameters_schema,
+            category="general",
+            version="1.0.0",
+            health_status="unknown",
+            tags=[],
+        ),
+    )
+
+
+@router.post("/{tool_name}/execute")
+async def execute_tool(tool_name: str, request: ToolExecuteRequest, current_user: object = Depends(get_current_user)):
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} executing tool {tool_name}")
+    result = await tool_registry.execute(tool_name, request.parameters)
+    if not result.success:
+        logger.warning(f"Tool {tool_name} execution failed: {result.error}")
+        raise HTTPException(status_code=400, detail=result.error or "Tool execution failed")
+    return result
+
+
+

@@ -9,7 +9,14 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("filesystem")
 
 # Security: restrict to working directory and common safe paths
-SAFE_ROOTS = [os.getcwd(), os.path.expanduser("~")]
+_home = os.path.expanduser("~")
+SAFE_ROOTS = [
+    os.getcwd(),
+    _home,
+    os.path.join(_home, "Desktop"),
+    os.path.join(_home, "Documents"),
+    os.path.join(_home, "Downloads"),
+]
 
 
 def _resolve_path(path: str) -> Path:

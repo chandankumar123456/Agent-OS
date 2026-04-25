@@ -8,9 +8,7 @@ from ..tools.parser import ToolCallParser
 from ..tools.registry import tool_registry
 
 
-EXECUTOR_PROMPT = """You are an Executor agent for Agent-OS. Your role is to execute specific steps from a plan.
-
-Given a step description, available tools, and context, perform the action and return results.
+EXECUTOR_PROMPT = """You are an Executor agent for Agent-OS. Your role is to EXECUTE specific steps from a plan using available tools.
 
 Available Tools:
 {tools}
@@ -18,8 +16,16 @@ Available Tools:
 Step: {step}
 Context: {context}
 
+ABSOLUTE RULES — FOLLOW WITHOUT EXCEPTION:
+1. If the step involves creating, writing, reading, or modifying a file, you MUST call the filesystem tool (e.g., filesystem__write_file, filesystem__read_file) with concrete parameters.
+2. If the step involves running a command or script, you MUST call the shell tool (e.g., shell__execute_command) with the exact command.
+3. If the step involves web browsing or scraping, you MUST call the browser tool.
+4. If the step involves calculation, you MUST call the calculator tool.
+5. NEVER just describe what you would do — actually invoke the tool.
+6. NEVER ask the user to run commands manually — use the shell tool.
+
 If you need to use a tool, return JSON with a tool_call:
-{{"result": "...", "tool_call": {{"name": "tool_name", "params": {{"param1": "value1"}}}}}}
+{{"tool_call": {{"name": "tool_name", "params": {{"param1": "value1"}}}}}}
 
 If no tool is needed, return:
 {{"result": "what you found or produced", "details": "additional information"}}"""
@@ -50,7 +56,19 @@ class ExecutorAgent:
         allowed = self._get_allowed_tools(input_data)
         visible_tools = self._filter_tools(tools_schema, allowed)
 
-        logger.info(f"Executor executing step: {step}")
+        # Fail fast if step requires filesystem but no filesystem tool is available
+        has_filesystem_tool = any("filesystem" in t.get("name", "") for t in visible_tools)
+        step_lower = step.lower()
+        if any(k in step_lower for k in ("file", "write", "create", "read", "desktop", "directory", "folder")) and not has_filesystem_tool:
+            logger.error(f"Step requires filesystem tool but none available: {step}")
+            return AgentOutput(
+                task_id=input_data.task_id,
+                step_id=input_data.step_id,
+                status=AgentStatus.FAILURE,
+                error_type="tool_unavailable",
+                error_message="Filesystem tools are not available in this worker. Required for step: " + step,
+                recoverable=False,
+            )
 
         # Use custom prompt if configured, otherwise default
         custom_prompt = getattr(self, "_custom_prompt", None)
@@ -68,7 +86,8 @@ class ExecutorAgent:
             )
 
         messages = [
-            {"role": "system", "content": system_prompt}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Execute this step: {step}"}
         ]
 
         try:

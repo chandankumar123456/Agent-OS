@@ -22,12 +22,59 @@ class WorkflowNode:
     approval_config: Optional[Dict[str, Any]] = None
 
 
+WORKFLOW_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    "sequential_review": {
+        "nodes": [
+            {"id": "plan", "step": "Plan review", "agent_type": "planner", "depends_on": [], "node_type": "agent"},
+            {"id": "exec", "step": "Execute tasks", "agent_type": "executor", "depends_on": ["plan"], "node_type": "agent"},
+            {"id": "verify", "step": "Verify output", "agent_type": "verifier", "depends_on": ["exec"], "node_type": "agent"},
+            {"id": "wait", "step": "Wait for approval", "agent_type": "executor", "depends_on": ["verify"], "node_type": "wait", "approval_config": {"required_role": "admin"}},
+        ]
+    },
+    "parallel_research": {
+        "nodes": [
+            {"id": "plan", "step": "Plan research", "agent_type": "planner", "depends_on": [], "node_type": "agent"},
+            {"id": "research_a", "step": "Research topic A", "agent_type": "executor", "depends_on": ["plan"], "node_type": "agent"},
+            {"id": "research_b", "step": "Research topic B", "agent_type": "executor", "depends_on": ["plan"], "node_type": "agent"},
+            {"id": "research_c", "step": "Research topic C", "agent_type": "executor", "depends_on": ["plan"], "node_type": "agent"},
+            {"id": "synthesize", "step": "Synthesize findings", "agent_type": "verifier", "depends_on": ["research_a", "research_b", "research_c"], "node_type": "agent"},
+        ]
+    },
+    "error_recovery": {
+        "nodes": [
+            {"id": "attempt", "step": "Attempt primary operation", "agent_type": "executor", "depends_on": [], "node_type": "agent"},
+            {"id": "decision", "step": "Check if attempt succeeded", "agent_type": "executor", "depends_on": ["attempt"], "node_type": "decision", "condition": "context.get('attempt_success') == True"},
+            {"id": "fallback", "step": "Run fallback operation", "agent_type": "executor", "depends_on": ["decision"], "node_type": "agent"},
+        ]
+    },
+}
+
+
 class WorkflowEngine:
     def __init__(self):
         self.workflows: Dict[str, List[WorkflowNode]] = {}
+        self._event_callbacks: List[Callable[[str, Dict[str, Any]], Awaitable[None]]] = []
 
     def register_workflow(self, name: str, nodes: List[WorkflowNode]) -> None:
         self.workflows[name] = nodes
+
+    def on_event(self, callback: Callable[[str, Dict[str, Any]], Awaitable[None]]) -> None:
+        self._event_callbacks.append(callback)
+
+    async def _emit(self, event: str, data: Dict[str, Any]) -> None:
+        for callback in self._event_callbacks:
+            await callback(event, data)
+
+    def list_templates(self) -> List[Dict[str, Any]]:
+        return [
+            {"id": key, "name": key.replace("_", " ").title(), "definition": value}
+            for key, value in WORKFLOW_TEMPLATES.items()
+        ]
+
+    def load_template(self, template_id: str) -> Dict[str, Any]:
+        if template_id not in WORKFLOW_TEMPLATES:
+            raise ValueError(f"Unknown template: {template_id}")
+        return WORKFLOW_TEMPLATES[template_id]
 
     def load_workflow(self, spec: Dict[str, Any]) -> List[WorkflowNode]:
         nodes = []
@@ -251,15 +298,20 @@ class WorkflowEngine:
                 continue
 
             async def execute_node(node: WorkflowNode) -> tuple[str, Dict[str, Any]]:
-                if semaphore:
-                    async with semaphore:
+                await self._emit("node.started", {"node_id": node.id, "step": node.step})
+                try:
+                    if semaphore:
+                        async with semaphore:
+                            results[node.id]["status"] = "running"
+                            output = await runner(node, running_context)
+                    else:
                         results[node.id]["status"] = "running"
                         output = await runner(node, running_context)
-                        return node.id, output
-                else:
-                    results[node.id]["status"] = "running"
-                    output = await runner(node, running_context)
+                    await self._emit("node.completed", {"node_id": node.id, "output": output})
                     return node.id, output
+                except Exception as exc:
+                    await self._emit("node.failed", {"node_id": node.id, "error": str(exc)})
+                    raise
 
             node_outputs = await asyncio.gather(*(execute_node(node) for node in runnable))
 
@@ -268,6 +320,7 @@ class WorkflowEngine:
                 results[node_id]["output"] = output
                 completed.add(node_id)
 
+        await self._emit("workflow.completed", {"results": results})
         return {
             "nodes": results,
             "edges": [

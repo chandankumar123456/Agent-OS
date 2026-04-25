@@ -16,6 +16,7 @@ from .models import (
     TraceModel,
     NodeTraceModel,
     SpanModel,
+    TokenUsageModel,
     ToolModel,
     MCPServerModel,
     AgentModel,
@@ -23,6 +24,7 @@ from .models import (
     ConfigModel,
     GuardrailRuleModel,
     CheckpointModel,
+    DeploymentModel,
 )
 from ..config.settings import settings
 from ..logs.logger import logger
@@ -789,6 +791,73 @@ class ConfigRepository:
             return defaults
 
 
+class DeploymentRepository:
+    async def create(
+        self,
+        user_id: str,
+        workflow_id: str,
+        name: str,
+        endpoint_path: str,
+        auth_type: str = "none",
+        api_key_hash: Optional[str] = None,
+        description: Optional[str] = None,
+        status: str = "active",
+    ) -> DeploymentModel:
+        async with db.get_session() as session:
+            deployment = DeploymentModel(
+                user_id=user_id,
+                workflow_id=workflow_id,
+                name=name,
+                endpoint_path=endpoint_path,
+                auth_type=auth_type,
+                api_key_hash=api_key_hash,
+                description=description,
+                status=status,
+            )
+            session.add(deployment)
+            await session.commit()
+            await session.refresh(deployment)
+            return deployment
+
+    async def get_by_id(self, deployment_id: str) -> Optional[DeploymentModel]:
+        async with db.get_session() as session:
+            result = await session.execute(select(DeploymentModel).where(DeploymentModel.id == deployment_id))
+            return result.scalar_one_or_none()
+
+    async def get_by_path(self, endpoint_path: str) -> Optional[DeploymentModel]:
+        async with db.get_session() as session:
+            result = await session.execute(select(DeploymentModel).where(DeploymentModel.endpoint_path == endpoint_path))
+            return result.scalar_one_or_none()
+
+    async def list_by_user(self, user_id: str) -> List[DeploymentModel]:
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(DeploymentModel)
+                .where(DeploymentModel.user_id == user_id)
+                .order_by(DeploymentModel.created_at.desc())
+            )
+            return result.scalars().all()
+
+    async def update_status(self, deployment_id: str, status: str) -> Optional[DeploymentModel]:
+        async with db.get_session() as session:
+            result = await session.execute(select(DeploymentModel).where(DeploymentModel.id == deployment_id))
+            deployment = result.scalar_one_or_none()
+            if deployment:
+                deployment.status = status
+                await session.commit()
+                await session.refresh(deployment)
+            return deployment
+
+    async def delete(self, deployment_id: str) -> Optional[DeploymentModel]:
+        async with db.get_session() as session:
+            result = await session.execute(select(DeploymentModel).where(DeploymentModel.id == deployment_id))
+            deployment = result.scalar_one_or_none()
+            if deployment:
+                await session.delete(deployment)
+                await session.commit()
+            return deployment
+
+
 class GuardrailRuleRepository:
     async def create(
         self,
@@ -838,6 +907,60 @@ class GuardrailRuleRepository:
             return rule
 
 
+class TokenUsageRepository:
+    async def create(
+        self,
+        task_id: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+        cost_usd: float,
+    ) -> TokenUsageModel:
+        async with db.get_session() as session:
+            usage = TokenUsageModel(
+                task_id=task_id,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                cost_usd=cost_usd,
+            )
+            session.add(usage)
+            await session.commit()
+            await session.refresh(usage)
+            return usage
+
+    async def get_total_tokens(self) -> int:
+        from sqlalchemy import func
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(func.coalesce(func.sum(TokenUsageModel.total_tokens), 0))
+            )
+            return result.scalar() or 0
+
+    async def get_total_tokens_today(self) -> int:
+        from sqlalchemy import func
+        async with db.get_session() as session:
+            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            result = await session.execute(
+                select(func.coalesce(func.sum(TokenUsageModel.total_tokens), 0))
+                .where(TokenUsageModel.created_at >= today_start)
+            )
+            return result.scalar() or 0
+
+    async def get_usage_by_model(self, limit: int = 10):
+        from sqlalchemy import func
+        async with db.get_session() as session:
+            result = await session.execute(
+                select(TokenUsageModel.model, func.sum(TokenUsageModel.total_tokens))
+                .group_by(TokenUsageModel.model)
+                .order_by(func.sum(TokenUsageModel.total_tokens).desc())
+                .limit(limit)
+            )
+            return result.all()
+
+
 task_repo = TaskRepository()
 workflow_repo = WorkflowRepository()
 workflow_node_repo = WorkflowNodeRepository()
@@ -846,9 +969,11 @@ user_repo = UserRepository()
 trace_repo = TraceRepository()
 node_trace_repo = NodeTraceRepository()
 span_repo = SpanRepository()
+token_usage_repo = TokenUsageRepository()
 tool_repo = ToolRepository()
 mcp_server_repo = MCPServerRepository()
 agent_repo = AgentRepository()
 message_repo = MessageRepository()
 config_repo = ConfigRepository()
+deployment_repo = DeploymentRepository()
 guardrail_rule_repo = GuardrailRuleRepository()

@@ -3,6 +3,7 @@ import asyncio
 import sys
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
+from contextlib import AsyncExitStack
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -32,6 +33,7 @@ class MCPClientManager:
     def __init__(self):
         self.connections: Dict[str, ServerConnection] = {}
         self._tool_to_server: Dict[str, str] = {}
+        self._exit_stacks: Dict[str, AsyncExitStack] = {}
 
     # ── Connection management ──────────────────────────────────────────
 
@@ -54,30 +56,46 @@ class MCPClientManager:
             env=env,
         )
 
-        read_stream, write_stream = await stdio_client(params).__aenter__()
-        session = await ClientSession(read_stream, write_stream).__aenter__()
-        await session.initialize()
+        exit_stack = AsyncExitStack()
+        try:
+            # Enter stdio_client context
+            read_stream, write_stream = await exit_stack.enter_async_context(
+                stdio_client(params)
+            )
+            # Enter ClientSession context
+            session = await exit_stack.enter_async_context(
+                ClientSession(read_stream, write_stream)
+            )
+            # Initialize with timeout to avoid hanging on Windows
+            await asyncio.wait_for(session.initialize(), timeout=10.0)
 
-        conn = ServerConnection(name=name, session=session, transport="stdio")
-        self.connections[name] = conn
+            conn = ServerConnection(name=name, session=session, transport="stdio")
+            self.connections[name] = conn
+            self._exit_stacks[name] = exit_stack
 
-        # Discover tools
-        tools_resp = await session.list_tools()
-        conn.tools = [
-            {
-                "name": self._tool_name(name, t.name),
-                "original_name": t.name,
-                "server": name,
-                "description": t.description or "",
-                "input_schema": t.inputSchema if hasattr(t, "inputSchema") else {},
-            }
-            for t in (tools_resp.tools if hasattr(tools_resp, "tools") else [])
-        ]
-        for tool in conn.tools:
-            self._tool_to_server[tool["name"]] = name
+            # Discover tools
+            tools_resp = await session.list_tools()
+            conn.tools = [
+                {
+                    "name": self._tool_name(name, t.name),
+                    "original_name": t.name,
+                    "server": name,
+                    "description": t.description or "",
+                    "input_schema": t.inputSchema if hasattr(t, "inputSchema") else {},
+                }
+                for t in (tools_resp.tools if hasattr(tools_resp, "tools") else [])
+            ]
+            for tool in conn.tools:
+                self._tool_to_server[tool["name"]] = name
 
-        logger.info(f"MCP server '{name}' connected with {len(conn.tools)} tools")
-        return conn
+            logger.info(f"MCP server '{name}' connected with {len(conn.tools)} tools")
+            return conn
+        except asyncio.TimeoutError:
+            await exit_stack.aclose()
+            raise RuntimeError(f"MCP server '{name}' initialization timed out")
+        except Exception:
+            await exit_stack.aclose()
+            raise
 
     async def connect_http(self, name: str, url: str) -> ServerConnection:
         """Connect to an MCP server via HTTP/SSE transport.
@@ -93,10 +111,12 @@ class MCPClientManager:
             return
         for tool in conn.tools:
             self._tool_to_server.pop(tool["name"], None)
-        try:
-            await conn.session.__aexit__(None, None, None)
-        except Exception as e:
-            logger.warning(f"Error disconnecting MCP server '{name}': {e}")
+        exit_stack = self._exit_stacks.pop(name, None)
+        if exit_stack:
+            try:
+                await exit_stack.aclose()
+            except Exception as e:
+                logger.warning(f"Error disconnecting MCP server '{name}': {e}")
         logger.info(f"MCP server '{name}' disconnected")
 
     async def disconnect_all(self) -> None:
@@ -150,6 +170,8 @@ class MCPClientManager:
         for name, command, args in servers:
             try:
                 await self.connect_stdio(name, command, args)
+            except asyncio.CancelledError:
+                logger.warning(f"MCP server '{name}' connection was cancelled")
             except Exception as e:
                 logger.error(f"Failed to start system MCP server '{name}': {e}")
 

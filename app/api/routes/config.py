@@ -40,6 +40,12 @@ VALID_CONFIG_TYPES = {
     "RATE_LIMIT_PER_MINUTE": (int, 1, None),
     "MAX_ACTIVE_TASKS_PER_USER": (int, 1, None),
     "MAX_TASK_EXECUTION_ATTEMPTS": (int, 1, 10),
+    # Provider API keys (stored in config for now; consider secrets manager in production)
+    "OPENAI_API_KEY": (str, None, None),
+    "ANTHROPIC_API_KEY": (str, None, None),
+    "GOOGLE_API_KEY": (str, None, None),
+    "OLLAMA_BASE_URL": (str, None, None),
+    "ENABLED_PROVIDERS": (str, None, None),
 }
 
 

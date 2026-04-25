@@ -169,8 +169,9 @@ def compile_workflow_graph(
             builder.add_edge(from_node, to_node)
 
     # Set entry point to first node
-    if nodes:
-        builder.set_entry_point(nodes[0]["id"])
+    if not nodes:
+        raise ValueError("Workflow must have at least one node")
+    builder.set_entry_point(nodes[0]["id"])
 
     graph = builder.compile(checkpointer=checkpointer)
     logger.info("Compiled workflow graph")

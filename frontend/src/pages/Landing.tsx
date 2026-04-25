@@ -1,6 +1,6 @@
 import { motion, type Variants } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
-import { Layers, Activity, BrainCircuit, ArrowRight } from 'lucide-react';
+import { Layers, Activity, BrainCircuit, ArrowRight, Search, GitBranch, Zap, Play } from 'lucide-react';
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -22,25 +22,34 @@ const Landing = () => {
     <div className="min-h-screen bg-background relative overflow-hidden flex flex-col">
       {/* Navbar */}
       <nav className="w-full flex justify-between items-center px-12 py-6 absolute top-0 z-50">
-        <div className="flex items-center gap-2">
+        <motion.div
+          className="flex items-center gap-2"
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5 }}
+        >
           <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
             <Layers className="w-4 h-4 text-primary" />
           </div>
           <span className="font-semibold text-lg tracking-tight">AgentOS</span>
-        </div>
+        </motion.div>
         <div className="flex items-center gap-6">
-          <button 
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: 1.02 }}
             onClick={() => navigate('/login')}
             className="text-secondaryText hover:text-primaryText transition-colors text-sm font-medium"
           >
             Sign In
-          </button>
-          <button 
+          </motion.button>
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            whileHover={{ scale: 1.02 }}
             onClick={() => navigate('/signup')}
             className="btn-primary flex items-center gap-2"
           >
             Get Started <ArrowRight className="w-4 h-4" />
-          </button>
+          </motion.button>
         </div>
       </nav>
 
@@ -74,12 +83,25 @@ const Landing = () => {
           </motion.p>
           
           <motion.div variants={itemVariants} className="flex justify-center gap-4">
-            <button 
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              whileHover={{ scale: 1.02 }}
               onClick={() => navigate('/login')}
               className="btn-primary px-8 py-4 text-lg shadow-glow-cyan"
             >
               Initialize Workspace
-            </button>
+            </motion.button>
+            <motion.button
+              whileTap={{ scale: 0.96 }}
+              whileHover={{ scale: 1.02, backgroundColor: 'rgba(53,52,54,0.5)' }}
+              onClick={() => {
+                const el = document.getElementById('demo-section');
+                if (el) el.scrollIntoView({ behavior: 'smooth' });
+              }}
+              className="px-8 py-4 text-lg rounded-lg border border-outline/20 text-primaryText hover:bg-surface-highest transition-colors flex items-center gap-2"
+            >
+              <Play className="w-4 h-4" /> See Demo
+            </motion.button>
           </motion.div>
         </motion.div>
 
@@ -92,10 +114,11 @@ const Landing = () => {
           className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-6xl w-full mt-32 mb-24"
         >
           {features.map((feature, idx) => (
-            <motion.div 
+            <motion.div
               key={idx}
               variants={itemVariants}
-              whileHover={{ scale: 1.02 }}
+              whileHover={{ scale: 1.02, y: -4, boxShadow: '0 8px 30px rgba(0,229,255,0.08)' }}
+              transition={{ type: 'spring', stiffness: 300, damping: 20 }}
               className="obsidian-glass p-8 rounded-2xl flex flex-col gap-4 group cursor-pointer"
             >
               <div className="w-12 h-12 rounded-xl bg-surface-highest flex items-center justify-center transition-colors group-hover:bg-primary/10">
@@ -107,6 +130,54 @@ const Landing = () => {
               </p>
             </motion.div>
           ))}
+        </motion.div>
+
+        {/* Demo Section */}
+        <motion.div
+          id="demo-section"
+          variants={containerVariants}
+          initial="hidden"
+          whileInView="visible"
+          viewport={{ once: true, margin: "-100px" }}
+          className="max-w-6xl w-full mb-24 scroll-mt-24"
+        >
+          <div className="text-center mb-10">
+            <h2 className="text-3xl font-bold tracking-tight mb-3">What You Can Build</h2>
+            <p className="text-secondaryText max-w-xl mx-auto">
+              Explore example agents and workflows you can create with AgentOS.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {demoAgents.map((agent, idx) => (
+              <motion.div
+                key={idx}
+                variants={itemVariants}
+                whileHover={{ scale: 1.02, y: -4, boxShadow: '0 8px 30px rgba(0,229,255,0.08)' }}
+                transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+                className="obsidian-glass p-6 rounded-2xl flex flex-col gap-4 group cursor-default border border-outline/10 hover:border-primary/30 transition-all"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+                    <agent.icon className="w-5 h-5 text-primary" />
+                  </div>
+                  <h3 className="text-lg font-semibold">{agent.title}</h3>
+                </div>
+                <p className="text-secondaryText text-sm leading-relaxed">
+                  {agent.description}
+                </p>
+                <div className="mt-auto flex flex-wrap gap-2">
+                  {agent.tags.map((tag) => (
+                    <span
+                      key={tag}
+                      className="text-[10px] uppercase tracking-wider font-semibold px-2 py-1 rounded bg-surface-highest text-secondaryText border border-outline/10"
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                </div>
+              </motion.div>
+            ))}
+          </div>
         </motion.div>
       </main>
     </div>
@@ -128,6 +199,27 @@ const features = [
     icon: Activity,
     title: "Tonal Authority",
     description: "Deep observability and runtime tracking. Command your agents with full visibility into their operations."
+  }
+];
+
+const demoAgents = [
+  {
+    icon: Search,
+    title: "Research Agent",
+    description: "Autonomously gathers information from multiple sources, synthesizes findings, and delivers structured summaries with citations.",
+    tags: ["Autonomous", "Summarization", "Web"]
+  },
+  {
+    icon: GitBranch,
+    title: "Workflow Orchestrator",
+    description: "Chains specialized agents into deterministic pipelines. Routes outputs between planners, verifiers, and executors with retry logic.",
+    tags: ["Pipeline", "Multi-Agent", "Reliability"]
+  },
+  {
+    icon: Zap,
+    title: "Guardian Agent",
+    description: "Validates outputs against policies, detects hallucinations, and enforces safety constraints before results reach users.",
+    tags: ["Safety", "Validation", "Policy"]
   }
 ];
 

@@ -62,6 +62,10 @@ def on_worker_process_init(**kwargs):
         loop.run_until_complete(redis_client.connect())
 
         loop.run_until_complete(_ensure_runtime_initialized())
+
+        # Start MCP system servers so filesystem/shell/browser tools are available
+        from ..mcp.client_manager import mcp_client_manager
+        loop.run_until_complete(mcp_client_manager.start_system_servers())
         logger.info("AgentRuntime eagerly initialized in Celery worker process")
     except Exception as e:
         logger.error(f"Celery worker eager initialization failed: {e}")
@@ -134,7 +138,7 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
             raise
 
     loop = _worker_event_loop
-    if loop is None:
+    if loop is None or loop.is_closed():
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:

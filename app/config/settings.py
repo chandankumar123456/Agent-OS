@@ -18,6 +18,10 @@ class Settings(BaseSettings):
 
     OPENAI_API_KEY: Optional[str] = None
     OPENAI_MODEL: str = "gpt-4o"
+    ANTHROPIC_API_KEY: Optional[str] = None
+    GOOGLE_API_KEY: Optional[str] = None
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    ENABLED_PROVIDERS: str = "openai"
     EXA_API_KEY: Optional[str] = None
 
     MAX_STEPS_DEFAULT: int = 10
@@ -25,7 +29,7 @@ class Settings(BaseSettings):
     MAX_RETRIES: int = 3
 
     API_V1_PREFIX: str = "/api/v1"
-    CORS_ORIGINS: str = "*"
+    CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8000,http://localhost:4173"
 
     USE_CELERY: bool = True
     API_KEYS: Optional[str] = None
@@ -85,8 +89,13 @@ class Settings(BaseSettings):
             raise ValueError("DATABASE_URL is required")
         if not self.REDIS_URL:
             raise ValueError("REDIS_URL is required")
-        if not self.OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY is required")
+        enabled = [p.strip().lower() for p in self.ENABLED_PROVIDERS.split(",") if p.strip()]
+        if "openai" in enabled and not self.OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY is required when OpenAI provider is enabled")
+        if "anthropic" in enabled and not self.ANTHROPIC_API_KEY:
+            raise ValueError("ANTHROPIC_API_KEY is required when Anthropic provider is enabled")
+        if "google" in enabled and not self.GOOGLE_API_KEY:
+            raise ValueError("GOOGLE_API_KEY is required when Google provider is enabled")
         if not self.SECRET_KEY:
             raise ValueError(
                 "SECRET_KEY is required. Set a persistent SECRET_KEY in your environment "

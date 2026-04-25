@@ -64,7 +64,10 @@ def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if not payload.get("sub"):
             return None
-        if payload.get("exp") and int(payload["exp"]) < int(datetime.now(timezone.utc).timestamp()):
+        try:
+            if payload.get("exp") and int(payload["exp"]) < int(datetime.now(timezone.utc).timestamp()):
+                return None
+        except (ValueError, TypeError):
             return None
         return payload
     except JWTError as e:

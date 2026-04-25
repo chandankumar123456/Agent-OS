@@ -1,19 +1,26 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, BrainCircuit, Activity, Wrench, Settings, LogOut, Terminal, Waypoints, GitBranch } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { LayoutDashboard, BrainCircuit, BarChart3, Wrench, Settings, LogOut, Terminal, Waypoints, GitBranch, MessageSquare, BookOpen } from 'lucide-react';
+import { motion, useScroll, useSpring } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
+import { HelpWidget } from './Onboarding/HelpWidget';
+import { CursorGlow } from './CursorGlow';
+import { layoutId, navItemInteractions, pageTransition } from '../lib/animations';
 
 const Layout = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { logout, user } = useAuth();
+  const { scrollYProgress } = useScroll();
+  const scaleX = useSpring(scrollYProgress, { stiffness: 100, damping: 30, restDelta: 0.001 });
 
   const navItems = [
     { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
     { name: 'Agent Builder', path: '/builder', icon: BrainCircuit },
+    { name: 'Chat', path: '/chat', icon: MessageSquare },
     { name: 'Workflow Orchestrator', path: '/orchestrator', icon: Waypoints },
     { name: 'Workflow Builder', path: '/workflows/builder', icon: GitBranch },
-    { name: 'Runtime Monitor', path: '/monitor', icon: Activity },
+    { name: 'Analytics', path: '/monitor', icon: BarChart3 },
+    { name: 'Knowledge Base', path: '/knowledge', icon: BookOpen },
     { name: 'Tool Registry', path: '/tools', icon: Wrench },
     { name: 'Settings', path: '/settings', icon: Settings },
   ];
@@ -34,18 +41,26 @@ const Layout = () => {
             {navItems.map((item) => {
               const isActive = location.pathname.startsWith(item.path);
               return (
-                <button
+                <motion.button
+                  {...navItemInteractions}
                   key={item.name}
                   onClick={() => navigate(item.path)}
-                  className={`flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 w-full text-left font-medium ${
+                  className={`flex items-center gap-3 px-4 py-2.5 rounded-lg transition-all duration-200 w-full text-left font-medium relative overflow-visible ${
                     isActive 
-                      ? 'bg-surface-high text-primaryText before:w-1 before:h-5 before:bg-primary before:absolute before:left-0 before:rounded-r-full relative overflow-visible' 
+                      ? 'bg-surface-high text-primaryText' 
                       : 'text-secondaryText hover:bg-surface-highest hover:text-primaryText'
                   }`}
                 >
+                  {isActive && (
+                    <motion.div
+                      layoutId={layoutId}
+                      className="absolute left-0 w-1 h-5 bg-primary rounded-r-full"
+                      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                    />
+                  )}
                   <item.icon className={`w-5 h-5 ${isActive ? 'text-primary' : ''}`} />
                   {item.name}
-                </button>
+                </motion.button>
               );
             })}
           </nav>
@@ -60,27 +75,32 @@ const Layout = () => {
               <p className="truncate text-sm">{user?.email}</p>
             </div>
           </div>
-          <button 
+          <motion.button
+            {...navItemInteractions}
             onClick={() => { logout(); navigate('/login'); }}
             className="flex items-center gap-3 px-4 py-2 w-full text-left text-secondaryText hover:text-primaryText hover:bg-surface-highest transition-colors rounded-lg font-medium"
           >
             <LogOut className="w-5 h-5" />
             End Session
-          </button>
+          </motion.button>
         </div>
       </aside>
 
+      <CursorGlow />
       {/* Main Content Area */}
       <main className="flex-1 h-screen overflow-y-auto relative">
         <motion.div
+          className="fixed top-0 left-64 right-0 h-0.5 bg-primary origin-left z-50"
+          style={{ scaleX }}
+        />
+        <motion.div
           key={location.pathname}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3 }}
+          {...pageTransition}
           className="p-8 max-w-7xl mx-auto"
         >
           <Outlet />
         </motion.div>
+        <HelpWidget />
       </main>
     </div>
   );

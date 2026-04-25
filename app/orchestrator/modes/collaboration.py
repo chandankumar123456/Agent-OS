@@ -46,6 +46,8 @@ class CollaborationMode(ModeStrategy):
             constraints=config,
         )
         planner_worker = runtime.get("core_planner")
+        if not planner_worker:
+            raise RuntimeError("core_planner not available in runtime")
         plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input, role="planner")
 
         trace_manager.end_span(plan_span, "success" if plan_result.status == AgentStatus.SUCCESS else "failure")
@@ -64,11 +66,14 @@ class CollaborationMode(ModeStrategy):
 
             # Resolve agent via Router with fallback support
             worker = orchestrator.router.resolve_worker(agent_type)
-            agent_id = worker.agent_id if hasattr(worker, "agent_id") else f"core_{agent_type}"
             if not worker:
                 logger.warning(f"Collaboration mode: agent for role '{agent_type}' not found, falling back to core_executor")
                 worker = runtime.get("core_executor")
                 agent_id = "core_executor"
+            else:
+                agent_id = worker.agent_id if hasattr(worker, "agent_id") else f"core_{agent_type}"
+            if not worker:
+                raise RuntimeError(f"No worker available for agent_type '{agent_type}'")
 
             exec_span = trace_manager.start_span(
                 trace_id=trace_id,
@@ -131,6 +136,8 @@ class CollaborationMode(ModeStrategy):
             context={"steps": step_results},
         )
         verifier_worker = runtime.get("core_verifier")
+        if not verifier_worker:
+            raise RuntimeError("core_verifier not available in runtime")
         verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input, role="verifier")
 
         trace_manager.end_span(verify_span, "success" if verify_result.status == AgentStatus.SUCCESS else "failure")
