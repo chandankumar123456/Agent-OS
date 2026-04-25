@@ -203,7 +203,11 @@ class AgentRuntime:
         logger.info("All agent workers shutdown")
 
     async def load_from_db(self):
-        """Load agents from database and register them."""
+        """Load agents from database and register them.
+
+        If an agent has a specific version configured, load that version's
+        parameters (system_prompt, model, etc.) from the agent_versions table.
+        """
         from ..memory.long_term import agent_repo
         agents = await agent_repo.list_all()
         for agent in agents:
@@ -216,8 +220,56 @@ class AgentRuntime:
                 "max_tokens": agent.max_tokens,
                 "tools": agent.tools or [],
                 "version": agent.version or "1.0.0",
+                "agent_key": agent.agent_key,
             }
+            # If a non-default version is specified, resolve versioned config
+            version = agent.version
+            if version and version != "1.0.0":
+                try:
+                    versioned = await agent_repo.get_version(agent.agent_key, version)
+                    if versioned:
+                        config["system_prompt"] = versioned.system_prompt
+                        config["model"] = versioned.model
+                        config["temperature"] = versioned.temperature
+                        config["max_tokens"] = versioned.max_tokens
+                        config["tools"] = versioned.tools or []
+                        logger.info(
+                            f"Loaded agent {agent.agent_key} version {version} from DB"
+                        )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load version {version} for agent {agent.agent_key}: {e}"
+                    )
             try:
                 await self.register(agent.agent_key, config)
             except Exception as e:
                 logger.warning(f"Failed to load agent {agent.agent_key} from DB: {e}")
+
+    async def load_agent_version(self, agent_key: str, version: str):
+        """Explicitly load a specific agent version into the runtime.
+
+        Creates or updates the worker for the given agent_key using the
+        versioned configuration from the database.
+        """
+        from ..memory.long_term import agent_repo
+        versioned = await agent_repo.get_version(agent_key, version)
+        if not versioned:
+            raise ValueError(f"Version {version} not found for agent {agent_key}")
+        config = {
+            "name": versioned.name,
+            "role": versioned.role,
+            "system_prompt": versioned.system_prompt,
+            "model": versioned.model,
+            "temperature": versioned.temperature,
+            "max_tokens": versioned.max_tokens,
+            "tools": versioned.tools or [],
+            "version": versioned.version,
+            "agent_key": agent_key,
+        }
+        # Reset worker so the new version is picked up on next resolve
+        worker = self.get(agent_key)
+        if worker:
+            await worker.stop()
+            self._workers.pop(agent_key, None)
+        await self.register(agent_key, config)
+        logger.info(f"Runtime loaded agent {agent_key} version {version}")

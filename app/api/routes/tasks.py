@@ -342,7 +342,11 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
 
 
 @router.post("/{task_id}/approve")
-async def approve_task(task_id: UUID, current_user: object = Depends(get_current_user)):
+async def approve_task(
+    task_id: UUID,
+    background_tasks: BackgroundTasks,
+    current_user: object = Depends(get_current_user)
+):
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
     if not db_task or db_task.status != TaskStatus.WAITING_APPROVAL.value:
@@ -360,12 +364,32 @@ async def approve_task(task_id: UUID, current_user: object = Depends(get_current
         f"task:{task_id}",
         Event("task.status_changed", {"status": TaskStatus.RUNNING.value, "task_id": str(task_id)})
     )
-    logger.info(f"User {getattr(current_user, 'id', 'unknown')} approved task {task_id}")
+
+    # Trigger workflow continuation in background so the request returns immediately
+    async def _resume_workflow():
+        try:
+            from ...orchestrator.core import orchestrator
+            config = (db_task.result or {}).get("config", {}) if db_task.result else {}
+            await orchestrator.execute_task(
+                query=db_task.query,
+                config={**config, "mode": config.get("mode", "task")},
+                task_id=task_id,
+                user_id=str(getattr(current_user, "id", "system")),
+            )
+        except Exception as e:
+            logger.error(f"Workflow continuation after approval failed: {e}")
+
+    background_tasks.add_task(_resume_workflow)
+    logger.info(f"User {getattr(current_user, 'id', 'unknown')} approved task {task_id}; resuming workflow")
     return {"task_id": str(task_id), "status": "approved"}
 
 
 @router.post("/{task_id}/reject")
-async def reject_task(task_id: UUID, current_user: object = Depends(get_current_user)):
+async def reject_task(
+    task_id: UUID,
+    background_tasks: BackgroundTasks,
+    current_user: object = Depends(get_current_user)
+):
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
     if not db_task or db_task.status != TaskStatus.WAITING_APPROVAL.value:
@@ -383,6 +407,24 @@ async def reject_task(task_id: UUID, current_user: object = Depends(get_current_
         f"task:{task_id}",
         Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
     )
+
+    # For LangGraph-based executions, resume with rejection so the graph reaches END cleanly
+    async def _resume_rejection():
+        try:
+            from ...orchestrator.core import orchestrator
+            config = (db_task.result or {}).get("config", {}) if db_task.result else {}
+            await orchestrator._execute_with_langgraph(
+                query=db_task.query,
+                config={**config, "mode": config.get("mode", "task")},
+                task_id=task_id,
+                user_id=str(getattr(current_user, "id", "system")),
+                mode=config.get("mode", "task"),
+                resume_value={"approved": False, "reason": "Rejected by user"},
+            )
+        except Exception as e:
+            logger.warning(f"LangGraph rejection resume failed (non-critical): {e}")
+
+    background_tasks.add_task(_resume_rejection)
     logger.info(f"User {getattr(current_user, 'id', 'unknown')} rejected task {task_id}")
     return {"task_id": str(task_id), "status": "rejected"}
 

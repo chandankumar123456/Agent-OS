@@ -1,4 +1,5 @@
 from typing import Dict, Any, Callable
+from datetime import datetime
 from ..logs.logger import logger
 from .bus import MCPBus, MemoryMCPBus
 from .message import MCPMessage
@@ -29,7 +30,27 @@ class MessageRouter:
             logger.info(f"MessageRouter: unregistered {agent_name}")
 
     async def route(self, receiver: str, message: MCPMessage):
-        """Route a message to a specific agent."""
+        """Route a message to a specific agent and log the routing decision."""
         channel = f"agent:{receiver}"
         await self.bus.publish(channel, message)
         logger.info(f"MessageRouter: routed message to {receiver}")
+
+        # Persist routing decision to database for audit/tracing
+        try:
+            from ..memory.long_term import message_repo
+            await message_repo.create(
+                task_id=str(message.task_id),
+                step_id=str(message.step_id) if message.step_id else None,
+                sender="router",
+                receiver=receiver,
+                payload={
+                    "action": "route",
+                    "target_agent": receiver,
+                    "message_id": str(message.message_id),
+                    "original_sender": message.sender_agent,
+                    "original_receiver": message.receiver_agent,
+                    "routed_at": datetime.utcnow().isoformat(),
+                },
+            )
+        except Exception as e:
+            logger.warning(f"Failed to persist routing decision to DB: {e}")

@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from .config.settings import settings
@@ -180,6 +180,12 @@ app.include_router(public_router)
 
 from .api.ws import websocket_endpoint
 app.add_api_websocket_route("/ws/tasks/{task_id}", websocket_endpoint)
+
+from .logs.metrics import metrics_collector
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def prometheus_metrics():
+    return metrics_collector.get_prometheus_format()
 
 
 @app.exception_handler(AgentOSError)

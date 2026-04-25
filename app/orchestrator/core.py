@@ -208,9 +208,10 @@ class Orchestrator:
         user_id: str,
         mode: str,
         resume_state: Optional[Dict[str, Any]] = None,
+        resume_value: Optional[Dict[str, Any]] = None,
     ) -> AgentOutput:
         """Delegate LangGraph execution to TaskRunner."""
-        return await self.task_runner.run(query, config, task_id, user_id, mode, resume_state=resume_state)
+        return await self.task_runner.run(query, config, task_id, user_id, mode, resume_state=resume_state, resume_value=resume_value)
 
     async def execute_task(
         self,
@@ -245,7 +246,7 @@ class Orchestrator:
             except Exception as recovery_err:
                 logger.warning(f"Checkpoint recovery failed for task {task_id}: {recovery_err}")
 
-        # Fallback to legacy mode strategies
+        # falling back to legacy mode strategies
         try:
             from .modes import ModeStrategyFactory
             strategy = ModeStrategyFactory.get(mode)

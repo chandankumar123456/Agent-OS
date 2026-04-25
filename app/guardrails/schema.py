@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any, Dict
 from enum import Enum
 
@@ -28,8 +28,7 @@ class CustomRule(BaseModel):
     condition: Dict[str, Any]
     action: str = "block"
 
-    class Config:
-        extra = "ignore"
+    model_config = ConfigDict(extra="ignore")
 
 
 class GuardrailSchema:

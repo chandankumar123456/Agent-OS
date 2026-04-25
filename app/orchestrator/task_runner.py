@@ -21,6 +21,11 @@ from ..langgraph.graphs import (
     get_checkpointer,
 )
 from ..langgraph.state import AgentState
+
+try:
+    from langgraph.types import Command
+except ImportError:
+    Command = None
 from ..orchestrator.v2.event_bus import event_bus, Event
 from ..capabilities import (
     capability_router,
@@ -94,8 +99,14 @@ class TaskRunner:
         user_id: str,
         mode: str,
         resume_state: Optional[Dict[str, Any]] = None,
+        resume_value: Optional[Dict[str, Any]] = None,
     ) -> AgentOutput:
-        """Execute a task using LangGraph compiled state graphs with capability awareness."""
+        """Execute a task using LangGraph compiled state graphs with capability awareness.
+
+        Args:
+            resume_value: When provided, resumes a graph paused on an interrupt
+                          (e.g., human approval) by passing Command(resume=resume_value).
+        """
         try:
             # ── Capability Classification ────────────────────────────────
             assessment = capability_router.classify(query, str(task_id))
@@ -192,8 +203,12 @@ class TaskRunner:
                 }
             }
 
-            logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
-            final_state = await graph.ainvoke(state, config=thread_config)
+            if resume_value and Command is not None:
+                logger.info(f"[LangGraph] Resuming {mode} graph for task {task_id} with resume_value")
+                final_state = await graph.ainvoke(Command(resume=resume_value), config=thread_config)
+            else:
+                logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
+                final_state = await graph.ainvoke(state, config=thread_config)
 
             # Cleanup environment
             execution_environment.cleanup(str(task_id))

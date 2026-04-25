@@ -30,8 +30,19 @@ class StepExecutor:
         node_type = step_row.get("node_type", "agent")
 
         if node_type == "wait":
-            await workflow_node_repo.update(step_id, status=StepStatus.WAITING_APPROVAL.value)
-            raise WorkflowPausedForApproval(str(step_id), step_row.get("approval_config"))
+            # Check if this node was already approved/rejected in DB (resume scenario)
+            node = await workflow_node_repo.get_by_id(step_id)
+            if node and node.status == StepStatus.APPROVED.value:
+                # Treat as a normal execution node on resume
+                pass
+            elif node and node.status == StepStatus.REJECTED.value:
+                raise UnrecoverableError(
+                    "Workflow node was previously rejected",
+                    ErrorType.VALIDATION_ERROR,
+                )
+            else:
+                await workflow_node_repo.update(step_id, status=StepStatus.WAITING_APPROVAL.value)
+                raise WorkflowPausedForApproval(str(step_id), step_row.get("approval_config"))
 
         await workflow_node_repo.update(step_id, status=StepStatus.RUNNING.value)
 

@@ -1,7 +1,7 @@
 import secrets
 import hashlib
 from fastapi import APIRouter, HTTPException, Depends, Header
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional, List
 from ...memory.long_term import deployment_repo
 from ...api.deps import get_current_user
@@ -25,8 +25,7 @@ class DeploymentResponse(BaseModel):
     status: str
     created_at: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 @router.post("")
 async def create_deployment(body: CreateDeploymentRequest, current_user: object = Depends(get_current_user)):

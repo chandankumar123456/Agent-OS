@@ -58,29 +58,29 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         return
 
     # FastAPI dependency injection resolves Query param to actual string value
-    token_str = str(token) if token else ""
-    if not token_str or token_str == "None":
+    token = str(token) if token else ""
+    if not token or token == "None":
         logger.warning(f"WebSocket missing token for task {task_id}")
         await websocket.close(code=1008, reason="Missing token")
         return
 
     # URL-decode and strip Bearer prefix
-    token_str = urllib.parse.unquote(token_str)
-    token_str = token_str.replace("Bearer ", "").replace("bearer ", "").strip()
+    token = urllib.parse.unquote(token)
+    token = token.replace("Bearer ", "").replace("bearer ", "").strip()
 
     # Validate JWT structure (3 dot-separated segments)
-    segments = token_str.split(".")
+    segments = token.split(".")
     if len(segments) != 3:
         logger.warning(
             f"WebSocket malformed token for task {task_id}: "
-            f"{len(segments)} segments, length={len(token_str)}, "
-            f"preview={token_str[:20]}..."
+            f"{len(segments)} segments, length={len(token)}, "
+            f"preview={token[:20]}..."
         )
         await websocket.close(code=1008, reason="Malformed token")
         return
 
     # Validate JWT token before accepting connection
-    payload = verify_access_token(token_str)
+    payload = verify_access_token(token)
     if not payload:
         logger.warning(f"WebSocket auth failed for task {task_id}")
         await websocket.close(code=1008, reason="Invalid or expired token")

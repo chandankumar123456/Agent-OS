@@ -19,7 +19,7 @@ class RedisClient:
                 return
             except Exception:
                 logger.warning("Existing Redis connection dead, reconnecting")
-                await self.client.close()
+                await self.client.aclose()
                 self.client = None
         if not REDIS_URL:
             raise RuntimeError("REDIS_URL is not configured")
@@ -37,7 +37,7 @@ class RedisClient:
 
     async def disconnect(self):
         if self.client:
-            await self.client.close()
+            await self.client.aclose()
             self.client = None
             logger.info("Redis disconnected")
 

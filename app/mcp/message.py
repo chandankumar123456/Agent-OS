@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID, uuid4
 from datetime import datetime
 from typing import Any, Optional, Dict
@@ -27,8 +27,7 @@ class MCPMessage(BaseModel):
     payload: Payload = Field(default_factory=Payload)
     metadata: Metadata = Field(default_factory=Metadata)
     
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(json_schema_extra={
             "example": {
                 "message_id": "a1b2c3d4-...",
                 "task_id": "e5f6g7h8-...",
@@ -46,4 +45,4 @@ class MCPMessage(BaseModel):
                     "retry_count": 0
                 }
             }
-        }
+        })

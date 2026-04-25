@@ -35,7 +35,7 @@ class RedisPubSubClient:
                     return
                 except Exception:
                     logger.warning("PubSub Redis connection dead, reconnecting")
-                    await self._client.close()
+                    await self._client.aclose()
                     self._client = None
 
             if not REDIS_URL:
