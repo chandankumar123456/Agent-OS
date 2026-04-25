@@ -122,15 +122,15 @@ AgentOS v2 uses **LangGraph StateGraph** as its primary execution engine. All ag
 
 ```mermaid
 graph LR
-    START([START]) --> PLAN[planner_node]
+    BEGIN([BEGIN]) --> PLAN[planner_node]
     PLAN --> EXEC[executor_node]
     EXEC -->|steps remain| EXEC
     EXEC -->|all steps done| VER[verifier_node]
     VER -->|approval required| APPROV[approval_node<br/>interrupt()]
     VER -->|no approval| SUMM[summarizer_node]
     APPROV -->|approved| SUMM
-    APPROV -->|rejected| END_REJECT([END])
-    SUMM --> END([END])
+    APPROV -->|rejected| END_REJECT([REJECTED])
+    SUMM --> FINISH([FINISH])
     EXEC -. autonomous mode .-> REPLAN[replanner_node]
     REPLAN --> EXEC
 ```

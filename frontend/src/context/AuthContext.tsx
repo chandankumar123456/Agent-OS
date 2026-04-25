@@ -39,6 +39,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoading(false);
   }, []);
 
+  const logout = useCallback(() => {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('user');
+    setAccessToken(null);
+    setUser(null);
+  }, []);
+
   // Periodic token expiry check (every 60s)
   useEffect(() => {
     if (!accessToken) return;
@@ -54,14 +62,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }, 60000);
     return () => clearInterval(interval);
   }, [accessToken, logout]);
-
-  const logout = useCallback(() => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('user');
-    setAccessToken(null);
-    setUser(null);
-  }, []);
 
   useEffect(() => {
     if (!accessToken || !user) {
