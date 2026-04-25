@@ -2,7 +2,7 @@
 import json
 import os
 import platform
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langgraph.types import interrupt
 
@@ -172,6 +172,32 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     os_info = f"{platform.system()} {platform.release()}"
     home = os.path.expanduser("~")
     desktop_path = os.path.join(home, "Desktop")
+
+    # Build execution context from prior steps
+    prior_steps = state.get("steps", [])[:idx]
+    prior_context = ""
+    if prior_steps:
+        prior_context_lines = []
+        for s in prior_steps:
+            prior_context_lines.append(
+                f"Step {s['step_number']}: {s['description']}\n"
+                f"Output: {s.get('output', '')[:500]}"
+            )
+        prior_context = "\n\nPreviously completed steps:\n" + "\n---\n".join(prior_context_lines)
+
+    # Browser state hint
+    browser_hint = ""
+    if any(t.get("name", "").startswith("browser_env__") for t in available_tools):
+        browser_hint = (
+            "\nIMPORTANT: If a browser_env tool has already been used in a previous step, "
+            "do NOT launch or navigate again unless explicitly required. Reuse the existing session."
+        )
+
+    # Suggested tool hint
+    suggested_hint = ""
+    if suggested_tool:
+        suggested_hint = f"\nSuggested tool for this step (use if appropriate): {suggested_tool}"
+
     system_prompt = f"""You are an execution agent. Your job is to CARRY OUT the given step by any means necessary.
 You have access to the following tools. You MUST use a tool when the step requires interacting with the filesystem, running code, using a calculator, searching the web, or executing shell commands.
 
@@ -180,18 +206,19 @@ Available tools:
 
 Current operating system: {os_info}
 User home directory: {home}
-User Desktop path: {desktop_path}
+User Desktop path: {desktop_path}{prior_context}{browser_hint}{suggested_hint}
 
 CRITICAL RULES:
-1. If the step asks you to create, write, read, or modify a file, you MUST use the filesystem tool (e.g., filesystem__write_file, filesystem__read_file).
-2. If the step asks you to run a command or script, you MUST use the shell tool (e.g., shell__execute_command, shell__run_script).
-3. If the step asks you to browse or scrape the web, you MUST use the browser tool (e.g., browser__http_request, browser__scrape_page).
+1. If the step asks you to create, write, read, or modify a file, you MUST use the filesystem tool.
+2. If the step asks you to run a command or script, you MUST use the shell tool.
+3. If the step asks you to browse or scrape the web, you MUST use the browser tool.
 4. If the step requires calculation, use the calculator tool.
 5. Do NOT just describe what you would do — actually invoke the tool with concrete parameters.
 6. Use exact parameter names from the tool schema.
-7. ALWAYS use ABSOLUTE file paths. NEVER use relative paths like ./file.py.
-8. When creating files on Windows, use backslashes in paths (e.g., C:\\Users\\Name\\Desktop\\file.txt). On Linux/macOS, use forward slashes.
+7. ALWAYS use ABSOLUTE file paths. NEVER use relative paths.
+8. When creating files on Windows, use backslashes. On Linux/macOS, use forward slashes.
 9. If the user asks for "desktop", use the Desktop path provided above.
+10. NEVER repeat a tool call that was already successfully executed in a previous step unless the user explicitly asks you to do it again.
 
 Respond with JSON in one of these formats:
 
@@ -207,7 +234,9 @@ To provide a direct answer (only if no tool is needed):
         HumanMessage(content=f"Step to execute: {description}"),
     ]
 
-    MAX_ROUNDS = 3
+    MAX_ROUNDS = 5
+    # Track calls within this step to prevent exact duplicates
+    calls_this_step: set = set()
     tool_calls = state.get("tool_calls", [])
     step_tool_results = []
     final_answer = ""
@@ -236,6 +265,18 @@ To provide a direct answer (only if no tool is needed):
             if not tool_name:
                 final_answer = response.get("answer") or response.get("details") or json.dumps(response)
                 break
+
+            # Duplicate-call guard
+            call_signature = json.dumps({"name": tool_name, "params": tool_params}, sort_keys=True, default=str)
+            if call_signature in calls_this_step:
+                warn_msg = (
+                    f"You already called '{tool_name}' with the same parameters in this step. "
+                    "Do NOT repeat it. Either proceed with the next action or provide a direct answer."
+                )
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(content=warn_msg))
+                continue
+            calls_this_step.add(call_signature)
 
             # Validate tool exists
             tool = tool_registry.get(tool_name)
