@@ -26,7 +26,10 @@ class RedisEventBus:
             logger.error(f"Event publish failed: {e}")
     
     async def subscribe(self, channel: str) -> AsyncIterator[Event]:
+        pubsub = None
         try:
+            if not redis_client.client:
+                raise RuntimeError("Redis client is not connected")
             pubsub = redis_client.client.pubsub()
             await pubsub.subscribe(f"agentos:{channel}")
             async for message in pubsub.listen():
@@ -35,12 +38,19 @@ class RedisEventBus:
                         yield Event.parse(message["data"])
                     except Exception as e:
                         logger.warning(f"Failed to parse event: {e}")
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             logger.error(f"Event subscribe failed: {e}")
         finally:
-            try:
-                await pubsub.unsubscribe(f"agentos:{channel}")
-            except:
-                pass
+            if pubsub is not None:
+                try:
+                    await pubsub.unsubscribe(f"agentos:{channel}")
+                except Exception:
+                    pass
+                try:
+                    await pubsub.close()
+                except Exception:
+                    pass
 
 event_bus = RedisEventBus()

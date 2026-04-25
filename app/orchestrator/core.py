@@ -28,6 +28,13 @@ from ..langgraph.graphs import (
 )
 from ..langgraph.state import AgentState
 from ..mcp.client_manager import mcp_client_manager
+from ..capabilities import (
+    capability_router,
+    feasibility_engine,
+    execution_environment,
+    recovery_engine,
+)
+from ..capabilities.models import FeasibilityResult
 
 
 class Orchestrator:
@@ -214,6 +221,9 @@ class Orchestrator:
         config: Dict[str, Any],
         task_id: UUID,
         user_id: str,
+        capability_assessment: Optional[Dict[str, Any]] = None,
+        feasibility_report: Optional[Dict[str, Any]] = None,
+        environment_config: Optional[Dict[str, Any]] = None,
     ) -> AgentState:
         trace_id = self._new_trace_id()
         return AgentState(
@@ -234,6 +244,11 @@ class Orchestrator:
             approval_reason=None,
             result={},
             error=None,
+            capability_assessment=capability_assessment,
+            feasibility_report=feasibility_report,
+            environment_config=environment_config,
+            verification_reports=[],
+            recovery_decisions=[],
             created_at=datetime.utcnow().isoformat(),
             mode=config.get("mode", "task"),
             status="pending",
@@ -247,13 +262,56 @@ class Orchestrator:
         user_id: str,
         mode: str,
     ) -> AgentOutput:
-        """Execute a task using LangGraph compiled state graphs."""
+        """Execute a task using LangGraph compiled state graphs with capability awareness."""
         try:
+            # ── Capability Classification ────────────────────────────────
+            assessment = capability_router.classify(query, str(task_id))
+            logger.info(
+                f"[Capability] task={task_id} primary={assessment.primary_capability.value} "
+                f"complexity={assessment.estimated_complexity}"
+            )
+
+            # Auto-select mode if not explicitly set
+            if mode == "task" and assessment.estimated_complexity > 5:
+                mode = capability_router.route(assessment)
+                logger.info(f"[Capability] Auto-selected mode={mode} for task={task_id}")
+
+            # ── Feasibility Analysis ─────────────────────────────────────
+            feasibility = await feasibility_engine.check(assessment, config)
+            if feasibility.result == FeasibilityResult.BLOCKED:
+                return AgentOutput(
+                    task_id=str(task_id),
+                    step_id=uuid4(),
+                    status=AgentStatus.FAILURE,
+                    error_type="safety_blocked",
+                    error_message="Task blocked by safety policy: " + "; ".join(feasibility.notes),
+                    output_data={"feasibility": feasibility.model_dump()},
+                )
+            if feasibility.result == FeasibilityResult.UNSUPPORTED:
+                return AgentOutput(
+                    task_id=str(task_id),
+                    step_id=uuid4(),
+                    status=AgentStatus.FAILURE,
+                    error_type="unsupported",
+                    error_message="Task requires capabilities not available: " + "; ".join(feasibility.notes),
+                    output_data={"feasibility": feasibility.model_dump()},
+                )
+
+            # ── Environment Selection ────────────────────────────────────
+            env_config = feasibility_engine.select_environment(assessment, feasibility)
+            execution_environment.configure(str(task_id), env_config)
+            logger.info(f"[Environment] task={task_id} env={env_config.environment.value}")
+
             # Ensure MCP tools are discovered
             await tool_registry.discover_mcp_tools()
 
             checkpointer = get_checkpointer()
-            state = self._build_initial_state(query, config, task_id, user_id)
+            state = self._build_initial_state(
+                query, config, task_id, user_id,
+                capability_assessment=assessment.model_dump(),
+                feasibility_report=feasibility.model_dump(),
+                environment_config=env_config.model_dump(),
+            )
 
             if mode == "task":
                 graph = compile_task_graph(checkpointer=checkpointer)
@@ -280,6 +338,9 @@ class Orchestrator:
             logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
             final_state = await graph.ainvoke(state, config=thread_config)
 
+            # Cleanup environment
+            execution_environment.cleanup(str(task_id))
+
             result = final_state.get("result", {})
             error = final_state.get("error")
             verified = final_state.get("verified", False)
@@ -288,7 +349,7 @@ class Orchestrator:
             if error or status == "rejected":
                 return AgentOutput(
                     task_id=str(task_id),
-                    step_id="",
+                    step_id=uuid4(),
                     status=AgentStatus.FAILURE,
                     error_type="execution_error",
                     error_message=error or "Task was rejected",
@@ -297,7 +358,7 @@ class Orchestrator:
 
             return AgentOutput(
                 task_id=str(task_id),
-                step_id="",
+                step_id=uuid4(),
                 status=AgentStatus.SUCCESS,
                 output_data=result,
             )

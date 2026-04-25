@@ -38,6 +38,7 @@ class RedisClient:
     async def disconnect(self):
         if self.client:
             await self.client.close()
+            self.client = None
             logger.info("Redis disconnected")
 
     async def set(

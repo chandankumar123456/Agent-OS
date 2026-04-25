@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Dict, Any, List, Optional
 from ..logs.logger import logger
 from ..mcp.protocol import mcp_protocol
@@ -26,45 +27,71 @@ class AgentRuntime:
             cls._instance._initialized = False
             cls._instance._init_lock = asyncio.Lock()
             cls._instance._register_locks: Dict[str, asyncio.Lock] = {}
+            cls._instance._init_mutex_value = None
         return cls._instance
 
     async def initialize(self):
         """Eagerly register core system agents. Called once at app startup.
 
         Idempotent: safe to call multiple times. Subsequent calls are no-ops.
+        Uses a Redis mutex to avoid duplicate DB writes across processes.
         """
         async with self._init_lock:
             if self._initialized:
                 logger.debug("AgentRuntime.initialize() called but already initialized; skipping")
                 return
             logger.info("AgentRuntime initializing core agents...")
-            for core_type in ("planner", "executor", "verifier"):
-                agent_id = f"core_{core_type}"
-                if agent_id not in self._workers:
-                    try:
-                        await self.register(agent_id, {"role": core_type})
-                        logger.info(f"Registered core agent: {agent_id}")
-                    except Exception as e:
-                        logger.error(f"Failed to register core agent {agent_id}: {e}")
-                else:
-                    logger.debug(f"Core agent already registered: {agent_id}")
 
-            # Persist core agents to database so they appear in API listings
+            # Try to acquire a cross-process Redis mutex for DB writes
+            acquired_mutex = False
             try:
-                from ..memory.long_term import agent_repo
+                from ..memory.short_term import redis_client
+                if redis_client.client:
+                    mutex_value = f"{os.getpid()}:{asyncio.get_running_loop().time()}"
+                    acquired = await redis_client.client.set(
+                        "agentos:runtime:init_mutex", mutex_value, nx=True, ex=3600
+                    )
+                    if acquired:
+                        self._init_mutex_value = mutex_value
+                        acquired_mutex = True
+                        logger.info("Acquired runtime initialization mutex")
+                    else:
+                        logger.info("Runtime initialization mutex held by another process; skipping DB writes")
+                else:
+                    # Redis unavailable (e.g., tests) — proceed locally
+                    acquired_mutex = True
+            except Exception as e:
+                logger.warning(f"Redis mutex check failed, proceeding with local init: {e}")
+                acquired_mutex = True
+
+            if acquired_mutex:
                 for core_type in ("planner", "executor", "verifier"):
                     agent_id = f"core_{core_type}"
-                    await agent_repo.upsert(
-                        agent_key=agent_id,
-                        name=agent_id,
-                        role=core_type,
-                        status="active",
-                    )
-                logger.info("Core agents persisted to database")
-            except Exception as e:
-                logger.warning(f"Failed to persist core agents to database: {e}")
+                    if agent_id not in self._workers:
+                        try:
+                            await self.register(agent_id, {"role": core_type})
+                            logger.info(f"Registered core agent: {agent_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to register core agent {agent_id}: {e}")
+                    else:
+                        logger.debug(f"Core agent already registered: {agent_id}")
 
-            # Load any additional agents from database into runtime
+                # Persist core agents to database so they appear in API listings
+                try:
+                    from ..memory.long_term import agent_repo
+                    for core_type in ("planner", "executor", "verifier"):
+                        agent_id = f"core_{core_type}"
+                        await agent_repo.upsert(
+                            agent_key=agent_id,
+                            name=agent_id,
+                            role=core_type,
+                            status="active",
+                        )
+                    logger.info("Core agents persisted to database")
+                except Exception as e:
+                    logger.warning(f"Failed to persist core agents to database: {e}")
+
+            # Load any additional agents from database into runtime (always do this)
             try:
                 await self.load_from_db()
                 logger.info("Agents loaded from database into runtime")
@@ -94,7 +121,18 @@ class AgentRuntime:
             except Exception as e:
                 logger.warning(f"Failed to unregister {agent_id} during reset: {e}")
         self._workers.clear()
+        self._register_locks.clear()
         self._initialized = False
+        # Best-effort release of Redis mutex so next test/process can acquire it
+        if self._init_mutex_value:
+            try:
+                loop = asyncio.get_running_loop()
+                from ..memory.short_term import redis_client
+                if redis_client.client:
+                    loop.create_task(redis_client.client.delete("agentos:runtime:init_mutex"))
+            except Exception:
+                pass
+            self._init_mutex_value = None
         logger.info("AgentRuntime reset")
 
     async def register(self, agent_id: str, config: Dict[str, Any]) -> AgentWorker:

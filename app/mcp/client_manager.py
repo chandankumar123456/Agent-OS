@@ -128,6 +128,7 @@ class MCPClientManager:
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         """List all tools from all connected MCP servers."""
+        await self._ensure_system_servers()
         tools = []
         for conn in self.connections.values():
             tools.extend(conn.tools)
@@ -135,6 +136,7 @@ class MCPClientManager:
 
     async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> CallToolResult:
         """Call a tool by its unified name (server__tool_name)."""
+        await self._ensure_system_servers()
         server_name = self._tool_to_server.get(tool_name)
         if not server_name:
             raise ValueError(f"Tool '{tool_name}' not found in any connected MCP server")
@@ -160,7 +162,15 @@ class MCPClientManager:
     # ── System servers ─────────────────────────────────────────────────
 
     async def start_system_servers(self) -> None:
-        """Start the built-in system MCP servers (filesystem, shell, browser)."""
+        """Start the built-in system MCP servers (filesystem, shell, browser).
+
+        Idempotent: safe to call multiple times. Uses a flag to prevent duplicate spawns.
+        """
+        if getattr(self, "_system_servers_started", False):
+            logger.debug("System MCP servers already started; skipping")
+            return
+        self._system_servers_started = True
+
         servers = [
             ("filesystem", sys.executable, ["-m", "app.mcp.servers.filesystem"]),
             ("shell", sys.executable, ["-m", "app.mcp.servers.shell"]),
@@ -174,6 +184,13 @@ class MCPClientManager:
                 logger.warning(f"MCP server '{name}' connection was cancelled")
             except Exception as e:
                 logger.error(f"Failed to start system MCP server '{name}': {e}")
+
+    async def _ensure_system_servers(self) -> None:
+        """Lazy on-demand startup for system servers."""
+        if self is not mcp_client_manager:
+            # Don't side-effect test instances
+            return
+        await self.start_system_servers()
 
 
 # Global singleton

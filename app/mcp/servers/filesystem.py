@@ -19,8 +19,58 @@ SAFE_ROOTS = [
 ]
 
 
+def _normalize_path_for_os(path: str) -> str:
+    """Detect and remap cross-platform hallucinated paths to real OS paths."""
+    if not path or not isinstance(path, str):
+        return path
+    system = os.name  # 'nt' for Windows, 'posix' for Linux/macOS
+    home = os.path.expanduser("~")
+
+    # Expand ~ first
+    if path.startswith("~/") or path.startswith("~\\"):
+        path = os.path.join(home, path[2:])
+
+    # Unix-style absolute path on Windows
+    if system == "nt" and path.startswith("/"):
+        # /home/$USER/Desktop/... -> C:\Users\...\Desktop\...
+        if path.startswith("/home/"):
+            suffix = path[len("/home/"):]
+            # Skip the username segment
+            if "/" in suffix:
+                suffix = suffix[suffix.find("/"):]
+            else:
+                suffix = ""
+            # Map Desktop, Documents, Downloads
+            for known in ("Desktop", "Documents", "Downloads"):
+                if suffix.startswith(f"/{known}"):
+                    suffix = suffix[len(f"/{known}"):]
+                    return os.path.join(home, known, suffix.lstrip("/").replace("/", os.sep))
+            return os.path.join(home, suffix.lstrip("/").replace("/", os.sep))
+        # Generic Unix absolute path on Windows
+        return os.path.join(home, path[1:].replace("/", os.sep))
+
+    # Windows-style absolute path on Unix
+    if system == "posix" and len(path) > 1 and path[1] == ":":
+        # C:\Users\Name\Desktop\... -> /home/name/Desktop/...
+        suffix = path[2:].lstrip("\\").replace("\\", "/")
+        # Map known Windows user folders
+        parts = suffix.split("/")
+        if len(parts) >= 2 and parts[0].lower() == "users":
+            # Skip the username segment
+            subpath = "/".join(parts[2:]) if len(parts) > 2 else ""
+            for known in ("Desktop", "Documents", "Downloads"):
+                if subpath.startswith(known):
+                    subpath = subpath[len(known):]
+                    return os.path.join(home, known, subpath.lstrip("/"))
+            return os.path.join(home, subpath)
+        return os.path.join(home, suffix)
+
+    return path
+
+
 def _resolve_path(path: str) -> Path:
-    p = Path(path).resolve()
+    normalized = _normalize_path_for_os(path)
+    p = Path(normalized).resolve()
     for root in SAFE_ROOTS:
         if str(p).startswith(str(Path(root).resolve())):
             return p

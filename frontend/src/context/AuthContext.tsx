@@ -16,6 +16,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, name?: string) => Promise<void>;
   logout: () => void;
+  refreshAccessToken: () => Promise<string | null>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -38,8 +39,25 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setIsLoading(false);
   }, []);
 
+  // Periodic token expiry check (every 60s)
+  useEffect(() => {
+    if (!accessToken) return;
+    const interval = setInterval(() => {
+      try {
+        const payload = JSON.parse(atob(accessToken.split('.')[1]));
+        if (payload.exp && Date.now() >= payload.exp * 1000) {
+          logout();
+        }
+      } catch {
+        logout();
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [accessToken, logout]);
+
   const logout = useCallback(() => {
     localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
     localStorage.removeItem('user');
     setAccessToken(null);
     setUser(null);
@@ -97,6 +115,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const data = await response.json();
     localStorage.setItem('accessToken', data.access_token);
+    if (data.refresh_token) {
+      localStorage.setItem('refreshToken', data.refresh_token);
+    }
     localStorage.setItem('user', JSON.stringify(data.user));
     setAccessToken(data.access_token);
     setUser(data.user);
@@ -116,9 +137,34 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     const data = await response.json();
     localStorage.setItem('accessToken', data.access_token);
+    if (data.refresh_token) {
+      localStorage.setItem('refreshToken', data.refresh_token);
+    }
     localStorage.setItem('user', JSON.stringify(data.user));
     setAccessToken(data.access_token);
     setUser(data.user);
+  }, []);
+
+  const refreshAccessToken = useCallback(async (): Promise<string | null> => {
+    const storedRefreshToken = localStorage.getItem('refreshToken');
+    if (!storedRefreshToken) return null;
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: storedRefreshToken }),
+      });
+      if (!response.ok) return null;
+      const data = await response.json();
+      localStorage.setItem('accessToken', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refreshToken', data.refresh_token);
+      }
+      setAccessToken(data.access_token);
+      return data.access_token;
+    } catch {
+      return null;
+    }
   }, []);
 
   const value = useMemo(() => ({
@@ -129,7 +175,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     login,
     signup,
     logout,
-  }), [user, accessToken, isLoading, login, signup, logout]);
+    refreshAccessToken,
+  }), [user, accessToken, isLoading, login, signup, logout, refreshAccessToken]);
 
   return (
     <AuthContext.Provider value={value}>

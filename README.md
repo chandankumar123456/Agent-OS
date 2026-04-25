@@ -1,261 +1,254 @@
-# Agent-OS v2
+# AgentOS v2 — LangGraph + MCP Agent Operating System
 
-LangGraph + MCP Agent Operating System for structured AI workflow execution.
+> **AgentOS is NOT a chatbot.** It is a structured, stateful agent execution system where AI agents reason via LangGraph state machines and act on the system via the Model Context Protocol (MCP). Every execution is traceable, checkpointed, and observable.
 
-## 1) System Overview
-
-Agent-OS v2 is a true **agent operating system** where AI agents reason via LangGraph state machines and act on the system via the Model Context Protocol (MCP). It enforces strict separation between orchestration, execution, communication, tools, safety, and observability.
-
-### Core Design Principles
-
-- **LangGraph as the execution engine**: All agent reasoning flows through compiled state graphs with persistent checkpoints.
-- **MCP for system-level tools**: Agents can read files, run commands, and browse the web via standardized MCP servers.
-- **Runtime is the ONLY execution entry point**: No module may instantiate or call agents directly.
-- **Strategy-based modes**: Task, Workflow, Autonomous, and Collaboration modes are distinct graph compilations.
-- **MCP for inter-agent communication**: All cross-agent messaging flows through the Message Control Protocol bus.
-- **Sandboxed tool execution**: Custom tools run in a restricted Python environment with blocked builtins and AST validation.
-- **Transactional observability**: Spans are persisted in the same conceptual transaction as state updates; metrics are Prometheus-compatible.
-
----
-
-## 2) Architecture
-
-```text
-┌─────────────────────────────────────────────────────────────┐
-│  API Layer (FastAPI routes)                                  │
-│  - Thin: validation, auth, serialization                    │
-├─────────────────────────────────────────────────────────────┤
-│  Orchestration Layer                                         │
-│  - Orchestrator: compiles LangGraph graphs per mode         │
-│  - LangGraph Graphs: plan → execute → verify → summarize    │
-│  - PipelineExecutor: legacy plan → execute → verify pipe    │
-│  - WorkflowBuilder: DAG construction and persistence        │
-│  - StepExecutor: single-step execution via Runtime          │
-│  - WorkflowEngine: DAG traversal with condition sandbox     │
-├─────────────────────────────────────────────────────────────┤
-│  LangGraph Engine (v2 Core)                                  │
-│  - StateGraph: compiled per mode (task/workflow/auto/collab)│
-│  - Nodes: planner → executor → verifier → approval          │
-│  - PostgreSQL Checkpointer: resume across restarts          │
-│  - interrupt(): human-in-the-loop approval gates            │
-├─────────────────────────────────────────────────────────────┤
-│  Mode Strategies                                             │
-│  - TaskMode: compile_task_graph — simple REACT agent        │
-│  - WorkflowMode: compile_workflow_graph — DAG state graph   │
-│  - AutonomousMode: compile_autonomous_graph — loop + replan │
-│  - CollaborationMode: compile_collaboration_graph — parallel│
-├─────────────────────────────────────────────────────────────┤
-│  Agent Layer                                                 │
-│  - PlannerAgent, ExecutorAgent, VerifierAgent               │
-│  - BaseAgent protocol with execute(input) → output          │
-├─────────────────────────────────────────────────────────────┤
-│  Runtime Layer (CORE EXECUTION ENGINE)                       │
-│  - AgentRuntime: singleton registry agent_id → AgentWorker  │
-│  - AgentWorker: owns inbox queue, processes AgentInput      │
-│  - AgentFactory: creates agents from config                 │
-│  - AgentPool: semaphore-guarded concurrency (~100 workers)  │
-├─────────────────────────────────────────────────────────────┤
-│  MCP Layer (System Communication + Tools)                    │
-│  - MCPClientManager: connects to MCP servers, routes calls  │
-│  - System Servers: filesystem, shell, browser (FastMCP)     │
-│  - MCPBus: abstract pub/sub (MemoryMCPBus | RedisMCPBus)    │
-│  - MessageRouter: routes by receiver_agent to inbox         │
-│  - MCPProtocol: message creation, history, bounded log      │
-├─────────────────────────────────────────────────────────────┤
-│  Tool Layer                                                  │
-│  - ToolRegistry: discovers built-in + MCP server tools      │
-│  - MCPWrappedTool: adapts MCP tools to BaseTool interface   │
-│  - ToolCallParser: extracts tool invocations from LLM text  │
-│  - ToolSandbox: restricted builtins + AST validation        │
-│  - BaseTool: schema + execute contract                       │
-├─────────────────────────────────────────────────────────────┤
-│  Safety Layer                                                │
-│  - Guardrails: input/output/structural validation           │
-│  - ToolSandbox: execution isolation with blocked imports    │
-│  - Output validation raises UnrecoverableError on failure   │
-├─────────────────────────────────────────────────────────────┤
-│  Observability Layer                                         │
-│  - StructuredLogger: JSON-structured logs with trace_id      │
-│  - TraceManager: span creation, nesting, timing             │
-│  - MetricsCollector: Prometheus-compatible counters/hists   │
-│  - HealthReporter: /health, /ready, /live, /health/metrics  │
-├─────────────────────────────────────────────────────────────┤
-│  Memory Layer                                                │
-│  - PostgreSQL: long-term persistence (SQLAlchemy async)     │
-│  - Redis: short-term context cache + MCP pub/sub            │
-│  - Checkpoints: LangGraph state persisted to DB             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Data Flow
-
-1. **Task Creation**: Client → API Route → Orchestrator.execute_task()
-2. **LangGraph Compilation**: Orchestrator compiles mode-specific StateGraph + PostgreSQL checkpointer
-3. **Graph Execution**: Graph runs planner → executor → verifier → (approval) → summarizer
-4. **Tool Use**: Executor node → ToolRegistry (built-in + MCP) → MCPClientManager → MCP Server
-5. **Human-in-the-Loop**: Approval node calls `interrupt()` → checkpoint saved → resumed via API
-6. **Collaboration**: CollaborationMode → MCPBus → MessageRouter → AgentWorker inbox
-7. **Observability**: Every layer emits spans/logs → TraceManager → DB
-
----
-
-## 3) Layer-by-Layer Explanation
-
-### LangGraph Engine (`app/langgraph/`)
-
-The v2 core execution engine. All agent reasoning flows through compiled state graphs.
-
-- **`state.py`**: `AgentState` TypedDict — shared state with messages, plan, steps, results, approval status.
-- **`nodes.py`**: Async node functions:
-  - `planner_node`: Calls LLM to generate step-by-step plan
-  - `executor_node`: Executes current step using ToolRegistry
-  - `verifier_node`: Validates outputs against original query
-  - `approval_node`: Uses `langgraph.types.interrupt()` for human approval
-  - `summarizer_node`: Compiles final result
-- **`graphs.py`**: Graph compilers:
-  - `compile_task_graph()`: plan → execute loop → verify → summarize
-  - `compile_autonomous_graph()`: loop with replanning condition
-  - `compile_workflow_graph()`: state graph from workflow definition nodes
-  - `compile_collaboration_graph()`: parallel subgraphs (fan-out/fan-in)
-- **`checkpointer.py`**: `PostgresCheckpointSaver` implements `BaseCheckpointSaver` with `JsonPlusSerializer` for persistent checkpoints.
-
-### MCP System Servers (`app/mcp/servers/`)
-
-FastMCP servers that provide system-level capabilities to agents.
-
-- **`filesystem.py`**: `read_file`, `write_file`, `list_directory`, `search_files`
-- **`shell.py`**: `execute_command`, `run_script`, `get_process_status`
-- **`browser.py`**: `http_request`, `scrape_page`, `search_web`
-
-All servers run as child processes via stdio transport, managed by `MCPClientManager`.
-
-### MCP Client Manager (`app/mcp/client_manager.py`)
-
-- **`MCPClientManager`**: Manages connections to multiple MCP servers
-  - `connect_stdio(name, command, args)`: Spawns local MCP server
-  - `connect_http(name, url)`: Connects to remote HTTP MCP server (future)
-  - `list_tools()`: Aggregates tools from all connected servers
-  - `call_tool(name, arguments)`: Routes tool call to correct server
-  - `start_system_servers()`: Auto-starts filesystem, shell, browser servers
-
-Tool naming convention: `{server_name}__{tool_name}` (e.g., `filesystem__read_file`).
-
-### Tool Registry 2.0 (`app/tools/registry.py`)
-
-- Discovers built-in tools (Search, Calculator, TextProcessor)
-- Discovers MCP server tools via `MCPClientManager`
-- Unifies into single list with `MCPWrappedTool` adapter
-- Passes unified tool list to LangGraph executor nodes
-
-### API Layer (`app/api/`)
-
-- **Routes**: `tasks.py`, `auth.py`, `tools.py`, `agents.py`, `config.py`, `health.py`
-- **Dependency injection**: `deps.py` returns the module-level `orchestrator` singleton
-- **No business logic**: Routes validate, serialize, and delegate exclusively
-
-### Orchestration Layer (`app/orchestrator/`)
-
-- **`core.py`**: Orchestrator compiles LangGraph graphs per mode. Falls back to legacy mode strategies if LangGraph fails.
-- **`pipeline.py`**: Legacy plan → execute → verify pipeline.
-- **`builder.py`**: Persists workflow DAG nodes and edges to PostgreSQL.
-- **`executor.py`**: Executes a single step via an agent instance.
-- **`workflow.py`**: `WorkflowEngine` traverses DAGs with AST sandbox.
-
-### Mode Strategies (`app/orchestrator/modes/`)
-
-- **`base.py`**: `ModeStrategy` ABC.
-- **`task.py`**: Standard pipeline (delegates to LangGraph task graph).
-- **`workflow.py`**: Loads predefined workflows from DB.
-- **`autonomous.py`**: Replanning loop up to `max_steps`.
-- **`collaboration.py`**: Distributes steps via Runtime and MCP messages.
-
-### Runtime Layer (`app/runtime/`)
-
-- **`runtime.py`**: `AgentRuntime` singleton.
-- **`worker.py`**: `AgentWorker` owns inbox queue.
-- **`factory.py`**: `AgentFactory` creates agents from config.
-- **`pool.py`**: `AgentPool` limits concurrent workers.
-
-### MCP Layer (`app/mcp/`)
-
-- **`bus.py`**: `MCPBus` ABC. `MemoryMCPBus` for local dev, `RedisMCPBus` for production.
-- **`router.py`**: `MessageRouter` routes messages to channels.
-- **`protocol.py`**: `MCPProtocol` creates and sends messages.
-- **`client_manager.py`**: Connects to MCP servers and routes tool calls.
-
-### Safety Layer (`app/guardrails/`)
-
-- **`validator.py`**: Input/output validation.
-- **`schema.py`**: Pydantic-based output schemas.
-
-### Observability Layer (`app/logs/`)
-
-- **`tracing.py`**: `TraceManager` creates spans.
-- **`metrics.py`**: `MetricsCollector` with Prometheus export.
-- **`logger.py`**: Structured JSON logging.
-
-### Memory Layer (`app/memory/`)
-
-- **`long_term.py`**: Async SQLAlchemy with connection pooling.
-- **`short_term.py`**: Redis client for context cache.
-- **`models.py`**: SQLAlchemy models including `CheckpointModel` for LangGraph.
-
----
-
-## 4) Agent Execution Flow
-
-### Task Mode
+## Core Mechanism
 
 ```
-User Query
-    ↓
-Orchestrator.compile_graph("task")
-    ↓
-LangGraph StateGraph:
-    planner_node → generates step plan
-    executor_node → runs steps with tools
-    verifier_node → validates results
-    summarizer_node → compiles final output
-    ↓
-AgentOutput → API Response
+User Query → Capability Classification → Feasibility Check → LangGraph Compile
+→ Planner → Executor (Tools/MCP) → Verifier → (Approval Gate) → Summarizer → Result
 ```
 
-### With Human Approval
+A user submits a query. The system classifies required capabilities, checks feasibility, compiles a mode-specific LangGraph StateGraph, and executes through planner → executor → verifier nodes. Human approval gates can pause execution via LangGraph `interrupt()`. Every step is checkpointed to PostgreSQL for resume across restarts.
 
+## System Architecture
+
+AgentOS is organized into 8 layers, each with strict single responsibility:
+
+```mermaid
+graph TB
+    subgraph "Layer 1 — Frontend (React 18 + Vite)"
+        FE[React UI<br/>Tailwind CSS + Shepherd.js]
+    end
+
+    subgraph "Layer 2 — API Gateway (FastAPI)"
+        API[FastAPI Server<br/>JWT Auth + Rate Limiting]
+        WS[WebSocket Server<br/>Real-time Events]
+    end
+
+    subgraph "Layer 3 — Orchestration"
+        ORCH[Orchestrator<br/>Mode Selection + Fallback]
+        LG[LangGraph Engine<br/>StateGraph Compilation]
+        PIPE[PipelineExecutor<br/>Legacy Fallback]
+    end
+
+    subgraph "Layer 4 — LangGraph Execution Engine"
+        PLAN[planner_node]
+        EXEC[executor_node]
+        VER[verifier_node]
+        APPROV[approval_node<br/>interrupt()]
+        SUMM[summarizer_node]
+        PLAN --> EXEC --> VER --> APPROV --> SUMM
+        EXEC -. replan .-> PLAN
+    end
+
+    subgraph "Layer 5 — Agent Runtime"
+        RUNTIME[AgentRuntime<br/>Singleton Registry]
+        WORKER[AgentWorker<br/>Inbox Queue]
+        FACT[AgentFactory<br/>Agent Creation]
+        POOL[AgentPool<br/>Semaphore 100]
+    end
+
+    subgraph "Layer 6 — MCP + Tools"
+        MCP_MGR[MCPClientManager<br/>Server Lifecycle]
+        FS[Filesystem Server]
+        SH[Shell Server]
+        BR[Browser Server]
+        TREG[ToolRegistry<br/>Built-in + MCP]
+        SANDBOX[ToolSandbox<br/>AST Validation]
+    end
+
+    subgraph "Layer 7 — Safety + Observability"
+        GUARD[Guardrails<br/>Input/Output Validation]
+        TRACE[TraceManager<br/>Span Persistence]
+        METRICS[MetricsCollector<br/>Prometheus Export]
+        LOG[StructuredLogger<br/>JSON Logs]
+    end
+
+    subgraph "Layer 8 — Memory + Persistence"
+        PG[(PostgreSQL<br/>Long-term State)]
+        REDIS[(Redis<br/>Short-term Cache + PubSub)]
+        CHK[Checkpoints<br/>LangGraph State]
+    end
+
+    FE <-->|REST API| API
+    FE <-->|WebSocket| WS
+    API --> ORCH
+    ORCH --> LG
+    ORCH -.-> PIPE
+    LG --> PLAN
+    LG --> EXEC
+    LG --> VER
+    LG --> APPROV
+    LG --> SUMM
+    EXEC --> TREG
+    TREG --> MCP_MGR
+    MCP_MGR --> FS
+    MCP_MGR --> SH
+    MCP_MGR --> BR
+    TREG --> SANDBOX
+    RUNTIME --> WORKER
+    WORKER --> FACT
+    RUNTIME --> POOL
+    ORCH --> RUNTIME
+    API --> GUARD
+    LG --> TRACE
+    LG --> METRICS
+    LG --> LOG
+    RUNTIME --> PG
+    RUNTIME --> REDIS
+    LG --> CHK
+    CHK --> PG
+    WS --> REDIS
+    REDIS --> WS
 ```
-...
-verifier_node
-    ↓
-approval_node → interrupt() → checkpoint saved to DB
-    ↓
-User calls POST /tasks/{id}/approve
-    ↓
-Graph resumes from checkpoint
-    ↓
-summarizer_node
+
+| Layer | Responsibility | Technology |
+|-------|---------------|------------|
+| Frontend | Structured agent interface | React 18, Vite, Tailwind CSS, Shepherd.js |
+| API Gateway | Request routing, validation, auth | FastAPI, Uvicorn, Pydantic |
+| Orchestration | Mode selection, LangGraph compilation, legacy fallback | LangGraph StateGraph |
+| LangGraph Engine | Graph-native execution: plan → execute → verify → summarize | LangGraph, LangChain |
+| Agent Runtime | Singleton worker registry, lifecycle, concurrency | Asyncio, Semaphore |
+| MCP + Tools | System-level tools via MCP protocol | FastMCP, stdio transport |
+| Safety + Observability | Validation, tracing, metrics, structured logging | Pydantic, Prometheus |
+| Memory + Persistence | PostgreSQL long-term, Redis short-term, checkpoints | SQLAlchemy async, Redis async |
+
+## LangGraph Execution Engine
+
+AgentOS v2 uses **LangGraph StateGraph** as its primary execution engine. All agent reasoning flows through compiled state graphs with persistent PostgreSQL checkpoints.
+
+### Architecture (LangGraph Nodes + Flow)
+
+```mermaid
+graph LR
+    START([START]) --> PLAN[planner_node]
+    PLAN --> EXEC[executor_node]
+    EXEC -->|steps remain| EXEC
+    EXEC -->|all steps done| VER[verifier_node]
+    VER -->|approval required| APPROV[approval_node<br/>interrupt()]
+    VER -->|no approval| SUMM[summarizer_node]
+    APPROV -->|approved| SUMM
+    APPROV -->|rejected| END_REJECT([END])
+    SUMM --> END([END])
+    EXEC -. autonomous mode .-> REPLAN[replanner_node]
+    REPLAN --> EXEC
 ```
 
-### Autonomous Mode
+### AgentState Schema
 
+The engine uses a central `AgentState` (TypedDict) containing:
+
+| Field | Written By | Description |
+|-------|-----------|-------------|
+| `task_id` | Input | Unique task identifier |
+| `user_id` | Input | User who submitted the task |
+| `trace_id` | Orchestrator | Trace identifier for observability |
+| `query` | Input | The user's original query |
+| `config` | Input | Execution configuration (mode, max_steps, etc.) |
+| `messages` | All nodes | Conversation history via `add_messages` reducer |
+| `plan` | planner_node | Generated execution plan |
+| `current_step_index` | executor_node | Index of current plan step |
+| `steps` | executor_node | Executed step outputs |
+| `step_results` | executor_node | Step result mapping |
+| `tool_calls` | executor_node | Record of all tool invocations |
+| `verified` | verifier_node | Whether output passed verification |
+| `verification_notes` | verifier_node | Human-readable verification result |
+| `approved` | approval_node | Human approval status |
+| `approval_reason` | approval_node | Reason for approval/rejection |
+| `result` | summarizer_node | Final compiled result |
+| `error` | Any node | Error message if execution failed |
+| `capability_assessment` | Orchestrator | Classified capabilities for query |
+| `feasibility_report` | Orchestrator | Feasibility analysis result |
+| `environment_config` | Orchestrator | Selected execution environment |
+| `verification_reports` | executor/verifier | Deterministic verification reports |
+| `recovery_decisions` | executor | Recovery actions taken |
+
+### Node Descriptions
+
+| Node | Name | Responsibility |
+|------|------|---------------|
+| 1 | planner_node | Generates OS-aware execution plan with capability context |
+| 2 | executor_node | Executes current step using ToolRegistry (built-in + MCP) |
+| 3 | verifier_node | Deterministic verification + LLM semantic validation |
+| 4 | approval_node | LangGraph `interrupt()` for human-in-the-loop |
+| 5 | summarizer_node | Compiles step outputs into final result |
+| 6 | replanner_node | (Autonomous mode) Regenerates plan when stuck |
+
+### Execution Modes
+
+| Mode | Graph | Use Case |
+|------|-------|----------|
+| **task** | `compile_task_graph()` | Simple REACT agent: plan → execute → verify → summarize |
+| **workflow** | `compile_workflow_graph()` | Predefined DAG from workflow definition |
+| **autonomous** | `compile_autonomous_graph()` | Self-replanning loop up to `max_steps` |
+| **collaboration** | `compile_collaboration_graph()` | Multi-agent parallel execution (fan-out/fan-in) |
+
+### Human-in-the-Loop
+
+The approval node uses LangGraph `interrupt()` to pause execution:
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant LG as LangGraph
+    participant DB as PostgreSQL
+
+    U->>FE: Submit query requiring approval
+    FE->>API: POST /tasks {query, require_approval: true}
+    API->>LG: orchestrator.execute_task()
+    LG->>LG: planner_node → executor_node → verifier_node
+    LG->>LG: approval_node → interrupt()
+    LG->>DB: Checkpoint saved with status "paused"
+    API-->>FE: Task status: "awaiting_approval"
+
+    U->>FE: Click Approve
+    FE->>API: POST /tasks/{id}/approve
+    API->>LG: Resume from checkpoint
+    LG->>LG: summarizer_node → completed
+    LG->>DB: Final checkpoint saved
+    API-->>FE: Task completed with result
 ```
-planner_node
-    ↓
-executor_node → step complete?
-    ↓ no
-replanner_node → new plan
-    ↓
-executor_node → ...
-    ↓ yes
-verifier_node → summarizer_node
+
+## MCP (Model Context Protocol) Integration
+
+AgentOS uses MCP for system-level tool access. Agents can read files, execute commands, and browse the web through standardized MCP servers.
+
+### MCP Architecture
+
+```mermaid
+graph TB
+    subgraph "AgentOS Core"
+        EX[Executor Node]
+        TREG[ToolRegistry]
+        MCP_MGR[MCPClientManager]
+    end
+
+    subgraph "MCP Servers (stdio transport)"
+        FS[FilesystemServer<br/>FastMCP]
+        SH[ShellServer<br/>FastMCP]
+        BR[BrowserServer<br/>FastMCP]
+    end
+
+    subgraph "System Resources"
+        DISK[(File System)]
+        SHELL[Shell / Process]
+        WEB[Web / HTTP]
+    end
+
+    EX -->|tool_call| TREG
+    TREG -->|MCPWrappedTool| MCP_MGR
+    MCP_MGR -->|stdio| FS
+    MCP_MGR -->|stdio| SH
+    MCP_MGR -->|stdio| BR
+    FS --> DISK
+    SH --> SHELL
+    BR --> WEB
 ```
 
----
-
-## 5) MCP Server Setup
-
-MCP system servers start automatically when the FastAPI app starts up. No manual configuration is required.
-
-### Available Tools
+### Available MCP Tools
 
 **Filesystem Server** (`filesystem`)
 - `filesystem__read_file(path)` — Read file contents
@@ -273,95 +266,305 @@ MCP system servers start automatically when the FastAPI app starts up. No manual
 - `browser__scrape_page(url, selector)` — Extract text from web page
 - `browser__search_web(query, max_results)` — Search web via DuckDuckGo
 
-### Custom MCP Servers
+Tool naming convention: `{server_name}__{tool_name}`.
 
-You can register additional MCP servers via the API:
+## Data Flow Diagrams
 
-```bash
-POST /api/v1/mcp-servers
-{
-  "name": "my-server",
-  "endpoint": "python -m my_mcp_server",
-  "auth_scope": "admin"
-}
+### Task Execution Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant ORCH as Orchestrator
+    participant CAP as Capability Router
+    participant FEAS as Feasibility Engine
+    participant LG as LangGraph
+    participant DB as PostgreSQL
+    participant REDIS as Redis
+
+    U->>FE: Submit task query
+    FE->>API: POST /tasks {query, mode}
+    API->>ORCH: execute_task(query, config)
+    ORCH->>CAP: classify(query)
+    CAP-->>ORCH: CapabilityAssessment
+    ORCH->>FEAS: check(assessment, config)
+    FEAS-->>ORCH: FeasibilityResult
+
+    alt BLOCKED or UNSUPPORTED
+        ORCH-->>API: AgentOutput(FAILURE)
+        API-->>FE: Error response
+    else ALLOWED
+        ORCH->>LG: compile_mode_graph() + ainvoke(state)
+        Note over LG: planner_node generates OS-aware plan
+        LG->>LG: executor_node runs steps with ToolRegistry
+        LG->>LG: verifier_node validates outputs
+        alt require_approval
+            LG->>DB: Save checkpoint (interrupt)
+            LG-->>ORCH: Status: awaiting_approval
+        else no approval
+            LG->>LG: summarizer_node compiles result
+        end
+        ORCH->>DB: Save final task state
+        ORCH->>REDIS: Cache context (30 min)
+        ORCH-->>API: AgentOutput(SUCCESS)
+        API-->>FE: Task result
+    end
 ```
 
-Or connect programmatically:
+### WebSocket Real-Time Events
 
-```python
-from app.mcp.client_manager import mcp_client_manager
-await mcp_client_manager.connect_stdio("my-server", "python", ["-m", "my_mcp_server"])
-tools = await mcp_client_manager.list_tools()
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as FastAPI
+    participant MGR as ConnectionManager
+    participant BUS as RedisEventBus
+    participant REDIS as Redis
+    participant LG as LangGraph
+
+    FE->>API: WebSocket /ws/tasks/{task_id}?token=...
+    API->>API: verify_access_token(token)
+    API->>MGR: connect(task_id, websocket)
+    MGR-->>FE: Connection accepted
+
+    par Event Subscription
+        API->>BUS: subscribe("task:{task_id}")
+        BUS->>REDIS: SUBSCRIBE agentos:task:{task_id}
+    and Task Execution
+        LG->>LG: Node execution
+        LG->>BUS: publish("task:{task_id}", Event)
+        BUS->>REDIS: PUBLISH agentos:task:{task_id}
+    end
+
+    REDIS-->>BUS: Message received
+    BUS-->>API: Event parsed
+    API->>MGR: broadcast(task_id, event.json())
+    MGR-->>FE: SSE data: {event}
+
+    FE->>API: ping
+    API-->>FE: pong
+
+    FE->>API: Close connection
+    API->>MGR: disconnect(task_id, websocket)
+    API->>BUS: unsubscribe cleanup
 ```
 
----
+### Tool Execution Flow
 
-## 6) API Documentation
+```mermaid
+sequenceDiagram
+    participant EX as Executor Node
+    participant LLM as LLM Client
+    participant TREG as ToolRegistry
+    participant MCP as MCPWrappedTool
+    participant MGR as MCPClientManager
+    participant FS as Filesystem Server
 
-### Tasks
-- `POST /api/v1/tasks` — Create and execute a task
-- `GET /api/v1/tasks` — List tasks
-- `GET /api/v1/tasks/{task_id}` — Get task details (includes LangGraph state)
-- `DELETE /api/v1/tasks/{task_id}` — Cancel/delete task
-- `POST /api/v1/tasks/{task_id}/approve` — Approve a paused task
-- `POST /api/v1/tasks/{task_id}/reject` — Reject a paused task
+    EX->>LLM: complete_json(messages)
+    LLM-->>EX: {tool_call: {name, params}}
+    EX->>TREG: get(tool_name)
+    TREG-->>EX: MCPWrappedTool
+    EX->>MCP: execute(ToolInput)
+    MCP->>MGR: call_tool(name, arguments)
+    MGR->>FS: stdio transport
+    FS-->>MGR: result
+    MGR-->>MCP: result
+    MCP-->>EX: ToolOutput(success, result)
+    EX->>EX: _remap_tool_params (path normalization)
+    EX->>EX: verification_engine.verify()
+    EX->>LLM: Feed result back as message
+```
 
-### Agents
-- `GET /api/v1/agents` — List registered agents
-- `POST /api/v1/agents` — Register a new agent
-- `GET /api/v1/agents/{agent_id}` — Get agent details
+### Authentication Flow
 
-### Tools
-- `GET /api/v1/tools` — List available tools (built-in + MCP)
-- `POST /api/v1/tools` — Register a custom tool
-- `POST /api/v1/tools/{tool_id}/execute` — Execute a tool
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant AUTH as Auth Router
+    participant USER as User Repo
+    participant DB as PostgreSQL
 
-### MCP Servers
-- `GET /api/v1/mcp-servers` — List MCP servers
-- `POST /api/v1/mcp-servers` — Register an MCP server
-- `GET /api/v1/mcp-servers/{server_id}/health` — Check server health
+    U->>FE: Login with email/password
+    FE->>API: POST /auth/login
+    API->>AUTH: login(request)
+    AUTH->>USER: get_by_email(email)
+    USER->>DB: SELECT user
+    DB-->>USER: user record
+    USER-->>AUTH: user
 
-### Health & Observability
-- `GET /health` — Basic health check
-- `GET /health/ready` — Readiness probe (checks DB + Redis)
-- `GET /health/live` — Liveness probe
-- `GET /health/metrics` — Prometheus-format metrics
+    alt User not found or wrong password
+        AUTH-->>API: HTTP 401
+        API-->>FE: {error: "Invalid credentials"}
+    else Valid credentials
+        AUTH->>AUTH: create_access_token({sub, email, role})
+        AUTH->>AUTH: create_refresh_token({sub, email, role})
+        AUTH-->>API: TokenResponse
+        API-->>FE: {access_token, refresh_token, user}
+        FE->>FE: Store tokens in localStorage
+    end
 
-### Auth
-- `POST /api/v1/auth/token` — Obtain access token
+    Note over FE,API: Token Refresh
+    FE->>API: API request with expired token
+    API-->>FE: HTTP 401 {error: "token_expired"}
+    FE->>API: POST /auth/refresh {refresh_token}
+    API->>AUTH: refresh(request)
+    AUTH->>AUTH: verify_access_token(refresh_token)
+    AUTH->>AUTH: create_access_token(...)
+    AUTH-->>API: TokenResponse
+    API-->>FE: {access_token, refresh_token}
+    FE->>FE: Update localStorage
+```
 
----
+## Runtime Initialization
 
-## 7) Setup and Environment Configuration
+The `AgentRuntime` is a singleton that manages all agent workers. It uses idempotent initialization with a Redis mutex to prevent duplicate setup across processes.
+
+```mermaid
+sequenceDiagram
+    participant MAIN as FastAPI Main
+    participant RT as AgentRuntime
+    participant LOCK as asyncio.Lock
+    participant REDIS as Redis
+    participant DB as PostgreSQL
+
+    MAIN->>RT: initialize()
+    RT->>LOCK: acquire _init_lock
+    RT->>RT: if _initialized: return
+
+    RT->>REDIS: SET agentos:runtime:init_mutex NX EX 3600
+    alt Mutex acquired
+        REDIS-->>RT: OK
+        RT->>RT: Register core_planner, core_executor, core_verifier
+        RT->>DB: Persist core agents to DB
+    else Mutex held by other process
+        REDIS-->>RT: nil
+        RT->>RT: Skip DB writes
+    end
+
+    RT->>DB: load_from_db()
+    RT->>RT: _initialized = True
+    RT-->>MAIN: Done
+```
+
+## Path Awareness
+
+AgentOS ensures paths are OS-aware. The planner generates absolute paths appropriate for the current OS, and the executor remaps any hallucinated foreign paths.
+
+| OS | Desktop Path Format | Home Path Format |
+|----|-------------------|-----------------|
+| Windows | `C:\Users\Name\Desktop` | `C:\Users\Name` |
+| macOS | `/Users/name/Desktop` | `/Users/name` |
+| Linux | `/home/name/Desktop` | `/home/name` |
+
+Path remapping rules:
+- Unix-style paths on Windows are remapped to the current home/desktop
+- Windows-style paths on Unix are remapped by stripping the drive letter
+- `~` is expanded to the user's home directory
+- File extensions (`.txt`, `.py`, etc.) are preserved during remapping
+
+## API Endpoint Summary
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `POST` | `/api/v1/auth/signup` | User registration | Public |
+| `POST` | `/api/v1/auth/login` | User login | Public |
+| `POST` | `/api/v1/auth/refresh` | Token refresh | Public |
+| `GET` | `/api/v1/agents` | List agents | Bearer |
+| `POST` | `/api/v1/agents` | Register agent | Bearer |
+| `GET` | `/api/v1/agents/{id}` | Get agent | Bearer |
+| `GET` | `/api/v1/tools` | List tools | Bearer |
+| `POST` | `/api/v1/tools` | Register tool | Bearer |
+| `POST` | `/api/v1/tools/{name}/execute` | Execute tool | Bearer |
+| `GET` | `/api/v1/tools/mcp-servers` | List MCP servers | Bearer |
+| `POST` | `/api/v1/tools/mcp-servers` | Register MCP server | Bearer |
+| `GET` | `/api/v1/tools/categories` | Tool categories | Bearer |
+| `POST` | `/api/v1/tasks` | Create task | Bearer |
+| `GET` | `/api/v1/tasks` | List tasks | Bearer |
+| `GET` | `/api/v1/tasks/{id}` | Get task | Bearer |
+| `POST` | `/api/v1/tasks/{id}/approve` | Approve task | Bearer |
+| `POST` | `/api/v1/tasks/{id}/reject` | Reject task | Bearer |
+| `GET` | `/ws/tasks/{id}` | WebSocket events | Query token |
+| `GET` | `/health` | Health check | Public |
+| `GET` | `/health/ready` | Readiness probe | Public |
+| `GET` | `/health/live` | Liveness probe | Public |
+| `GET` | `/health/metrics` | Prometheus metrics | Public |
+
+## Tech Stack
+
+| Component | Technology | Version | Purpose |
+|-----------|-----------|---------|---------|
+| Frontend Framework | React | 18.x | UI components |
+| Build Tool | Vite | 5.x+ | Dev server & bundling |
+| CSS | Tailwind CSS | 3.x+ | Utility-first styling |
+| State Management | React Context | Built-in | Auth, global state |
+| Tour Library | Shepherd.js | 12.x+ | User onboarding |
+| Backend Framework | FastAPI | 0.104+ | REST API server |
+| ASGI Server | Uvicorn | 0.24+ | Production server |
+| Validation | Pydantic | 2.5+ | Request/response schemas |
+| Auth | python-jose | 3.3+ | JWT token handling |
+| Password Hashing | passlib | 1.7+ | Bcrypt with SHA-256 fallback |
+| LLM Client | OpenAI SDK | 1.0+ | Async completions |
+| Orchestration | LangGraph | 0.0.50+ | StateGraph execution |
+| LangChain | langchain-core | 0.1+ | Message types |
+| MCP SDK | mcp | 1.0+ | Model Context Protocol |
+| PDF Processing | PyMuPDF (fitz) | 1.23+ | Text extraction |
+| Pipeline | Celery | 5.3+ | Background task queue |
+| Relational DB | PostgreSQL | 14+ | Session, task, checkpoint storage |
+| ORM | SQLAlchemy async | 2.0+ | Async database operations |
+| Vector DB | ChromaDB | 0.4+ | Vector storage & similarity search |
+| Cache + PubSub | Redis | 7+ | Short-term memory, event bus |
+| Monitoring | Prometheus client | 0.19+ | Metrics collection |
+
+## Setup & Installation
+
+### Prerequisites
+
+- Python 3.11+
+- Node.js 20+
+- PostgreSQL 14+
+- Redis 7+
+
+### Environment Configuration
 
 Create a `.env` file:
 
 ```env
-OPENAI_API_KEY=<your-key>
+OPENAI_API_KEY=<your-openai-key>
 OPENAI_MODEL=gpt-4o
 DATABASE_URL=postgresql+asyncpg://agentos:agentos@localhost:5432/agentos
 REDIS_URL=redis://:@localhost:6379/0
+SECRET_KEY=your-secret-key-min-32-bytes-long!!!
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
 MAX_STEPS_DEFAULT=10
 TIMEOUT_DEFAULT=300
 MAX_RETRIES=3
-APP_NAME=Agent-OS
-VERSION=0.2.0
+CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```
 
 ### Backend
 
 ```bash
+cd AgentOS
 pip install -r requirements.txt
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
+The backend starts on `http://localhost:8000`.
+
 ### Frontend
 
 ```bash
-cd frontend
+cd AgentOS/frontend
 npm install
 npm run dev
 ```
+
+The frontend starts on `http://localhost:5173`.
 
 ### Full Stack (Docker)
 
@@ -370,57 +573,119 @@ cd docker
 docker compose up --build
 ```
 
----
+## System Guarantees
 
-## 8) Local Development Guide
+1. **LangGraph is the primary execution engine.** The orchestrator compiles mode-specific StateGraphs and falls back to legacy pipelines only on exception.
+2. **Every execution is checkpointed.** LangGraph state is persisted to PostgreSQL via `PostgresCheckpointSaver` for resume across restarts.
+3. **Human-in-the-loop uses LangGraph interrupt.** Approval gates pause execution via `interrupt()` and resume via API calls.
+4. **Runtime is the ONLY execution entry point.** No module may instantiate or call agents directly.
+5. **MCP tools are auto-discovered.** System servers (filesystem, shell, browser) start automatically and register tools via `MCPWrappedTool`.
+6. **Tool registration is idempotent.** Built-in tools register once via singleton; MCP discovery skips if already registered.
+7. **Runtime initialization is idempotent.** Redis mutex prevents duplicate core agent registration across processes.
+8. **Paths are OS-aware.** Planner generates OS-appropriate paths; executor remaps hallucinated foreign paths.
+9. **Authentication uses JWT with refresh tokens.** Access tokens expire in 30 minutes; refresh tokens expire in 7 days.
+10. **WebSocket connections authenticate via query token.** Invalid or expired tokens close the connection with code 1008.
+11. **All data is strictly typed.** Pydantic models validate every request/response; no untyped dicts in core flow.
+12. **Output is validated before persistence.** Guardrails validate pipeline output before database insertion.
 
-### Running Tests
+## Project Structure
 
-```bash
-pytest -q
+```
+AgentOS/
+├── README.md                          # This file
+├── validate_fixes.py                  # Priority 1 validation script
+├── v2_implementation_plan.md          # v2 implementation tracking
+├── app/
+│   ├── main.py                        # FastAPI application entry point
+│   ├── config/
+│   │   └── settings.py                # Pydantic Settings with env validation
+│   ├── api/
+│   │   ├── deps.py                    # Dependency injection (orchestrator singleton)
+│   │   ├── ws.py                      # WebSocket connection manager + endpoint
+│   │   └── routes/
+│   │       ├── auth.py                # JWT login/signup/refresh
+│   │       ├── agents.py              # Agent CRUD
+│   │       ├── tasks.py               # Task execution + approval
+│   │       ├── tools.py               # Tool registry + MCP servers
+│   │       ├── config.py              # System configuration
+│   │       └── health.py              # Health/readiness/metrics endpoints
+│   ├── langgraph/                     # v2 LangGraph execution engine
+│   │   ├── state.py                   # AgentState TypedDict
+│   │   ├── nodes.py                   # planner, executor, verifier, approval, summarizer
+│   │   ├── graphs.py                  # Graph compilers per mode
+│   │   └── checkpointer.py            # PostgreSQL checkpoint saver
+│   ├── orchestrator/
+│   │   ├── core.py                    # Orchestrator with LangGraph compilation
+│   │   ├── pipeline.py                # Legacy plan → execute → verify pipeline
+│   │   ├── builder.py                 # Workflow DAG persistence
+│   │   ├── executor.py                # Single-step execution service
+│   │   ├── workflow.py                # DAG engine with AST sandbox
+│   │   └── modes/                     # Mode strategy implementations
+│   ├── runtime/
+│   │   ├── runtime.py                 # AgentRuntime singleton with idempotent init
+│   │   ├── worker.py                  # AgentWorker with inbox queue
+│   │   ├── factory.py                 # AgentFactory
+│   │   └── pool.py                    # AgentPool semaphore
+│   ├── agents/
+│   │   ├── base.py                    # BaseAgent, AgentInput, AgentOutput
+│   │   ├── planner.py                 # PlannerAgent
+│   │   ├── executor.py                # ExecutorAgent with tool loop + path remapping
+│   │   ├── verifier.py                # VerifierAgent
+│   │   └── llm_client.py              # OpenAI async client with JSON extraction
+│   ├── mcp/
+│   │   ├── client_manager.py          # MCPClientManager (server lifecycle)
+│   │   ├── servers/
+│   │   │   ├── filesystem.py          # File system MCP server
+│   │   │   ├── shell.py               # Shell command MCP server
+│   │   │   └── browser.py             # Web browsing MCP server
+│   │   ├── bus.py                     # MCPBus (Memory + Redis)
+│   │   ├── router.py                  # MessageRouter
+│   │   └── protocol.py                # MCPProtocol
+│   ├── tools/
+│   │   ├── registry.py                # ToolRegistry singleton (built-in + MCP)
+│   │   ├── sandbox.py                 # ToolSandbox with AST validation
+│   │   ├── base.py                    # BaseTool, ToolInput, ToolOutput
+│   │   ├── search.py                  # SearchTool
+│   │   ├── calculator.py              # CalculatorTool
+│   │   └── text_processor.py          # TextProcessorTool
+│   ├── capabilities/                  # Capability system
+│   ├── guardrails/                    # Input/output validation
+│   ├── logs/                          # Structured logging, tracing, metrics
+│   ├── memory/                        # PostgreSQL + Redis persistence
+│   └── middleware/                    # Auth middleware, rate limiting
+├── frontend/
+│   ├── src/
+│   │   ├── api/client.ts              # API client with auto-refresh
+│   │   ├── context/AuthContext.tsx    # React auth context
+│   │   ├── hooks/useWebSocket.ts      # WebSocket hook with reconnect
+│   │   ├── pages/                     # Dashboard, Builder, Tools, etc.
+│   │   └── components/                # Shared components + Onboarding
+│   └── README.md                      # Frontend documentation
+└── docker/                            # Docker Compose configuration
 ```
 
-### Adding a New Mode
-
-1. Create a graph compiler in `app/langgraph/graphs.py`
-2. Register it in `app/orchestrator/core.py` `_execute_with_langgraph()`
-
-### Adding a New MCP Server
-
-1. Create a FastMCP server in `app/mcp/servers/my_server.py`
-2. Add it to `MCPClientManager.start_system_servers()`
-3. Tools are auto-discovered on connection
-
-### Adding a New Tool
-
-1. Create a class inheriting from `BaseTool`
-2. Implement `execute(tool_input: ToolInput) -> ToolOutput`
-3. Register in `ToolRegistry._register_default_tools()` or via API
-
-### Adding a New Agent Type
-
-1. Create a class inheriting from `BaseAgent`
-2. Register in `AgentFactory.create_agent()`
-
----
-
-## 9) Testing Strategy
+## Testing Strategy
 
 - **Unit tests**: Agent logic, tool parsing, guardrails, retry logic
 - **Integration tests**: Runtime initialization, mode strategy factory, task lifecycle
 - **End-to-end tests**: API routes, task execution with mocked LLM
 - **Observability tests**: Trace persistence, metrics export, health endpoints
 - **LangGraph tests**: Graph compilation, checkpoint persistence, node execution
+- **Validation script**: `python validate_fixes.py` tests all Priority 1 systems
 
-Run the full suite:
+Run the validation suite:
+
+```bash
+python validate_fixes.py
+```
+
+Run the full pytest suite:
 
 ```bash
 pytest -q
 ```
 
----
-
-## 10) Deployment Instructions
+## Deployment Instructions
 
 ### Requirements
 - Python 3.11+
@@ -431,6 +696,7 @@ pytest -q
 ### Production Checklist
 - [ ] Set `DATABASE_URL` with connection pooling tuned for load
 - [ ] Set `REDIS_URL` for MCP pub/sub and caching
+- [ ] Set `SECRET_KEY` to a persistent 32+ byte secret
 - [ ] Configure `MAX_RETRIES`, `TIMEOUT_DEFAULT`, `MAX_STEPS_DEFAULT`
 - [ ] Set `OPENAI_API_KEY` and `OPENAI_MODEL`
 - [ ] Enable `RedisMCPBus` instead of `MemoryMCPBus` for multi-instance deployments
@@ -438,21 +704,17 @@ pytest -q
 - [ ] Scrape `/health/metrics` with Prometheus
 - [ ] Ensure MCP system servers have appropriate resource limits
 
----
-
-## 11) Scaling Considerations
+## Scaling Considerations
 
 - **LangGraph Checkpoints**: PostgreSQL table `checkpoints` stores graph state. Index on `thread_id` for fast resume.
 - **Agent Workers**: `AgentPool` semaphore limits concurrent agents (default 100).
 - **Database**: SQLAlchemy pool (`pool_size=20`, `max_overflow=40`).
 - **Asyncio**: Event loop handles 10,000+ coroutines; the real limit is DB connections.
-- **Redis**: Use `RedisMCPBus` for multi-instance deployments.
-- **Celery**: Worker exists in Docker but API uses in-process background tasks.
+- **Redis**: Use `RedisMCPBus` and `RedisEventBus` for multi-instance deployments.
 - **MCP Servers**: Each server runs as a child process. Monitor memory usage.
+- **WebSocket**: Connection manager limits 100 connections per task; dead sockets are cleaned up on broadcast failure.
 
----
-
-## 12) Troubleshooting Guide
+## Troubleshooting Guide
 
 ### "Agent core_planner not found in runtime"
 Ensure `AgentRuntime.initialize()` is called in the FastAPI lifespan hook. Check `app/main.py`.
@@ -478,87 +740,8 @@ Check logs for `MCP system servers start failed`. Ensure Python modules are impo
 ### Checkpoint resume fails
 Verify the `checkpoints` table exists in PostgreSQL. It is auto-created on startup.
 
----
+### WebSocket authentication failures
+Ensure the WebSocket URL includes the token query parameter: `/ws/tasks/{task_id}?token={access_token}`.
 
-## 13) File Structure
-
-```
-app/
-  api/
-    deps.py              # Singleton orchestrator dependency
-    routes/
-      tasks.py           # Task CRUD + execution
-      agents.py          # Agent CRUD
-      tools.py           # Tool registry + dynamic tool execution
-      auth.py            # JWT token generation
-      config.py          # System configuration
-      health.py          # Health, ready, live, metrics
-  langgraph/             # v2 LangGraph execution engine
-    state.py             # AgentState TypedDict
-    nodes.py             # planner, executor, verifier, approval, summarizer
-    graphs.py            # Graph compilers per mode
-    checkpointer.py      # PostgreSQL checkpoint saver
-  orchestrator/
-    core.py              # Orchestrator with LangGraph compilation
-    pipeline.py          # Legacy plan → execute → verify pipeline
-    builder.py           # Workflow DAG persistence
-    executor.py          # Single-step execution service
-    workflow.py          # DAG engine with AST sandbox
-    context.py           # TaskContext dataclass
-    modes/
-      base.py            # ModeStrategy ABC
-      task.py            # Standard mode
-      workflow.py        # Predefined workflow mode
-      autonomous.py      # Replanning loop mode
-      collaboration.py   # Multi-agent mode with MCP
-      factory.py         # Mode registry
-  runtime/
-    runtime.py           # AgentRuntime singleton
-    worker.py            # AgentWorker with inbox
-    factory.py           # AgentFactory
-    pool.py              # AgentPool with semaphore
-  agents/
-    base.py              # BaseAgent, AgentInput, AgentOutput
-    planner.py           # PlannerAgent
-    executor.py          # ExecutorAgent with tool loop
-    verifier.py          # VerifierAgent
-    types.py             # TaskStatus, StepStatus
-    llm_client.py        # OpenAI async client
-  mcp/
-    __init__.py          # Package init
-    client_manager.py    # MCPClientManager
-    servers/
-      filesystem.py      # File system MCP server
-      shell.py           # Shell command MCP server
-      browser.py         # Web browsing MCP server
-    bus.py               # MCPBus, MemoryMCPBus, RedisMCPBus
-    router.py            # MessageRouter
-    protocol.py          # MCPProtocol
-    message.py           # MCPMessage, Payload, Metadata
-  tools/
-    registry.py          # ToolRegistry (built-in + MCP discovery)
-    sandbox.py           # ToolSandbox with AST validation
-    base.py              # BaseTool, ToolInput, ToolOutput
-    search.py            # SearchTool
-    calculator.py        # CalculatorTool
-    text_processor.py    # TextProcessorTool
-  guardrails/
-    validator.py         # Input/output validation
-    schema.py            # Pydantic schemas
-  logs/
-    tracing.py           # TraceManager
-    metrics.py           # MetricsCollector
-    logger.py            # Structured logger
-  memory/
-    long_term.py         # PostgreSQL + SQLAlchemy
-    short_term.py        # Redis client
-    models.py            # SQLAlchemy models (incl. CheckpointModel)
-  config/
-    settings.py          # Pydantic Settings
-frontend/
-  src/
-    api/client.ts        # API client
-    pages/               # Dashboard, AgentBuilder, Tools, etc.
-  dist/                  # Production build
-tests/                   # pytest suite
-```
+### Path remapping not working
+Verify the executor's `_normalize_paths_in_text` regex matches your path format. The regex supports alphanumeric characters, underscores, hyphens, dollar signs, and dots.

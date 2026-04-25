@@ -9,6 +9,8 @@ from langgraph.types import interrupt
 from ..agents.llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.registry import tool_registry
+from ..capabilities import verification_engine, recovery_engine
+from ..capabilities.models import VerificationResult, RecoveryAction
 from .state import AgentState
 
 
@@ -18,15 +20,44 @@ def _to_openai_messages(messages):
     return [{"role": role_map.get(m.type, m.type), "content": m.content} for m in messages]
 
 
-PLANNER_SYSTEM_PROMPT = """You are an expert planning agent. Given a user query, break it down into a clear, ordered list of steps.
+def _get_desktop_path() -> str:
+    """Return the user's Desktop absolute path for the current OS."""
+    home = os.path.expanduser("~")
+    if platform.system() == "Windows":
+        user_desktop = os.path.join(home, "Desktop")
+        if os.path.isdir(user_desktop):
+            return user_desktop
+        public_desktop = os.path.join(os.path.dirname(home), "Public", "Desktop")
+        if os.path.isdir(public_desktop):
+            return public_desktop
+        return user_desktop
+    elif platform.system() == "Darwin":
+        return os.path.join(home, "Desktop")
+    else:
+        return os.path.join(home, "Desktop")
+
+
+PLANNER_SYSTEM_PROMPT_TEMPLATE = """You are an expert planning agent. Given a user query, break it down into a clear, ordered list of steps.
 Each step should specify:
 - step_number: integer starting at 1
-- description: what to do
+- description: what to do (be specific about file paths and tool names)
 - tool: tool name to use (or null if no tool needed)
 - expected_output: what the step should produce
 
+When the task involves files:
+- Use exact absolute paths, never relative paths.
+- On Windows use backslashes (e.g., C:\\Users\\Name\\Desktop\\file.txt).
+- On Linux/macOS use forward slashes (e.g., /home/name/Desktop/file.txt).
+
+Current operating system: {os_info}
+User home directory: {home_path}
+User Desktop path: {desktop_path}
+
+When the task involves creating/writing files, always use the filesystem__write_file tool.
+When the task involves running commands, always use the shell__execute_command tool.
+
 Respond ONLY with valid JSON in this format:
-{"plan": [{"step_number": 1, "description": "...", "tool": "...", "expected_output": "..."}]}
+{{"plan": [{{"step_number": 1, "description": "...", "tool": "...", "expected_output": "..."}}]}}
 """
 
 
@@ -38,13 +69,38 @@ Respond ONLY with valid JSON:
 
 
 async def planner_node(state: AgentState) -> Dict[str, Any]:
-    """Generate an execution plan from the user query."""
+    """Generate an execution plan from the user query, informed by capability assessment."""
     query = state.get("query", "")
-    logger.info(f"[planner_node] Planning for task {state.get('task_id')}")
+    task_id = state.get("task_id", "")
+    logger.info(f"[planner_node] Planning for task {task_id}")
+
+    os_info = f"{platform.system()} {platform.release()}"
+    home_path = os.path.expanduser("~")
+    desktop_path = _get_desktop_path()
+
+    # Inject capability assessment into prompt if available
+    cap_assessment = state.get("capability_assessment")
+    capability_context = ""
+    if cap_assessment:
+        primary = cap_assessment.get("primary_capability", "unknown")
+        caps = [c["capability"] for c in cap_assessment.get("required_capabilities", [])]
+        safety = cap_assessment.get("safety_flags", [])
+        capability_context = (
+            f"\nDetected capabilities: {', '.join(caps)}\n"
+            f"Primary capability: {primary}\n"
+        )
+        if safety:
+            capability_context += f"Safety flags: {', '.join(safety)}\n"
+
+    system_prompt = PLANNER_SYSTEM_PROMPT_TEMPLATE.format(
+        os_info=os_info,
+        home_path=home_path,
+        desktop_path=desktop_path,
+    ) + capability_context
 
     llm = get_llm_client()
     messages = [
-        SystemMessage(content=PLANNER_SYSTEM_PROMPT),
+        SystemMessage(content=system_prompt),
         HumanMessage(content=f"User query: {query}"),
     ]
 
@@ -103,12 +159,14 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
 
     logger.info(f"[executor_node] Executing step {step_number} for task {task_id}: {description}")
 
-    # Discover tools and build execution prompt
-    await tool_registry.discover_mcp_tools()
+    # Tools should already be discovered by orchestrator entry point.
+    # Do NOT call discover_mcp_tools() here to avoid redundant work per step.
     available_tools = tool_registry.list_tools()
     tools_json = json.dumps(available_tools, indent=2, default=str)
 
     os_info = f"{platform.system()} {platform.release()}"
+    home = os.path.expanduser("~")
+    desktop_path = os.path.join(home, "Desktop")
     system_prompt = f"""You are an execution agent. Your job is to CARRY OUT the given step by any means necessary.
 You have access to the following tools. You MUST use a tool when the step requires interacting with the filesystem, running code, using a calculator, searching the web, or executing shell commands.
 
@@ -116,6 +174,8 @@ Available tools:
 {tools_json}
 
 Current operating system: {os_info}
+User home directory: {home}
+User Desktop path: {desktop_path}
 
 CRITICAL RULES:
 1. If the step asks you to create, write, read, or modify a file, you MUST use the filesystem tool (e.g., filesystem__write_file, filesystem__read_file).
@@ -124,8 +184,9 @@ CRITICAL RULES:
 4. If the step requires calculation, use the calculator tool.
 5. Do NOT just describe what you would do — actually invoke the tool with concrete parameters.
 6. Use exact parameter names from the tool schema.
-7. When creating files on Windows, use backslashes or raw strings for paths (e.g., C:\\Users\\Name\\Desktop\\file.txt). On Linux/macOS, use forward slashes.
-8. The filesystem server restricts writes to the current working directory and the user's home directory. Use full absolute paths.
+7. ALWAYS use ABSOLUTE file paths. NEVER use relative paths like ./file.py.
+8. When creating files on Windows, use backslashes in paths (e.g., C:\\Users\\Name\\Desktop\\file.txt). On Linux/macOS, use forward slashes.
+9. If the user asks for "desktop", use the Desktop path provided above.
 
 Respond with JSON in one of these formats:
 
@@ -145,6 +206,8 @@ To provide a direct answer (only if no tool is needed):
     tool_calls = state.get("tool_calls", [])
     step_tool_results = []
     final_answer = ""
+    verification_reports = state.get("verification_reports", [])
+    recovery_decisions = state.get("recovery_decisions", [])
 
     for round_num in range(MAX_ROUNDS):
         try:
@@ -187,12 +250,43 @@ To provide a direct answer (only if no tool is needed):
                 logger.error(f"[executor_node] Tool execution error: {e}")
                 tool_result = {"success": False, "error": str(e)}
 
+            # Always record tool result first
             tool_calls.append({
                 "step": step_number,
                 "tool": tool_name,
                 "result": tool_result,
             })
             step_tool_results.append(tool_result)
+
+            # ── Deterministic Verification ─────────────────────────────
+            if tool_result["success"]:
+                # Auto-verify based on tool type
+                if "filesystem" in tool_name and tool_params.get("path"):
+                    v_report = await verification_engine.verify(
+                        task_id, None, "file_exists",
+                        {"path": tool_params["path"]},
+                    )
+                    verification_reports.append(v_report.model_dump())
+                    if v_report.result == VerificationResult.FAIL:
+                        # Trigger recovery for next iteration
+                        decision = recovery_engine.decide(
+                            task_id, None,
+                            error=v_report.failure_reason,
+                            verification_report=v_report,
+                            current_tool=tool_name,
+                        )
+                        recovery_decisions.append(decision.model_dump())
+                        if decision.action == RecoveryAction.SWITCH_TOOL and decision.next_tool:
+                            messages.append(HumanMessage(
+                                content=f"Verification failed. Switching to alternative tool: {decision.next_tool}"
+                            ))
+                            # Continue to next round with new tool instruction
+                            continue
+                        elif decision.action == RecoveryAction.RETRY:
+                            messages.append(HumanMessage(
+                                content=f"Verification failed. Retrying with same tool."
+                            ))
+                            continue
 
             messages.append(AIMessage(content=json.dumps(response)))
             messages.append(HumanMessage(
@@ -221,21 +315,48 @@ To provide a direct answer (only if no tool is needed):
         "current_step_index": idx + 1,
         "tool_calls": tool_calls,
         "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
+        "verification_reports": verification_reports,
+        "recovery_decisions": recovery_decisions,
         "status": "step_executed",
     }
 
 
 async def verifier_node(state: AgentState) -> Dict[str, Any]:
-    """Verify if the execution results satisfy the original query."""
+    """Verify if the execution results satisfy the original query.
+
+    Uses deterministic verification first, then LLM as fallback for semantic checks.
+    """
     query = state.get("query", "")
     steps = state.get("steps", [])
     task_id = state.get("task_id", "")
+    plan = state.get("plan", [])
 
     logger.info(f"[verifier_node] Verifying task {task_id}")
 
     if not steps:
         return {"verified": False, "verification_notes": "No steps were executed"}
 
+    # ── Deterministic Verification ───────────────────────────────────
+    det_reports = []
+    det_pass = True
+    try:
+        det_reports = await verification_engine.verify_plan(task_id, plan)
+        for r in det_reports:
+            if r.result == VerificationResult.FAIL:
+                det_pass = False
+                break
+    except Exception as e:
+        logger.warning(f"[verifier_node] Deterministic verification error: {e}")
+
+    # Update state with deterministic reports
+    existing_reports = state.get("verification_reports", [])
+    for r in det_reports:
+        existing_reports.append(r.model_dump())
+
+    # If deterministic checks all pass, we still run LLM for semantic validation
+    # If they fail, we can short-circuit unless recovery already handled it
+
+    # ── LLM Semantic Verification ────────────────────────────────────
     llm = get_llm_client()
     context = json.dumps({"query": query, "steps": steps}, indent=2, default=str)
 
@@ -256,16 +377,24 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
                 "required": ["verified", "notes"],
             },
         )
-        verified = raw.get("verified", False)
+        llm_verified = raw.get("verified", False)
         notes = raw.get("notes", "")
     except Exception as e:
-        logger.error(f"[verifier_node] Verification failed: {e}")
-        verified = False
-        notes = f"Verification error: {e}"
+        logger.error(f"[verifier_node] LLM verification failed: {e}")
+        llm_verified = False
+        notes = f"LLM verification error: {e}"
+
+    # Final verdict: both deterministic and LLM must agree for PASS
+    verified = det_pass and llm_verified
+    if not det_pass and llm_verified:
+        notes = f"Deterministic checks failed but LLM thinks it's OK. {notes}"
+    elif det_pass and not llm_verified:
+        notes = f"Deterministic checks passed but semantic verification failed. {notes}"
 
     return {
         "verified": verified,
         "verification_notes": notes,
+        "verification_reports": existing_reports,
         "messages": [AIMessage(content=f"Verification: {'PASS' if verified else 'FAIL'} — {notes}")],
         "status": "verification_complete",
     }

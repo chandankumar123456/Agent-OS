@@ -7,6 +7,7 @@ from typing import Optional, Dict, Any
 from uuid import uuid4
 
 from jose import JWTError, jwt
+from jose.exceptions import ExpiredSignatureError
 from passlib.context import CryptContext
 
 from ..config.settings import settings
@@ -59,19 +60,35 @@ def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta]
     return encoded_jwt
 
 
-def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
+def create_refresh_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(days=7)
+    
+    to_encode.update({"exp": int(expire.timestamp())})
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return encoded_jwt
+
+
+def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         if not payload.get("sub"):
             return None
-        try:
-            if payload.get("exp") and int(payload["exp"]) < int(datetime.now(timezone.utc).timestamp()):
-                return None
-        except (ValueError, TypeError):
-            return None
         return payload
+    except ExpiredSignatureError:
+        raise
     except JWTError as e:
         logger.warning(f"JWT verification failed: {e}")
+        return None
+
+
+def verify_access_token(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        return decode_access_token(token)
+    except ExpiredSignatureError:
         return None
 
 

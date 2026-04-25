@@ -224,3 +224,4 @@ claude.md
 .vevn/
 celery_logs.txt
 tests/
+prime_check.py

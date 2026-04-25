@@ -247,16 +247,52 @@ class ApiClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({ error: 'Request failed' }));
       const message = error.error?.message || error.error || error.detail || `HTTP ${response.status}`;
-      if (response.status === 401) {
-        // Only invalidate the session on true authentication failures (401).
-        // 403 Forbidden is endpoint-specific (e.g., non-admin accessing config)
-        // and must NOT destroy the global auth state.
+
+      // Attempt token refresh on 401 with token_expired
+      if (response.status === 401 && error.error === 'token_expired') {
+        const refreshed = await this._attemptRefresh();
+        if (refreshed) {
+          // Retry original request with new token
+          const retryResponse = await fetch(url, {
+            ...options,
+            headers: {
+              ...this.getAuthHeaders(),
+              ...options.headers,
+            },
+          });
+          if (retryResponse.ok) {
+            return retryResponse.json();
+          }
+        }
+        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
+      } else if (response.status === 401) {
         window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
       }
       throw new Error(message);
     }
 
     return response.json();
+  }
+
+  private async _attemptRefresh(): Promise<boolean> {
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) return false;
+    try {
+      const response = await fetch(`${this.baseUrl}/auth/refresh`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      });
+      if (!response.ok) return false;
+      const data = await response.json();
+      localStorage.setItem('accessToken', data.access_token);
+      if (data.refresh_token) {
+        localStorage.setItem('refreshToken', data.refresh_token);
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async createTask(request: CreateTaskRequest): Promise<CreateTaskResponse> {

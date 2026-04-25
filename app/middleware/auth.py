@@ -2,9 +2,10 @@ from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional
+from jose.exceptions import ExpiredSignatureError
 from ..config.settings import settings
 from ..logs.logger import logger
-from ..auth.utils import verify_access_token
+from ..auth.utils import decode_access_token
 from ..memory.long_term import db
 from ..memory.models import APIKeyModel
 from sqlalchemy import select
@@ -28,11 +29,25 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
             authenticated = False
 
             if bearer_token:
-                payload = verify_access_token(bearer_token)
+                try:
+                    payload = decode_access_token(bearer_token)
+                except ExpiredSignatureError:
+                    request.state.auth_error = "token_expired"
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"error": "token_expired"},
+                        headers={"WWW-Authenticate": "Bearer"}
+                    )
                 if payload:
                     request.state.user = payload
                     request.state.auth_type = "bearer"
                     authenticated = True
+                else:
+                    return JSONResponse(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        content={"error": "invalid_token"},
+                        headers={"WWW-Authenticate": "Bearer"}
+                    )
 
             if not authenticated and api_key:
                 key_hash = hashlib.sha256(api_key.encode()).hexdigest()

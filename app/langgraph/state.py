@@ -41,6 +41,13 @@ class AgentState(TypedDict, total=False):
     result: Dict[str, Any]
     error: Optional[str]
 
+    # Capability system
+    capability_assessment: Optional[Dict[str, Any]]
+    feasibility_report: Optional[Dict[str, Any]]
+    environment_config: Optional[Dict[str, Any]]
+    verification_reports: List[Dict[str, Any]]
+    recovery_decisions: List[Dict[str, Any]]
+
     # Metadata
     created_at: str
     mode: str

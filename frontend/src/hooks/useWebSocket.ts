@@ -34,9 +34,21 @@ export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWeb
     if (!taskId || isUnmountingRef.current) return;
 
     clearReconnect();
+
+    // Close any existing socket before creating a new one
+    if (wsRef.current) {
+      wsRef.current.onclose = null;
+      wsRef.current.onerror = null;
+      wsRef.current.close(1000, "Reconnecting");
+      wsRef.current = null;
+    }
+
     setStatus('connecting');
 
-    const url = `${WS_BASE_URL}/ws/tasks/${taskId}`;
+    const accessToken = localStorage.getItem('accessToken');
+    const url = accessToken
+      ? `${WS_BASE_URL}/ws/tasks/${taskId}?token=${encodeURIComponent(accessToken)}`
+      : `${WS_BASE_URL}/ws/tasks/${taskId}`;
     const ws = new WebSocket(url);
     wsRef.current = ws;
 
@@ -70,10 +82,13 @@ export function useWebSocket({ taskId, onMessage }: UseWebSocketOptions): UseWeb
       setStatus('error');
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      wsRef.current = null;
       if (isUnmountingRef.current) return;
       setStatus('closed');
-      wsRef.current = null;
+
+      // Don't reconnect on clean closure
+      if (event.code === 1000) return;
 
       if (taskId) {
         const delay = Math.min(1000 * 2 ** reconnectAttemptsRef.current, 30000);

@@ -1,8 +1,52 @@
+import os
+import platform
+import re
+
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
 from uuid import uuid4
 from typing import List, Dict, Any
 from .llm_client import get_llm_client
 from ..logs.logger import logger
+
+
+def _get_desktop_path() -> str:
+    """Return the user's Desktop absolute path for the current OS."""
+    home = os.path.expanduser("~")
+    if platform.system() == "Windows":
+        user_desktop = os.path.join(home, "Desktop")
+        if os.path.isdir(user_desktop):
+            return user_desktop
+        public_desktop = os.path.join(os.path.dirname(home), "Public", "Desktop")
+        if os.path.isdir(public_desktop):
+            return public_desktop
+        return user_desktop
+    elif platform.system() == "Darwin":
+        return os.path.join(home, "Desktop")
+    else:
+        return os.path.join(home, "Desktop")
+
+
+def _normalize_paths_in_text(text: str, home_path: str, desktop_path: str) -> str:
+    """Replace common hallucinated Unix paths with actual OS paths."""
+    if not text:
+        return text
+
+    # Use replacement functions to avoid regex backreference interpretation issues
+    # with Windows backslashes in the replacement string.
+    def repl_desktop(m):
+        return desktop_path + os.sep
+
+    def repl_home(m):
+        return home_path + os.sep
+
+    # Replace /home/$USER/Desktop/ and /home/name/Desktop/ with desktop_path
+    text = re.sub(r"/home/[^/]+/Desktop/", repl_desktop, text)
+    # Replace /home/$USER/ and /home/name/ with home_path
+    text = re.sub(r"/home/[^/]+/", repl_home, text)
+    # Replace ~/ with home_path/
+    text = re.sub(r"~/", repl_home, text)
+
+    return text
 
 
 PLANNER_PROMPT = """You are a workflow planner for Agent-OS. Your task is to generate a VALID execution plan as a directed acyclic graph (DAG).
@@ -49,6 +93,12 @@ EXAMPLE (valid):
   {{"id": "step_2", "step": "Rank ingredients by cost-effectiveness and nutrition", "agent_type": "executor", "depends_on": ["step_1"]}}
 ]
 
+Current operating system: {os_info}
+User home directory: {home_path}
+User Desktop path: {desktop_path}
+
+When tasks involve file paths, use the EXACT paths provided above. On Windows use backslashes; on Linux/macOS use forward slashes.
+
 Query to process: {query}
 
 Return ONLY valid JSON. No explanation."""
@@ -58,7 +108,17 @@ class PlannerAgent:
     name: str = "planner"
     role: AgentRole = AgentRole.PLANNER
 
-    def _normalize_plan_response(self, result: Any) -> List[Dict[str, Any]]:
+    def _normalize_plan_response(
+        self,
+        result: Any,
+        home_path: str = None,
+        desktop_path: str = None,
+    ) -> List[Dict[str, Any]]:
+        if home_path is None:
+            home_path = os.path.expanduser("~")
+        if desktop_path is None:
+            desktop_path = _get_desktop_path()
+
         if result is None:
             return [{"id": "step_1", "step": "analyze query", "agent_type": "executor", "depends_on": []}]
 
@@ -85,6 +145,10 @@ class PlannerAgent:
                 logger.warning(f"Planner step {step_id} missing name fields, using generic description")
                 step_name = f"Execute step {step_id}"
             step_id = str(item.get("id", f"step_{index}"))
+
+            # Normalize hallucinated paths in step text
+            step_name = _normalize_paths_in_text(step_name, home_path, desktop_path)
+
             normalized = {
                 "id": step_id,
                 "step": step_name,
@@ -126,16 +190,26 @@ class PlannerAgent:
             tools_summary = ", ".join(tool_names)
         else:
             tools_summary = "none"
-        
+
+        os_info = f"{platform.system()} {platform.release()}"
+        home_path = os.path.expanduser("~")
+        desktop_path = _get_desktop_path()
+
         logger.info(f"Planner executing for query: {query}")
-        
+
         messages = [
-            {"role": "system", "content": PLANNER_PROMPT.format(query=query, tools=tools_summary)}
+            {"role": "system", "content": PLANNER_PROMPT.format(
+                query=query,
+                tools=tools_summary,
+                os_info=os_info,
+                home_path=home_path,
+                desktop_path=desktop_path,
+            )}
         ]
-        
+
         try:
             result = await get_llm_client().complete_json(messages)
-            steps = self._normalize_plan_response(result)
+            steps = self._normalize_plan_response(result, home_path=home_path, desktop_path=desktop_path)
             
             return AgentOutput(
                 task_id=input_data.task_id,

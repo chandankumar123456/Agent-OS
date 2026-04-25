@@ -56,10 +56,21 @@ class MCPWrappedTool:
 
 
 class ToolRegistry:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
     def __init__(self):
+        if self._initialized:
+            return
         self.tools: Dict[str, RegisteredTool] = {}
         self._mcp_tools_registered = False
         self._register_default_tools()
+        self._initialized = True
 
     def _register_default_tools(self):
         self.register(SearchTool())

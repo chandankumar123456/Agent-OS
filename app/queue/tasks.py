@@ -63,9 +63,8 @@ def on_worker_process_init(**kwargs):
 
         loop.run_until_complete(_ensure_runtime_initialized())
 
-        # Start MCP system servers so filesystem/shell/browser tools are available
-        from ..mcp.client_manager import mcp_client_manager
-        loop.run_until_complete(mcp_client_manager.start_system_servers())
+        # NOTE: MCP system servers are started lazily on-demand by mcp_client_manager
+        # to avoid spawning duplicate subprocesses in every Celery worker process.
         logger.info("AgentRuntime eagerly initialized in Celery worker process")
     except Exception as e:
         logger.error(f"Celery worker eager initialization failed: {e}")

@@ -1,29 +1,42 @@
 import asyncio
 from typing import Dict, List
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, Query
 from ..orchestrator.v2.event_bus import event_bus, Event
 from ..logs.logger import logger
+from ..auth.utils import verify_access_token
 
 
 class ConnectionManager:
     def __init__(self) -> None:
         self.active_connections: Dict[str, List[WebSocket]] = {}
+        self._lock = asyncio.Lock()
 
     async def connect(self, task_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
-        if task_id not in self.active_connections:
-            self.active_connections[task_id] = []
-        self.active_connections[task_id].append(websocket)
+        async with self._lock:
+            if task_id not in self.active_connections:
+                self.active_connections[task_id] = []
+            # Limit concurrent connections per task
+            if len(self.active_connections[task_id]) >= 100:
+                await websocket.close(code=1008, reason="Too many connections for this task")
+                return
+            self.active_connections[task_id].append(websocket)
 
-    def disconnect(self, task_id: str, websocket: WebSocket) -> None:
-        connections = self.active_connections.get(task_id, [])
-        if websocket in connections:
-            connections.remove(websocket)
-        if not connections:
-            self.active_connections.pop(task_id, None)
+    async def disconnect(self, task_id: str, websocket: WebSocket) -> None:
+        async with self._lock:
+            connections = self.active_connections.get(task_id, [])
+            if websocket in connections:
+                connections.remove(websocket)
+                try:
+                    await websocket.close()
+                except Exception:
+                    pass
+            if not connections:
+                self.active_connections.pop(task_id, None)
 
     async def broadcast(self, task_id: str, message: str) -> None:
-        connections = self.active_connections.get(task_id, [])
+        async with self._lock:
+            connections = list(self.active_connections.get(task_id, []))
         to_remove: List[WebSocket] = []
         for ws in connections:
             try:
@@ -31,19 +44,27 @@ class ConnectionManager:
             except Exception:
                 to_remove.append(ws)
         for ws in to_remove:
-            self.disconnect(task_id, ws)
+            await self.disconnect(task_id, ws)
 
 
 manager = ConnectionManager()
 
 
-async def websocket_endpoint(websocket: WebSocket) -> None:
+async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)) -> None:
     task_id = websocket.path_params.get("task_id", "")
     if not task_id:
         await websocket.close(code=1008)
         return
+
+    # Validate JWT token before accepting connection
+    payload = verify_access_token(token)
+    if not payload:
+        logger.warning(f"WebSocket auth failed for task {task_id}")
+        await websocket.close(code=1008, reason="Invalid or expired token")
+        return
+
     await manager.connect(task_id, websocket)
-    logger.info(f"WebSocket connected for task {task_id}")
+    logger.info(f"WebSocket connected for task {task_id} by user {payload.get('sub', 'unknown')}")
 
     subscription_task: asyncio.Task | None = None
 
@@ -60,10 +81,12 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         subscription_task = asyncio.create_task(_subscribe())
         while True:
             # Keep the connection alive and handle incoming client messages
-            data = await websocket.receive_text()
-            # Echo back or handle ping/pong if needed
-            if data.strip().lower() == "ping":
-                await websocket.send_text("pong")
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                if data.strip().lower() == "ping":
+                    await websocket.send_text("pong")
+            except asyncio.TimeoutError:
+                await websocket.send_text("ping")
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected for task {task_id}")
     except Exception as e:
@@ -72,7 +95,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         if subscription_task is not None:
             subscription_task.cancel()
             try:
-                await subscription_task
-            except asyncio.CancelledError:
+                await asyncio.wait_for(subscription_task, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
-        manager.disconnect(task_id, websocket)
+        await manager.disconnect(task_id, websocket)

@@ -213,6 +213,27 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     pending_writes=None,
                 )
 
+    async def aput_writes(
+        self,
+        config: Dict[str, Any],
+        writes,
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint.
+
+        Minimal implementation: writes are logged but not persisted to a
+        separate table. For full resume/interrupt support, implement a
+        checkpoint_writes table in the future.
+        """
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        checkpoint_id = config["configurable"].get("checkpoint_id", "")
+        logger.debug(
+            f"aput_writes: thread={thread_id} ns={checkpoint_ns} "
+            f"checkpoint={checkpoint_id} task={task_id} writes={len(writes)}"
+        )
+
     async def adelete(self, config: Dict[str, Any]) -> None:
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
