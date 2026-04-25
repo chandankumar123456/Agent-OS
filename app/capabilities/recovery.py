@@ -3,6 +3,7 @@ from typing import Dict, Any, Optional, List
 
 from .models import RecoveryAction, RecoveryDecision, VerificationReport, VerificationResult
 from ..logs.logger import logger
+from ..memory.short_term import redis_client
 
 
 class RecoveryEngine:
@@ -18,7 +19,6 @@ class RecoveryEngine:
 
     def __init__(self, max_retries: int = 3):
         self.max_retries = max_retries
-        self._retry_counts: Dict[str, int] = {}
         self._tool_alternatives: Dict[str, List[str]] = {
             "filesystem__write_file": ["shell__execute_command"],
             "shell__execute_command": ["filesystem__write_file"],
@@ -26,7 +26,42 @@ class RecoveryEngine:
             "browser__http_request": ["browser__scrape_page"],
         }
 
-    def decide(
+    def _retry_key(self, task_id: str, step_id: Optional[str]) -> str:
+        return f"agentos:recovery:{task_id}:{step_id or 'task'}"
+
+    async def _get_retry_count(self, task_id: str, step_id: Optional[str]) -> int:
+        if not redis_client.client:
+            raise RuntimeError("Redis client is unavailable")
+        key = self._retry_key(task_id, step_id)
+        value = await redis_client.client.get(key)
+        if value is None:
+            return 0
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return 0
+
+    async def _increment_retry(self, task_id: str, step_id: Optional[str]) -> int:
+        if not redis_client.client:
+            raise RuntimeError("Redis client is unavailable")
+        key = self._retry_key(task_id, step_id)
+        new_count = await redis_client.client.incr(key)
+        await redis_client.client.expire(key, 604800)
+        return new_count
+
+    async def reset_retries(self, task_id: str) -> None:
+        """Clear retry counts for a task."""
+        if not redis_client.client:
+            raise RuntimeError("Redis client is unavailable")
+        pattern = f"agentos:recovery:{task_id}:*"
+        keys = []
+        async for key in redis_client.client.scan_iter(match=pattern):
+            keys.append(key)
+        if keys:
+            await redis_client.client.delete(*keys)
+            logger.info(f"Reset retry counts for task {task_id} ({len(keys)} keys)")
+
+    async def decide(
         self,
         task_id: str,
         step_id: Optional[str],
@@ -35,8 +70,7 @@ class RecoveryEngine:
         current_tool: Optional[str] = None,
     ) -> RecoveryDecision:
         """Decide the recovery action for a failure."""
-        retry_key = f"{task_id}:{step_id or 'task'}"
-        current_retries = self._retry_counts.get(retry_key, 0)
+        current_retries = await self._get_retry_count(task_id, step_id)
 
         # Check if max retries reached
         if current_retries >= self.max_retries:
@@ -52,7 +86,7 @@ class RecoveryEngine:
         # Verification-driven recovery
         if verification_report:
             if verification_report.retry_suggested:
-                self._retry_counts[retry_key] = current_retries + 1
+                await self._increment_retry(task_id, step_id)
                 return RecoveryDecision(
                     task_id=task_id,
                     step_id=step_id,
@@ -88,7 +122,7 @@ class RecoveryEngine:
                 "503", "502", "504", "429", "reset", "refused",
             ]
             if any(p in error_lower for p in transient_patterns):
-                self._retry_counts[retry_key] = current_retries + 1
+                await self._increment_retry(task_id, step_id)
                 return RecoveryDecision(
                     task_id=task_id,
                     step_id=step_id,
@@ -128,7 +162,7 @@ class RecoveryEngine:
 
         # Default: retry once, then escalate
         if current_retries < self.max_retries:
-            self._retry_counts[retry_key] = current_retries + 1
+            await self._increment_retry(task_id, step_id)
             return RecoveryDecision(
                 task_id=task_id,
                 step_id=step_id,
@@ -149,12 +183,6 @@ class RecoveryEngine:
             return None
         alternatives = self._tool_alternatives.get(tool_name, [])
         return alternatives[0] if alternatives else None
-
-    def reset_retries(self, task_id: str):
-        """Clear retry counts for a task."""
-        keys_to_remove = [k for k in self._retry_counts if k.startswith(f"{task_id}:")]
-        for k in keys_to_remove:
-            del self._retry_counts[k]
 
 
 # Global singleton

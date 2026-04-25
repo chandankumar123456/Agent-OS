@@ -263,6 +263,7 @@ class Orchestrator:
         task_id: UUID,
         user_id: str,
         mode: str,
+        resume_state: Optional[Dict[str, Any]] = None,
     ) -> AgentOutput:
         """Execute a task using LangGraph compiled state graphs with capability awareness."""
         try:
@@ -337,6 +338,8 @@ class Orchestrator:
                 feasibility_report=feasibility.model_dump(),
                 environment_config=env_config.model_dump(),
             )
+            if resume_state:
+                state.update(resume_state)
 
             if mode == "task":
                 graph = compile_task_graph(checkpointer=checkpointer)
