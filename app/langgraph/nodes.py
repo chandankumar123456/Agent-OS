@@ -364,7 +364,7 @@ To provide a direct answer (only if no tool is needed):
                     verification_reports.append(v_report.model_dump())
                     if v_report.result == VerificationResult.FAIL:
                         # Trigger recovery for next iteration
-                        decision = recovery_engine.decide(
+                        decision = await recovery_engine.decide(
                             task_id, None,
                             error=v_report.failure_reason,
                             verification_report=v_report,

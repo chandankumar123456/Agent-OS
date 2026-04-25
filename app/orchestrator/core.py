@@ -417,11 +417,21 @@ class Orchestrator:
         try:
             return await self._execute_with_langgraph(query, config, task_id, user_id, mode)
         except Exception as langgraph_err:
-            logger.warning(f"LangGraph execution failed, falling back to legacy mode strategy: {langgraph_err}")
+            logger.warning(f"LangGraph execution failed, attempting checkpoint recovery: {langgraph_err}")
             await event_bus.publish(
                 f"task:{task_id}",
                 Event("fallback.triggered", {"task_id": str(task_id), "reason": str(langgraph_err), "fallback_mode": mode}, source="orchestrator"),
             )
+            # ── Checkpoint Recovery ──────────────────────────────────────
+            try:
+                from ..recovery.checkpoint_service import CheckpointRecoveryService
+                recovery_service = CheckpointRecoveryService()
+                recovered_state = await recovery_service.resume_task(str(task_id), mode, {})
+                if recovered_state:
+                    logger.info(f"Checkpoint recovered for task {task_id}, re-attempting LangGraph execution")
+                    return await self._execute_with_langgraph(query, config, task_id, user_id, mode, resume_state=recovered_state)
+            except Exception as recovery_err:
+                logger.warning(f"Checkpoint recovery failed for task {task_id}: {recovery_err}")
 
         # Fallback to legacy mode strategies
         try:
