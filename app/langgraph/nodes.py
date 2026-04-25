@@ -504,25 +504,51 @@ async def approval_node(state: AgentState) -> Dict[str, Any]:
 
 
 async def summarizer_node(state: AgentState) -> Dict[str, Any]:
-    """Compile final result from all executed steps."""
+    """Compile final result from all executed steps using LLM summarization."""
     query = state.get("query", "")
     steps = state.get("steps", [])
     task_id = state.get("task_id", "")
 
     logger.info(f"[summarizer_node] Summarizing task {task_id}")
 
-    # Compile outputs
     outputs = [s.get("output", "") for s in steps]
     combined = "\n\n".join(outputs)
+
+    # Use LLM to produce a concise user-facing summary
+    llm = get_llm_client()
+    summary_prompt = f"""Summarize the following task execution results into a concise, user-friendly response.
+
+Original query: {query}
+
+Step outputs:
+{combined}
+
+Provide a brief summary (2-4 sentences) of what was accomplished and any important notes."""
+
+    try:
+        summary_response = await llm.complete_json(
+            messages=[{"role": "user", "content": summary_prompt}],
+            response_schema={
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string"},
+                },
+                "required": ["summary"],
+            },
+        )
+        summary = summary_response.get("summary", combined[:1000])
+    except Exception as e:
+        logger.warning(f"[summarizer_node] LLM summarization failed: {e}")
+        summary = combined[:1000]
 
     return {
         "result": {
             "query": query,
             "steps_executed": len(steps),
             "outputs": outputs,
-            "summary": combined,
+            "summary": summary,
             "trace_id": state.get("trace_id", ""),
         },
-        "messages": [AIMessage(content=f"Task complete. Summary:\n{combined}")],
+        "messages": [AIMessage(content=f"Task complete. Summary:\n{summary}")],
         "status": "completed",
     }
