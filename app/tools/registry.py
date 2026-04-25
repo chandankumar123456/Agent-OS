@@ -70,6 +70,7 @@ class ToolRegistry:
         self.tools: Dict[str, RegisteredTool] = {}
         self._mcp_tools_registered = False
         self._register_default_tools()
+        self._register_browser_env_tools()
         self._initialized = True
 
     def _register_default_tools(self):
@@ -77,6 +78,43 @@ class ToolRegistry:
         self.register(CalculatorTool())
         self.register(TextProcessorTool())
         logger.info("Default tools registered")
+
+    def _register_browser_env_tools(self):
+        from ..environments.browser_env import browser_environment
+
+        class BrowserEnvTool:
+            def __init__(self, name, action):
+                self.name = name
+                self.description = f"Browser environment: {action}"
+                self.tool_type = "browser_env"
+                self._action = action
+
+            def get_schema(self):
+                return {"name": self.name, "description": self.description, "parameters": {}}
+
+            async def execute(self, tool_input: ToolInput):
+                params = tool_input.parameters
+                if self._action == "launch":
+                    return await browser_environment.launch(params.get("url"), params.get("headless", False))
+                elif self._action == "navigate":
+                    return await browser_environment.navigate(params.get("url"))
+                elif self._action == "search":
+                    return await browser_environment.search(params.get("query"))
+                elif self._action == "click":
+                    return await browser_environment.click(params.get("selector"))
+                elif self._action == "type":
+                    return await browser_environment.type_text(params.get("selector"), params.get("text"))
+                elif self._action == "screenshot":
+                    return await browser_environment.screenshot(params.get("path"))
+                elif self._action == "get_text":
+                    return await browser_environment.get_text(params.get("selector"))
+                elif self._action == "close":
+                    return await browser_environment.close()
+                return ToolOutput(success=False, error=f"Unknown action: {self._action}")
+
+        for action in ["launch", "navigate", "search", "click", "type", "screenshot", "get_text", "close"]:
+            self.register(BrowserEnvTool(f"browser_env__{action}", action))
+        logger.info("Browser environment tools registered")
 
     def register(self, tool: BaseTool):
         self.tools[tool.name] = RegisteredTool(
