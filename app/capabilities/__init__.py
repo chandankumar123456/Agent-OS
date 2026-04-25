@@ -17,6 +17,7 @@ from .feasibility import FeasibilityEngine, feasibility_engine
 from .verification import DeterministicVerificationEngine, verification_engine
 from .recovery import RecoveryEngine, recovery_engine
 from .environment import ExecutionEnvironmentLayer, execution_environment
+from .environment_selector import environment_selector
 
 __all__ = [
     "Capability",
@@ -40,4 +41,5 @@ __all__ = [
     "recovery_engine",
     "ExecutionEnvironmentLayer",
     "execution_environment",
+    "environment_selector",
 ]

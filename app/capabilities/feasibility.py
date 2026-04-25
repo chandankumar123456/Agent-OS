@@ -11,6 +11,7 @@ from .models import (
     ExecutionEnvironment,
     EnvironmentConfig,
 )
+from .environment_selector import environment_selector
 from ..tools.registry import tool_registry
 from ..mcp.client_manager import mcp_client_manager
 from ..logs.logger import logger
@@ -149,26 +150,20 @@ class FeasibilityEngine:
         report: FeasibilityReport,
     ) -> EnvironmentConfig:
         """Select the best execution environment for the task."""
-        caps = {r.capability for r in assessment.required_capabilities}
-
-        if Capability.DEPLOYMENT in caps or Capability.SHELL in caps:
-            env = ExecutionEnvironment.SHELL
-        elif Capability.WEB in caps:
-            env = ExecutionEnvironment.BROWSER
-        elif Capability.CODE in caps:
-            env = ExecutionEnvironment.SANDBOX
-        else:
-            env = ExecutionEnvironment.LOCAL
+        env = environment_selector.select(assessment.query, assessment)
 
         home = os.path.expanduser("~")
-        return EnvironmentConfig(
+        config = EnvironmentConfig(
             environment=env,
             working_dir=os.getcwd(),
             allowed_paths=[home, os.getcwd()],
             blocked_commands=["rm -rf /", "format", "dd if=/dev/zero"],
             network_access=True,
             timeout_seconds=300,
+            headless=(env != ExecutionEnvironment.BROWSER_UI),
+            screenshot_on_complete=(env == ExecutionEnvironment.BROWSER_UI),
         )
+        return config
 
 
 # Global singleton
