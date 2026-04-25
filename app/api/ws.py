@@ -56,8 +56,15 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)) -> N
         await websocket.close(code=1008)
         return
 
+    # Coerce token to string (FastAPI Query object may be passed if param missing)
+    token_str = str(token) if token else ""
+    if not token_str or token_str == "None":
+        logger.warning(f"WebSocket missing token for task {task_id}")
+        await websocket.close(code=1008, reason="Missing token")
+        return
+
     # Validate JWT token before accepting connection
-    payload = verify_access_token(token)
+    payload = verify_access_token(token_str)
     if not payload:
         logger.warning(f"WebSocket auth failed for task {task_id}")
         await websocket.close(code=1008, reason="Invalid or expired token")
