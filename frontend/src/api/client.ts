@@ -25,7 +25,7 @@ export interface WorkflowNode {
 
 export interface Task {
   task_id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'waiting_approval';
   result: any;
   steps: WorkflowNode[];
   workflow_state: WorkflowState;

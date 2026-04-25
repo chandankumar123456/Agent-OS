@@ -336,6 +336,42 @@ const Dashboard = () => {
                     Cancel
                   </motion.button>
                 ) : null}
+                {currentTask.status === 'waiting_approval' ? (
+                  <>
+                    <motion.button
+                      onClick={async () => {
+                        try {
+                          await apiClient.approveTask(currentTask.task_id);
+                          setCurrentTask(prev => prev ? {...prev, status: 'running'} : prev);
+                          showToast('Task approved', 'success');
+                        } catch (e) {
+                          console.error('Failed to approve task:', e);
+                          showToast('Approval failed', 'error');
+                        }
+                      }}
+                      whileTap={{ scale: 0.95 }}
+                      className="text-xs px-2 py-1 rounded bg-[#00FF88]/10 text-[#00FF88] hover:bg-[#00FF88]/20 transition-colors"
+                    >
+                      Approve
+                    </motion.button>
+                    <motion.button
+                      onClick={async () => {
+                        try {
+                          await apiClient.rejectTask(currentTask.task_id);
+                          setCurrentTask(prev => prev ? {...prev, status: 'failed'} : prev);
+                          showToast('Task rejected', 'success');
+                        } catch (e) {
+                          console.error('Failed to reject task:', e);
+                          showToast('Rejection failed', 'error');
+                        }
+                      }}
+                      whileTap={{ scale: 0.95 }}
+                      className="text-xs px-2 py-1 rounded bg-[#FF4B4B]/10 text-[#FF4B4B] hover:bg-[#FF4B4B]/20 transition-colors"
+                    >
+                      Reject
+                    </motion.button>
+                  </>
+                ) : null}
                 {wsTaskId && wsStatus === 'open' && (
                   <span className="flex items-center gap-1 text-xs text-[#00FF88] font-medium">
                     <Radio className="w-3 h-3 animate-pulse" />
