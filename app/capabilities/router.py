@@ -149,7 +149,7 @@ class CapabilityRouter:
         suggestions: Dict[Capability, List[str]] = {
             Capability.FILE: ["filesystem__write_file", "filesystem__read_file", "filesystem__list_directory"],
             Capability.CODE: ["shell__execute_command", "filesystem__write_file"],
-            Capability.WEB: ["browser__http_request", "browser__scrape_page", "search"],
+            Capability.WEB: ["cloud_api__http_request", "cloud_api__scrape_page", "cloud_api__search_web"],
             Capability.SHELL: ["shell__execute_command", "shell__run_script"],
             Capability.WORKFLOW: [],
             Capability.DEPLOYMENT: ["shell__execute_command"],

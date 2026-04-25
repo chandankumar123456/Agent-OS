@@ -162,7 +162,7 @@ class MCPClientManager:
     # ── System servers ─────────────────────────────────────────────────
 
     async def start_system_servers(self) -> None:
-        """Start the built-in system MCP servers (filesystem, shell, browser).
+        """Start the built-in system MCP servers (filesystem, shell, cloud_api).
 
         Idempotent: safe to call multiple times. Uses a flag to prevent duplicate spawns.
         """
@@ -174,7 +174,7 @@ class MCPClientManager:
         servers = [
             ("filesystem", sys.executable, ["-m", "app.mcp.servers.filesystem"]),
             ("shell", sys.executable, ["-m", "app.mcp.servers.shell"]),
-            ("browser", sys.executable, ["-m", "app.mcp.servers.browser"]),
+            ("cloud_api", sys.executable, ["-m", "app.mcp.servers.cloud_api"]),
         ]
 
         for name, command, args in servers:

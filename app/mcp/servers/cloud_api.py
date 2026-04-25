@@ -1,4 +1,4 @@
-"""MCP Browser Server — provides web browsing tools to agents."""
+"""MCP Cloud API Server — provides HTTP and search APIs to agents."""
 import json
 import urllib.request
 import urllib.parse
@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any
 
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("browser")
+mcp = FastMCP("cloud_api")
 
 USER_AGENT = "AgentOS-Browser/1.0"
 
