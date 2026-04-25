@@ -6,6 +6,7 @@ from .models import (
     Capability,
     CapabilityRequirement,
     CapabilityAssessment,
+    ExecutionEnvironment,
 )
 from ..logs.logger import logger
 
@@ -55,6 +56,21 @@ class CapabilityRouter:
         Capability.CHAT: [
             "chat", "conversation", "talk", "discuss", "brainstorm", "advice",
             "explain", "summarize", "translate", "help",
+        ],
+        Capability.RESEARCH: [
+            "research", "investigate", "study", "analyze", "survey", "review",
+            "literature", "findings", "explore", "discover", "academic",
+            "paper", "journal", "source", "reference",
+        ],
+        Capability.COMMUNICATION: [
+            "email", "message", "notify", "send", "contact", "call",
+            "meeting", "calendar", "invite", "slack", "teams", "chat",
+            "communication", "collaborate", "share", "report",
+        ],
+        Capability.DATA_PROCESSING: [
+            "data", "process", "transform", "clean", "filter", "aggregate",
+            "compute", "calculate", "statistics", "dataset", "dataframe",
+            "csv", "excel", "spreadsheet", "table", "column", "row",
         ],
     }
 
@@ -155,9 +171,36 @@ class CapabilityRouter:
             Capability.DEPLOYMENT: ["shell__execute_command"],
             Capability.KNOWLEDGE: [],
             Capability.CHAT: [],
+            Capability.RESEARCH: ["cloud_api__search_web", "cloud_api__http_request"],
+            Capability.COMMUNICATION: ["cloud_api__send_email", "cloud_api__send_message"],
+            Capability.DATA_PROCESSING: ["local__process_data", "local__compute_statistics"],
         }
         return suggestions.get(cap, [])
 
 
-# Global singleton
+class IntentRouter:
+    """Maps capability assessments to execution environments dynamically."""
+
+    ENVIRONMENT_MAP: Dict[Capability, ExecutionEnvironment] = {
+        Capability.FILE: ExecutionEnvironment.FILE,
+        Capability.CODE: ExecutionEnvironment.SHELL,
+        Capability.WEB: ExecutionEnvironment.BROWSER_UI,
+        Capability.SHELL: ExecutionEnvironment.SHELL,
+        Capability.RESEARCH: ExecutionEnvironment.CLOUD_API,
+        Capability.COMMUNICATION: ExecutionEnvironment.CLOUD_API,
+        Capability.DATA_PROCESSING: ExecutionEnvironment.LOCAL,
+        Capability.DEPLOYMENT: ExecutionEnvironment.SHELL,
+        Capability.KNOWLEDGE: ExecutionEnvironment.CLOUD_API,
+        Capability.CHAT: ExecutionEnvironment.LOCAL,
+        Capability.WORKFLOW: ExecutionEnvironment.LOCAL,
+    }
+
+    def select_environment(self, assessment: CapabilityAssessment) -> ExecutionEnvironment:
+        """Select the most appropriate execution environment for a capability assessment."""
+        primary = assessment.primary_capability
+        return self.ENVIRONMENT_MAP.get(primary, ExecutionEnvironment.LOCAL)
+
+
+# Global singletons
 capability_router = CapabilityRouter()
+intent_router = IntentRouter()

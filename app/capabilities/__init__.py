@@ -12,7 +12,7 @@ from .models import (
     ExecutionEnvironment,
     EnvironmentConfig,
 )
-from .router import CapabilityRouter, capability_router
+from .router import CapabilityRouter, capability_router, IntentRouter, intent_router
 from .feasibility import FeasibilityEngine, feasibility_engine
 from .verification import DeterministicVerificationEngine, verification_engine
 from .recovery import RecoveryEngine, recovery_engine
@@ -33,6 +33,8 @@ __all__ = [
     "EnvironmentConfig",
     "CapabilityRouter",
     "capability_router",
+    "IntentRouter",
+    "intent_router",
     "FeasibilityEngine",
     "feasibility_engine",
     "DeterministicVerificationEngine",

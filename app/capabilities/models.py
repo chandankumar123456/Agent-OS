@@ -13,6 +13,9 @@ class Capability(str, Enum):
     DEPLOYMENT = "deployment"
     KNOWLEDGE = "knowledge"
     CHAT = "chat"
+    RESEARCH = "research"
+    COMMUNICATION = "communication"
+    DATA_PROCESSING = "data_processing"
 
 
 class FeasibilityResult(str, Enum):
