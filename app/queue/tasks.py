@@ -58,8 +58,10 @@ def on_worker_process_init(**kwargs):
         # Connect DB and Redis so runtime.load_from_db() can work
         from ..memory.long_term import db
         from ..memory.short_term import redis_client
+        from ..memory.redis_pubsub import redis_pubsub_client
         loop.run_until_complete(db.connect())
         loop.run_until_complete(redis_client.connect())
+        loop.run_until_complete(redis_pubsub_client.connect())
 
         loop.run_until_complete(_ensure_runtime_initialized())
 

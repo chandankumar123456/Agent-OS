@@ -71,12 +71,16 @@ class RedisPubSubClient:
         return self._client
 
     async def publish(self, channel: str, message: str) -> None:
-        """Publish a message to a Redis channel."""
+        """Publish a message to a Redis channel. Auto-connects if necessary."""
+        if not self._client:
+            await self.connect()
         client = self.get_client()
         await client.publish(channel, message)
 
     async def subscribe(self, channel: str) -> AsyncIterator[str]:
-        """Yield string messages from a Redis channel with graceful cleanup."""
+        """Yield string messages from a Redis channel with graceful cleanup. Auto-connects if necessary."""
+        if not self._client:
+            await self.connect()
         client = self.get_client()
         pubsub: Optional[redis.client.PubSub] = None
         try:

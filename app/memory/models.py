@@ -182,7 +182,7 @@ class SpanModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     trace_id = Column(String(36), nullable=False, index=True)
-    span_id = Column(String(36), nullable=False, unique=True, index=True)
+    span_id = Column(String(255), nullable=False, unique=True, index=True)
     operation = Column(String(100), nullable=False)
     agent_name = Column(String(50), nullable=False)
     status = Column(String(20), default="pending")
