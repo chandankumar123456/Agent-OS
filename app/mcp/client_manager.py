@@ -175,6 +175,7 @@ class MCPClientManager:
             ("filesystem", sys.executable, ["-m", "app.mcp.servers.filesystem"]),
             ("shell", sys.executable, ["-m", "app.mcp.servers.shell"]),
             ("cloud_api", sys.executable, ["-m", "app.mcp.servers.cloud_api"]),
+            ("desktop", sys.executable, ["-m", "app.mcp.servers.desktop"]),
         ]
 
         for name, command, args in servers:

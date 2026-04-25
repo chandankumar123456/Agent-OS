@@ -71,6 +71,7 @@ class ToolRegistry:
         self._mcp_tools_registered = False
         self._register_default_tools()
         self._register_browser_env_tools()
+        self._register_desktop_env_tools()
         self._initialized = True
 
     def _register_default_tools(self):
@@ -118,6 +119,52 @@ class ToolRegistry:
         for action in ["launch", "navigate", "search", "click", "type", "screenshot", "get_text", "close"]:
             self.register(BrowserEnvTool(f"browser_env__{action}", action))
         logger.info("Browser environment tools registered")
+
+    def _register_desktop_env_tools(self):
+        from ..environments.desktop_env import desktop_session_manager
+
+        class DesktopEnvTool:
+            def __init__(self, name, action):
+                self.name = name
+                self.description = f"Desktop environment: {action}"
+                self.tool_type = "desktop_env"
+                self._action = action
+
+            def get_schema(self):
+                return {"name": self.name, "description": self.description, "parameters": {}}
+
+            async def execute(self, tool_input: ToolInput):
+                params = tool_input.parameters
+                task_id = params.get("_task_id", "default")
+                session = await desktop_session_manager.get_or_create_session(task_id)
+
+                if self._action == "screenshot":
+                    return await session.screenshot(params.get("path"))
+                elif self._action == "click":
+                    return await session.click(params.get("x", 0), params.get("y", 0))
+                elif self._action == "type_text":
+                    return await session.type_text(params.get("text", ""), params.get("interval", 0.01))
+                elif self._action == "press_key":
+                    return await session.press_key(params.get("keys", ""))
+                elif self._action == "get_window_list":
+                    return await session.get_window_list()
+                elif self._action == "focus_window":
+                    return await session.focus_window(params.get("title", ""))
+                elif self._action == "get_clipboard":
+                    return await session.get_clipboard()
+                elif self._action == "set_clipboard":
+                    return await session.set_clipboard(params.get("text", ""))
+                elif self._action == "get_mouse_position":
+                    return await session.get_mouse_position()
+                elif self._action == "scroll":
+                    return await session.scroll(params.get("amount", 0))
+                elif self._action == "close":
+                    return await desktop_session_manager.close_session(task_id)
+                return ToolOutput(success=False, error=f"Unknown action: {self._action}")
+
+        for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close"]:
+            self.register(DesktopEnvTool(f"desktop_env__{action}", action))
+        logger.info("Desktop environment tools registered")
 
     def register(self, tool: BaseTool):
         self.tools[tool.name] = RegisteredTool(
