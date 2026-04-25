@@ -11,6 +11,7 @@ from ..logs.logger import logger
 from ..tools.registry import tool_registry
 from ..capabilities import verification_engine, recovery_engine
 from ..capabilities.models import VerificationResult, RecoveryAction
+from ..observability import observability_bus, ObservabilityEventType
 from .state import AgentState
 
 
@@ -139,6 +140,14 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
         logger.error(f"[planner_node] Planning failed: {e}")
         plan = [{"step_number": 1, "description": query, "tool": None, "expected_output": "Answer the user's query"}]
 
+    await observability_bus.emit_safe(
+        ObservabilityEventType.PLANNER_REASONING,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        payload={"plan": plan, "capability_context": capability_context},
+        source="planner_node",
+    )
+
     return {
         "plan": plan,
         "current_step_index": 0,
@@ -163,6 +172,15 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     suggested_tool = step.get("tool")
 
     logger.info(f"[executor_node] Executing step {step_number} for task {task_id}: {description}")
+
+    await observability_bus.emit_safe(
+        ObservabilityEventType.STEP_STARTED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        step_id=str(step_number),
+        payload={"description": description, "suggested_tool": suggested_tool},
+        source="executor_node",
+    )
 
     # Tools should already be discovered by orchestrator entry point.
     # Do NOT call discover_mcp_tools() here to avoid redundant work per step.
@@ -288,6 +306,14 @@ To provide a direct answer (only if no tool is needed):
                 continue
 
             logger.info(f"[executor_node] Invoking tool '{tool_name}' with params: {tool_params}")
+            await observability_bus.emit_safe(
+                ObservabilityEventType.TOOL_INVOKED,
+                task_id=task_id,
+                trace_id=state.get("trace_id"),
+                step_id=str(step_number),
+                payload={"tool": tool_name, "params": tool_params},
+                source="executor_node",
+            )
             try:
                 tool_output = await tool_registry.execute(tool_name, tool_params)
                 tool_result = {
@@ -298,6 +324,15 @@ To provide a direct answer (only if no tool is needed):
             except Exception as e:
                 logger.error(f"[executor_node] Tool execution error: {e}")
                 tool_result = {"success": False, "error": str(e)}
+
+            await observability_bus.emit_safe(
+                ObservabilityEventType.TOOL_RESULT,
+                task_id=task_id,
+                trace_id=state.get("trace_id"),
+                step_id=str(step_number),
+                payload={"tool": tool_name, "result": tool_result},
+                source="executor_node",
+            )
 
             # Always record tool result first
             tool_calls.append({
@@ -325,6 +360,18 @@ To provide a direct answer (only if no tool is needed):
                             current_tool=tool_name,
                         )
                         recovery_decisions.append(decision.model_dump())
+                        await observability_bus.emit_safe(
+                            ObservabilityEventType.RECOVERY_ACTION,
+                            task_id=task_id,
+                            trace_id=state.get("trace_id"),
+                            step_id=str(step_number),
+                            payload={
+                                "action": decision.action.value,
+                                "reason": decision.reason,
+                                "next_tool": decision.next_tool,
+                            },
+                            source="executor_node",
+                        )
                         if decision.action == RecoveryAction.SWITCH_TOOL and decision.next_tool:
                             messages.append(HumanMessage(
                                 content=f"Verification failed. Switching to alternative tool: {decision.next_tool}"
@@ -358,6 +405,15 @@ To provide a direct answer (only if no tool is needed):
 
     steps = state.get("steps", [])
     steps.append(step_output)
+
+    await observability_bus.emit_safe(
+        ObservabilityEventType.STEP_STARTED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        step_id=str(step_number),
+        payload={"status": "completed", "output_preview": final_answer[:200]},
+        source="executor_node",
+    )
 
     return {
         "steps": steps,
@@ -466,6 +522,14 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
     if env_notes:
         notes = f"{env_notes} {notes}"
 
+    await observability_bus.emit_safe(
+        ObservabilityEventType.VERIFICATION_COMPLETED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        payload={"verified": verified, "notes": notes, "deterministic_pass": det_pass, "llm_verified": llm_verified, "env_verified": env_verified},
+        source="verifier_node",
+    )
+
     return {
         "verified": verified,
         "verification_notes": notes,
@@ -494,6 +558,13 @@ async def approval_node(state: AgentState) -> Dict[str, Any]:
     reason = value.get("reason", "") if isinstance(value, dict) else str(value)
 
     logger.info(f"[approval_node] Approval result for task {task_id}: {approved}")
+    await observability_bus.emit_safe(
+        ObservabilityEventType.SAFETY_CHECK,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        payload={"approved": approved, "reason": reason},
+        source="approval_node",
+    )
 
     return {
         "approved": approved,
@@ -540,6 +611,14 @@ Provide a brief summary (2-4 sentences) of what was accomplished and any importa
     except Exception as e:
         logger.warning(f"[summarizer_node] LLM summarization failed: {e}")
         summary = combined[:1000]
+
+    await observability_bus.emit_safe(
+        ObservabilityEventType.TASK_COMPLETED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        payload={"steps_executed": len(steps), "summary": summary[:200]},
+        source="summarizer_node",
+    )
 
     return {
         "result": {

@@ -389,6 +389,10 @@ class Orchestrator:
             )
         except Exception as e:
             logger.error(f"[LangGraph] Execution failed for task {task_id}: {type(e).__name__}: {e}")
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("task.failed", {"task_id": str(task_id), "error": str(e), "stage": "langgraph"}, source="orchestrator"),
+            )
             import traceback
             logger.error(traceback.format_exc())
             raise
@@ -411,6 +415,10 @@ class Orchestrator:
             return await self._execute_with_langgraph(query, config, task_id, user_id, mode)
         except Exception as langgraph_err:
             logger.warning(f"LangGraph execution failed, falling back to legacy mode strategy: {langgraph_err}")
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("fallback.triggered", {"task_id": str(task_id), "reason": str(langgraph_err), "fallback_mode": mode}, source="orchestrator"),
+            )
 
         # Fallback to legacy mode strategies
         try:
@@ -419,6 +427,10 @@ class Orchestrator:
             return await strategy.execute(self.runtime, self, query, config, task_id, user_id)
         except ValueError as mode_err:
             logger.error(f"Unknown mode '{mode}': {mode_err}")
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("task.failed", {"task_id": str(task_id), "error": f"Unknown mode: {mode}"}, source="orchestrator"),
+            )
             return AgentOutput(
                 task_id=task_id,
                 step_id=uuid4(),
