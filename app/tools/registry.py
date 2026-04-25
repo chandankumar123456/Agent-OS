@@ -80,7 +80,7 @@ class ToolRegistry:
         logger.info("Default tools registered")
 
     def _register_browser_env_tools(self):
-        from ..environments.browser_env import browser_environment
+        from ..environments.browser_env import browser_session_manager
 
         class BrowserEnvTool:
             def __init__(self, name, action):
@@ -94,22 +94,25 @@ class ToolRegistry:
 
             async def execute(self, tool_input: ToolInput):
                 params = tool_input.parameters
+                task_id = params.get("_task_id", "default")
+                session = await browser_session_manager.get_or_create_session(task_id)
+
                 if self._action == "launch":
-                    return await browser_environment.launch(params.get("url"), params.get("headless", False))
+                    return await session.launch(params.get("headless", False))
                 elif self._action == "navigate":
-                    return await browser_environment.navigate(params.get("url"))
+                    return await session.navigate(params.get("url"))
                 elif self._action == "search":
-                    return await browser_environment.search(params.get("query"))
+                    return await session.search(params.get("query"))
                 elif self._action == "click":
-                    return await browser_environment.click(params.get("selector"))
+                    return await session.click(params.get("selector"))
                 elif self._action == "type":
-                    return await browser_environment.type_text(params.get("selector"), params.get("text"))
+                    return await session.type_text(params.get("selector"), params.get("text"))
                 elif self._action == "screenshot":
-                    return await browser_environment.screenshot(params.get("path"))
+                    return await session.screenshot(params.get("path"))
                 elif self._action == "get_text":
-                    return await browser_environment.get_text(params.get("selector"))
+                    return await session.get_text(params.get("selector"))
                 elif self._action == "close":
-                    return await browser_environment.close()
+                    return await browser_session_manager.close_session(task_id)
                 return ToolOutput(success=False, error=f"Unknown action: {self._action}")
 
         for action in ["launch", "navigate", "search", "click", "type", "screenshot", "get_text", "close"]:

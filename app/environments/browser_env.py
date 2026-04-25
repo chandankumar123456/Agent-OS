@@ -1,110 +1,289 @@
 """Browser Environment — real browser UI automation via Playwright."""
 import os
 import tempfile
-from typing import Optional, Dict, Any
-from playwright.async_api import async_playwright, Page, Browser, BrowserContext
+import urllib.parse
+from typing import Optional, Dict, Any, List
+from playwright.async_api import async_playwright, Page, Browser, BrowserContext, Locator
 
 from ..logs.logger import logger
 from ..tools.base import ToolInput, ToolOutput
 
 
-class BrowserEnvironment:
-    def __init__(self):
+# Domain-specific search input selectors
+DOMAIN_SELECTORS: Dict[str, List[str]] = {
+    "google.com": [
+        'textarea[name="q"]',
+        'input[name="q"]',
+        '#APjFqb',
+        'input[aria-label="Search"]',
+    ],
+    "youtube.com": [
+        'input[name="search_query"]',
+        'input#search',
+        'ytd-searchbox input',
+        '#search-input input',
+    ],
+    "amazon.com": [
+        '#twotabsearchtextbox',
+        '#nav-bb-search input',
+        '#nav-search-field input',
+        'input[name="field-keywords"]',
+    ],
+    "amazon.in": [
+        '#twotabsearchtextbox',
+        '#nav-bb-search input',
+        'input[name="field-keywords"]',
+    ],
+    "bing.com": [
+        'textarea[name="q"]',
+        'input[name="q"]',
+        '#sb_form_q',
+    ],
+    "duckduckgo.com": [
+        'input[name="q"]',
+        '#search_form_input',
+    ],
+}
+
+FALLBACK_SELECTORS: List[str] = [
+    'input[type="search"]',
+    'input[placeholder*="search" i]',
+    '[role="searchbox"]',
+    'input[name*="query" i]',
+    'input[name*="search" i]',
+    'input[name*="q" i]',
+    'textarea[name*="q" i]',
+    'form input',
+    'input',
+]
+
+
+class BrowserSession:
+    """A single browser session scoped to one task."""
+
+    def __init__(self, task_id: str):
+        self.task_id = task_id
         self._playwright = None
         self._browser: Optional[Browser] = None
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
         self._headless = False
+        self._current_url: Optional[str] = None
 
-    async def _ensure_browser(self) -> Page:
-        if self._page and not self._page.is_closed():
+    async def launch(self, headless: bool = False) -> ToolOutput:
+        self._headless = headless
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.launch(
+                headless=self._headless,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            self._context = await self._browser.new_context(
+                viewport={"width": 1280, "height": 720},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+            self._page = await self._context.new_page()
+            logger.info(f"BrowserSession[{self.task_id}]: launched new browser instance")
+            return ToolOutput(success=True, result={"message": "Browser launched"})
+        except Exception as e:
+            logger.error(f"BrowserSession[{self.task_id}]: launch failed: {e}")
+            return ToolOutput(success=False, error=str(e))
+
+    def is_alive(self) -> bool:
+        return self._page is not None and not self._page.is_closed()
+
+    async def _ensure_page(self) -> Page:
+        if self.is_alive():
             return self._page
-
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=self._headless,
-            args=["--disable-blink-features=AutomationControlled"]
-        )
-        self._context = await self._browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        )
-        self._page = await self._context.new_page()
-        logger.info("BrowserEnvironment: launched new browser instance")
+        logger.warning(f"BrowserSession[{self.task_id}]: page closed, attempting recovery")
+        if self._context:
+            self._page = await self._context.new_page()
+            if self._current_url:
+                await self._page.goto(self._current_url, wait_until="domcontentloaded")
+                logger.info(f"BrowserSession[{self.task_id}]: recovered to {self._current_url}")
+            return self._page
+        # Full recovery needed
+        await self.launch(headless=self._headless)
         return self._page
 
-    async def launch(self, url: Optional[str] = None, headless: bool = False) -> ToolOutput:
-        self._headless = headless
-        page = await self._ensure_browser()
-        if url:
-            await page.goto(url, wait_until="domcontentloaded")
-            logger.info(f"BrowserEnvironment: navigated to {url}")
-            return ToolOutput(success=True, result={"message": f"Launched browser and navigated to {url}"})
-        return ToolOutput(success=True, result={"message": "Browser launched"})
-
     async def navigate(self, url: str) -> ToolOutput:
-        page = await self._ensure_browser()
-        await page.goto(url, wait_until="domcontentloaded")
-        title = await page.title()
-        return ToolOutput(success=True, result={"url": url, "title": title})
+        try:
+            page = await self._ensure_page()
+            await page.goto(url, wait_until="domcontentloaded")
+            self._current_url = url
+            title = await page.title()
+            return ToolOutput(success=True, result={"url": url, "title": title})
+        except Exception as e:
+            logger.error(f"BrowserSession[{self.task_id}]: navigate error: {e}")
+            return ToolOutput(success=False, error=str(e))
 
     async def search(self, query: str) -> ToolOutput:
-        page = await self._ensure_browser()
-        await page.goto("https://www.google.com", wait_until="domcontentloaded")
+        page = await self._ensure_page()
+        domain = self._detect_domain()
+        selectors = DOMAIN_SELECTORS.get(domain, [])
+        selectors = selectors + FALLBACK_SELECTORS
+
+        last_error = None
+        for selector in selectors:
+            try:
+                # Wait for element with short timeout
+                await page.wait_for_selector(selector, timeout=5000)
+                await page.fill(selector, query)
+                await page.press(selector, "Enter")
+                await page.wait_for_load_state("networkidle", timeout=15000)
+                self._current_url = page.url
+                title = await page.title()
+                return ToolOutput(success=True, result={
+                    "query": query,
+                    "domain": domain,
+                    "selector_used": selector,
+                    "page_title": title,
+                    "message": f"Searched for '{query}' on {domain}"
+                })
+            except Exception as e:
+                last_error = e
+                continue
+
+        # All selectors failed — screenshot and list inputs
+        screenshot_path = os.path.join(tempfile.gettempdir(), f"agentos_search_fail_{self.task_id}.png")
         try:
-            await page.click('button:has-text("Accept all")', timeout=3000)
+            await page.screenshot(path=screenshot_path, full_page=True)
+        except Exception:
+            screenshot_path = None
+
+        # List all input elements
+        inputs_info = []
+        try:
+            inputs = await page.query_selector_all("input, textarea")
+            for inp in inputs:
+                attrs = await inp.evaluate("""el => ({
+                    tag: el.tagName.toLowerCase(),
+                    type: el.type,
+                    name: el.name,
+                    placeholder: el.placeholder,
+                    id: el.id,
+                    class: el.className
+                })""")
+                inputs_info.append(attrs)
         except Exception:
             pass
-        await page.fill('textarea[name="q"]', query)
-        await page.press('textarea[name="q"]', "Enter")
-        await page.wait_for_load_state("networkidle")
-        title = await page.title()
-        return ToolOutput(success=True, result={"query": query, "page_title": title, "message": f"Searched for '{query}' in browser"})
+
+        error_msg = (
+            f"Search failed on {domain}. Tried {len(selectors)} selectors. "
+            f"Last error: {last_error}. Available inputs: {inputs_info}"
+        )
+        if screenshot_path:
+            error_msg += f". Screenshot: {screenshot_path}"
+        logger.error(f"BrowserSession[{self.task_id}]: {error_msg}")
+        return ToolOutput(success=False, error=error_msg)
+
+    def _detect_domain(self) -> str:
+        if not self._page:
+            return "unknown"
+        url = self._page.url
+        try:
+            host = urllib.parse.urlparse(url).hostname or ""
+            # Strip www. prefix
+            if host.startswith("www."):
+                host = host[4:]
+            return host.lower()
+        except Exception:
+            return "unknown"
 
     async def click(self, selector: str) -> ToolOutput:
-        page = await self._ensure_browser()
-        await page.click(selector)
-        return ToolOutput(success=True, result={"message": f"Clicked {selector}"})
+        try:
+            page = await self._ensure_page()
+            await page.click(selector)
+            self._current_url = page.url
+            return ToolOutput(success=True, result={"message": f"Clicked {selector}"})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
 
     async def type_text(self, selector: str, text: str) -> ToolOutput:
-        page = await self._ensure_browser()
-        await page.fill(selector, text)
-        return ToolOutput(success=True, result={"message": f"Typed into {selector}"})
+        try:
+            page = await self._ensure_page()
+            await page.fill(selector, text)
+            return ToolOutput(success=True, result={"message": f"Typed into {selector}"})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
 
     async def screenshot(self, path: Optional[str] = None) -> ToolOutput:
-        page = await self._ensure_browser()
-        if not path:
-            path = os.path.join(tempfile.gettempdir(), "agentos_screenshot.png")
-        await page.screenshot(path=path, full_page=True)
-        return ToolOutput(success=True, result={"path": path, "message": f"Screenshot saved to {path}"})
+        try:
+            page = await self._ensure_page()
+            if not path:
+                path = os.path.join(tempfile.gettempdir(), f"agentos_screenshot_{self.task_id}.png")
+            await page.screenshot(path=path, full_page=True)
+            return ToolOutput(success=True, result={"path": path, "message": f"Screenshot saved to {path}"})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
 
     async def get_text(self, selector: Optional[str] = None) -> ToolOutput:
-        page = await self._ensure_browser()
-        if selector:
-            text = await page.inner_text(selector)
-        else:
-            text = await page.inner_text("body")
-        return ToolOutput(success=True, result={"text": text[:5000]})
+        try:
+            page = await self._ensure_page()
+            if selector:
+                text = await page.inner_text(selector)
+            else:
+                text = await page.inner_text("body")
+            return ToolOutput(success=True, result={"text": text[:5000]})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
 
     async def close(self) -> ToolOutput:
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
-        if self._playwright:
-            await self._playwright.stop()
-            self._playwright = None
-        self._page = None
-        self._context = None
-        logger.info("BrowserEnvironment: browser closed")
-        return ToolOutput(success=True, result={"message": "Browser closed"})
+        try:
+            if self._browser:
+                await self._browser.close()
+                self._browser = None
+            if self._playwright:
+                await self._playwright.stop()
+                self._playwright = None
+            self._page = None
+            self._context = None
+            logger.info(f"BrowserSession[{self.task_id}]: browser closed")
+            return ToolOutput(success=True, result={"message": "Browser closed"})
+        except Exception as e:
+            return ToolOutput(success=False, error=str(e))
 
     async def health_check(self) -> Dict[str, str]:
         try:
-            page = await self._ensure_browser()
+            page = await self._ensure_page()
             await page.goto("about:blank")
-            return {"status": "healthy", "message": "Browser launched successfully"}
+            return {"status": "healthy", "message": "Browser session active"}
         except Exception as e:
             return {"status": "unhealthy", "message": str(e)}
 
 
-browser_environment = BrowserEnvironment()
+class BrowserSessionManager:
+    """Manages browser sessions per task_id."""
+
+    def __init__(self):
+        self._sessions: Dict[str, BrowserSession] = {}
+
+    async def get_or_create_session(self, task_id: str) -> BrowserSession:
+        session = self._sessions.get(task_id)
+        if session and session.is_alive():
+            logger.info(f"BrowserSessionManager: reusing session for task {task_id}")
+            return session
+        if session:
+            logger.warning(f"BrowserSessionManager: session dead for task {task_id}, recreating")
+            await session.close()
+        session = BrowserSession(task_id)
+        await session.launch()
+        self._sessions[task_id] = session
+        return session
+
+    def get_session(self, task_id: str) -> Optional[BrowserSession]:
+        return self._sessions.get(task_id)
+
+    async def close_session(self, task_id: str) -> ToolOutput:
+        session = self._sessions.pop(task_id, None)
+        if session:
+            return await session.close()
+        return ToolOutput(success=True, result={"message": "No session to close"})
+
+    async def close_all(self):
+        for task_id, session in list(self._sessions.items()):
+            await session.close()
+        self._sessions.clear()
+
+
+browser_session_manager = BrowserSessionManager()

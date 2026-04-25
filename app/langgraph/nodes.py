@@ -229,6 +229,9 @@ To provide a direct answer (only if no tool is needed):
         if tool_call and isinstance(tool_call, dict):
             tool_name = tool_call.get("name")
             tool_params = tool_call.get("params", {})
+            # Inject task_id for browser environment tools to enable session reuse
+            if tool_name.startswith("browser_env__"):
+                tool_params["_task_id"] = task_id
 
             if not tool_name:
                 final_answer = response.get("answer") or response.get("details") or json.dumps(response)
