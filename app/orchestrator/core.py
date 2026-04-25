@@ -28,6 +28,7 @@ from ..langgraph.graphs import (
 )
 from ..langgraph.state import AgentState
 from ..mcp.client_manager import mcp_client_manager
+from ..orchestrator.v2.event_bus import event_bus, Event
 from ..capabilities import (
     capability_router,
     feasibility_engine,
@@ -271,6 +272,14 @@ class Orchestrator:
                 f"[Capability] task={task_id} primary={assessment.primary_capability.value} "
                 f"complexity={assessment.estimated_complexity}"
             )
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("capability.selected", {
+                    "primary_capability": assessment.primary_capability.value,
+                    "complexity": assessment.estimated_complexity,
+                    "safety_flags": assessment.safety_flags,
+                }, source="orchestrator"),
+            )
 
             # Auto-select mode if not explicitly set
             if mode == "task" and assessment.estimated_complexity > 5:
@@ -280,6 +289,10 @@ class Orchestrator:
             # ── Feasibility Analysis ─────────────────────────────────────
             feasibility = await feasibility_engine.check(assessment, config)
             if feasibility.result == FeasibilityResult.BLOCKED:
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.failed", {"reason": "safety_blocked", "notes": feasibility.notes}, source="orchestrator"),
+                )
                 return AgentOutput(
                     task_id=str(task_id),
                     step_id=uuid4(),
@@ -289,6 +302,10 @@ class Orchestrator:
                     output_data={"feasibility": feasibility.model_dump()},
                 )
             if feasibility.result == FeasibilityResult.UNSUPPORTED:
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.failed", {"reason": "unsupported", "notes": feasibility.notes}, source="orchestrator"),
+                )
                 return AgentOutput(
                     task_id=str(task_id),
                     step_id=uuid4(),
@@ -302,6 +319,13 @@ class Orchestrator:
             env_config = feasibility_engine.select_environment(assessment, feasibility)
             execution_environment.configure(str(task_id), env_config)
             logger.info(f"[Environment] task={task_id} env={env_config.environment.value}")
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("environment.selected", {
+                    "environment": env_config.environment.value,
+                    "working_dir": env_config.working_dir,
+                }, source="orchestrator"),
+            )
 
             # Ensure MCP tools are discovered
             await tool_registry.discover_mcp_tools()

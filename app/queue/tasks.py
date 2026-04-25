@@ -98,14 +98,17 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
     logger.info(f"Executing task {task_id}: {query}")
 
     from ..orchestrator.core import orchestrator
+    from ..orchestrator.v2.event_bus import event_bus, Event
     from uuid import UUID
     from ..memory.long_term import task_repo, db
     from ..memory.short_term import redis_client
+    from ..memory.redis_pubsub import redis_pubsub_client
 
     async def run():
         # Re-validate connections on the persistent worker loop; no-ops if healthy
         await db.connect()
         await redis_client.connect()
+        await redis_pubsub_client.connect()
 
         logger.info("Database and Redis connected for task execution")
 
@@ -118,7 +121,16 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
             )
         logger.info("Runtime verified: core_planner available")
 
+        await event_bus.publish(
+            f"task:{task_id}",
+            Event("task.received", {"task_id": task_id, "query": query, "user_id": user_id}, source="celery"),
+        )
+
         await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
+        await event_bus.publish(
+            f"task:{task_id}",
+            Event("task.status_changed", {"task_id": task_id, "status": "running"}, source="celery"),
+        )
         try:
             result = await orchestrator.execute_task(
                 query, config, task_id=UUID(task_id), user_id=user_id
@@ -127,13 +139,25 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
                 await task_repo.update(
                     task_id, status=TaskStatus.COMPLETED.value, result=result.output_data
                 )
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.completed", {"task_id": task_id, "status": "completed"}, source="celery"),
+                )
             else:
                 await task_repo.update(
                     task_id, status=TaskStatus.FAILED.value, error=result.error_message
                 )
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.failed", {"task_id": task_id, "error": result.error_message}, source="celery"),
+                )
             return result
         except Exception as exc:
             await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("task.failed", {"task_id": task_id, "error": str(exc)}, source="celery"),
+            )
             raise
 
     loop = _worker_event_loop
