@@ -392,12 +392,35 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         llm_verified = False
         notes = f"LLM verification error: {e}"
 
+    # Environment-specific verification
+    env_verified = True
+    env_notes = ""
+    if env_type == "browser_ui":
+        tool_calls = state.get("tool_calls", [])
+        browser_calls = [t for t in tool_calls if t.get("tool", "").startswith("browser_env__")]
+        if not browser_calls:
+            env_verified = False
+            env_notes = "Browser environment selected but no browser_env tools were invoked."
+        else:
+            env_notes = f"Browser automation verified: {len(browser_calls)} browser actions performed."
+    elif env_type == "cloud_api":
+        tool_calls = state.get("tool_calls", [])
+        cloud_calls = [t for t in tool_calls if t.get("tool", "").startswith("cloud__")]
+        if not cloud_calls:
+            env_verified = False
+            env_notes = "Cloud API environment selected but no cloud tools were invoked."
+        else:
+            env_notes = f"Cloud API verified: {len(cloud_calls)} API calls made."
+
     # Final verdict: both deterministic and LLM must agree for PASS
-    verified = det_pass and llm_verified
+    verified = det_pass and llm_verified and env_verified
     if not det_pass and llm_verified:
         notes = f"Deterministic checks failed but LLM thinks it's OK. {notes}"
     elif det_pass and not llm_verified:
         notes = f"Deterministic checks passed but semantic verification failed. {notes}"
+
+    if env_notes:
+        notes = f"{env_notes} {notes}"
 
     return {
         "verified": verified,
