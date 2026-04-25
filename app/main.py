@@ -164,7 +164,7 @@ app.include_router(health_router)
 app.include_router(public_router)
 
 from .api.ws import websocket_endpoint
-app.add_websocket_route("/ws/tasks/{task_id}", websocket_endpoint)
+app.add_api_websocket_route("/ws/tasks/{task_id}", websocket_endpoint)
 
 
 @app.exception_handler(AgentOSError)
