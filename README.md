@@ -224,28 +224,32 @@ graph TB
         EX[Executor Node]
         TREG[ToolRegistry]
         MCP_MGR[MCPClientManager]
+        BENV[BrowserEnvironment<br/>Playwright]
     end
 
     subgraph "MCP Servers (stdio transport)"
         FS[FilesystemServer<br/>FastMCP]
         SH[ShellServer<br/>FastMCP]
-        BR[BrowserServer<br/>FastMCP]
+        CA[CloudAPIServer<br/>FastMCP]
     end
 
     subgraph "System Resources"
         DISK[(File System)]
         SHELL[Shell / Process]
         WEB[Web / HTTP]
+        BROWSER[(Browser UI<br/>Chromium)]
     end
 
     EX -->|tool_call| TREG
     TREG -->|MCPWrappedTool| MCP_MGR
+    TREG -->|BrowserEnvTool| BENV
     MCP_MGR -->|stdio| FS
     MCP_MGR -->|stdio| SH
-    MCP_MGR -->|stdio| BR
+    MCP_MGR -->|stdio| CA
     FS --> DISK
     SH --> SHELL
-    BR --> WEB
+    CA --> WEB
+    BENV --> BROWSER
 ```
 
 ### Available MCP Tools
@@ -513,6 +517,7 @@ Path remapping rules:
 | MCP SDK | mcp | 1.0+ | Model Context Protocol |
 | PDF Processing | PyMuPDF (fitz) | 1.23+ | Text extraction |
 | Pipeline | Celery | 5.3+ | Background task queue |
+| Browser Automation | Playwright | 1.51+ | Real UI browser automation |
 | Relational DB | PostgreSQL | 14+ | Session, task, checkpoint storage |
 | ORM | SQLAlchemy async | 2.0+ | Async database operations |
 | Vector DB | ChromaDB | 0.4+ | Vector storage & similarity search |
@@ -527,6 +532,7 @@ Path remapping rules:
 - Node.js 20+
 - PostgreSQL 14+
 - Redis 7+
+- Playwright Chromium (for browser automation)
 
 ### Environment Configuration
 
@@ -551,6 +557,7 @@ CORS_ORIGINS=http://localhost:5173,http://localhost:3000
 ```bash
 cd AgentOS
 pip install -r requirements.txt
+playwright install chromium
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
