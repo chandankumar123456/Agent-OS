@@ -97,6 +97,8 @@ def mock_session():
     session._context = MagicMock()
     session._page = MagicMock()
     session._page.is_closed.return_value = False
+    session._page.evaluate = AsyncMock(return_value=500)
+    session._page.bring_to_front = AsyncMock(return_value=None)
     session._browser.is_connected.return_value = True
     return session
 
@@ -204,6 +206,9 @@ async def test_session_recovery_on_closed_page():
 
     new_page = MagicMock()
     new_page.goto = AsyncMock(return_value=None)
+    new_page.bring_to_front = AsyncMock(return_value=None)
+    new_page.evaluate = AsyncMock(return_value=500)
+    new_page.url = "https://prev.example.com"
     session._context.new_page = AsyncMock(return_value=new_page)
 
     session._current_url = "https://prev.example.com"
@@ -224,6 +229,7 @@ async def test_session_manager_reuses_connected_session():
     session._browser = MagicMock()
     session._page = MagicMock()
     session._page.is_closed.return_value = False
+    session._page.evaluate = AsyncMock(return_value=500)
     session._browser.is_connected.return_value = True
 
     manager._sessions["reuse"] = session
@@ -240,12 +246,14 @@ async def test_session_manager_recreate_dead_session():
     dead_session._browser = MagicMock()
     dead_session._page = MagicMock()
     dead_session._page.is_closed.return_value = True
-    dead_session.close = AsyncMock(return_value=None)
+    dead_session.close_context_only = AsyncMock(return_value=None)
 
     manager._sessions["dead"] = dead_session
 
-    with patch.object(BrowserSession, "launch", new_callable=AsyncMock) as mock_launch:
-        new_session = await manager.get_or_create_session("dead")
-        dead_session.close.assert_awaited_once()
-        mock_launch.assert_awaited_once()
-        assert new_session is not dead_session
+    with patch.object(manager, "_ensure_browser", new_callable=AsyncMock) as mock_ensure_browser:
+        with patch.object(BrowserSession, "bind_to_browser", new_callable=AsyncMock) as mock_bind:
+            new_session = await manager.get_or_create_session("dead")
+            dead_session.close_context_only.assert_awaited_once()
+            mock_ensure_browser.assert_awaited_once()
+            mock_bind.assert_awaited_once()
+            assert new_session is not dead_session

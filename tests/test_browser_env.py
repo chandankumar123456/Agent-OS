@@ -11,23 +11,19 @@ async def test_browser_session_launch():
     mock_page.is_closed = MagicMock(return_value=False)
     mock_page.url = "https://example.com"
     mock_page.evaluate = AsyncMock(return_value=100)
+    mock_page.bring_to_front = AsyncMock(return_value=None)
     mock_browser = AsyncMock()
     mock_browser.is_connected = MagicMock(return_value=True)
     mock_context = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
     mock_browser.new_context = AsyncMock(return_value=mock_context)
 
-    mock_pw = MagicMock()
-    mock_pw.chromium = MagicMock(launch=AsyncMock(return_value=mock_browser))
-    mock_pw.stop = AsyncMock()
+    # Set up manager with mocked browser so launch() can bind
+    browser_session_manager._browser = mock_browser
 
-    async_mock_pw = AsyncMock()
-    async_mock_pw.start = AsyncMock(return_value=mock_pw)
-
-    with patch("app.environments.browser_env.async_playwright", return_value=async_mock_pw):
-        result = await session.launch()
-        assert result.success
-        assert await session.is_alive()
+    result = await session.launch()
+    assert result.success
+    assert await session.is_alive()
 
     # Cleanup singleton
     await browser_session_manager.close_all()
