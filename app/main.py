@@ -113,14 +113,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"MCP tool discovery failed at startup: {e}")
 
-    try:
-        from .environments.browser_env import browser_session_manager
-        await browser_session_manager._ensure_browser()
-        logger.info("Browser process warmed at startup")
-        initialized.append("browser_warmed")
-    except Exception as e:
-        logger.warning(f"Browser warm failed (will lazy-load): {e}")
-
     yield
 
     if "mcp_servers" in initialized:
