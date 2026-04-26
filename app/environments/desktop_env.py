@@ -72,6 +72,7 @@ class DesktopSession:
         *args,
         default_result: Any = None,
         default_error: Optional[str] = None,
+        visibility: Optional[Dict[str, Any]] = None,
         **kwargs,
     ) -> ToolOutput:
         """Wrap a synchronous call in safety checks and return a ToolOutput."""
@@ -85,6 +86,7 @@ class DesktopSession:
             return ToolOutput(
                 success=True,
                 result=result if default_result is None else default_result,
+                visibility=visibility,
             )
         except Exception as e:
             logger.error(
@@ -120,6 +122,7 @@ class DesktopSession:
             return ToolOutput(
                 success=True,
                 result={"path": path, "message": f"Screenshot saved to {path}"},
+                visibility={"type": "desktop_screenshot", "path": path},
             )
         except ScreenShotError as e:
             logger.error(f"DesktopSession[{self.task_id}]: screenshot failed: {e}")
@@ -146,6 +149,7 @@ class DesktopSession:
             x,
             y,
             default_result={"message": f"Clicked at ({x}, {y})"},
+            visibility={"type": "desktop_click", "x": x, "y": y},
         )
 
     async def type_text(self, text: str, interval: float = 0.01) -> ToolOutput:
@@ -158,6 +162,7 @@ class DesktopSession:
             text,
             interval=interval,
             default_result={"message": f"Typed text (length {len(text)})"},
+            visibility={"type": "desktop_type", "text_length": len(text)},
         )
 
     async def press_key(self, keys: str) -> ToolOutput:
@@ -176,12 +181,14 @@ class DesktopSession:
                 pyautogui.hotkey,
                 *parts,
                 default_result={"message": f"Pressed hotkey {keys}"},
+                visibility={"type": "desktop_key", "keys": keys},
             )
         else:
             return self._safe_call(
                 pyautogui.press,
                 keys,
                 default_result={"message": f"Pressed key {keys}"},
+                visibility={"type": "desktop_key", "keys": keys},
             )
 
     async def get_window_list(self) -> ToolOutput:
@@ -249,6 +256,7 @@ class DesktopSession:
             return ToolOutput(
                 success=True,
                 result={"windows": windows, "count": len(windows)},
+                visibility={"type": "desktop_windows", "count": len(windows)},
             )
         except Exception as e:
             logger.error(f"DesktopSession[{self.task_id}]: get_window_list failed: {e}")
@@ -274,6 +282,7 @@ class DesktopSession:
                 return ToolOutput(
                     success=True,
                     result={"message": f"Focused window: {win.title}"},
+                    visibility={"type": "desktop_focus", "title": win.title},
                 )
             elif sys.platform.startswith("linux"):
                 result = subprocess.run(
@@ -285,6 +294,7 @@ class DesktopSession:
                     return ToolOutput(
                         success=True,
                         result={"message": f"Focused window: {title}"},
+                        visibility={"type": "desktop_focus", "title": title},
                     )
                 result = subprocess.run(
                     ["xdotool", "search", "--name", title, "windowactivate"],
@@ -295,6 +305,7 @@ class DesktopSession:
                     return ToolOutput(
                         success=True,
                         result={"message": f"Focused window: {title}"},
+                        visibility={"type": "desktop_focus", "title": title},
                     )
                 return ToolOutput(
                     success=False,
@@ -314,6 +325,7 @@ class DesktopSession:
                     return ToolOutput(
                         success=True,
                         result={"message": f"Focused window: {title}"},
+                        visibility={"type": "desktop_focus", "title": title},
                     )
                 return ToolOutput(
                     success=False,
@@ -367,6 +379,7 @@ class DesktopSession:
             pyautogui.scroll,
             amount,
             default_result={"message": f"Scrolled {amount}"},
+            visibility={"type": "desktop_scroll", "amount": amount},
         )
 
     async def close(self) -> ToolOutput:

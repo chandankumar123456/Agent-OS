@@ -336,15 +336,6 @@ To provide a direct answer (only if no tool is needed):
                 logger.error(f"[executor_node] Tool execution error: {e}")
                 tool_result = {"success": False, "error": str(e)}
 
-            await observability_bus.emit_safe(
-                ObservabilityEventType.TOOL_RESULT,
-                task_id=task_id,
-                trace_id=state.get("trace_id"),
-                step_id=str(step_number),
-                payload={"tool": tool_name, "result": tool_result},
-                source="executor_node",
-            )
-
             # Always record tool result first
             tool_calls.append({
                 "step": step_number,

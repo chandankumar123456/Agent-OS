@@ -12,6 +12,7 @@ class ToolOutput(BaseModel):
     result: Optional[Any] = None
     error: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    visibility: Optional[Dict[str, Any]] = None
 
 
 class BaseTool(ABC):

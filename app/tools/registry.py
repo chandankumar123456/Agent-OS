@@ -50,9 +50,17 @@ class MCPWrappedTool:
                 )
             else:
                 content = str(result)
-            return ToolOutput(success=True, result={"output": content})
+            
+            visibility = None
+            if self.name.startswith("filesystem__"):
+                path = tool_input.parameters.get("path", "")
+                visibility = {"type": "file_operation", "path": path, "operation": self.name}
+            elif self.name.startswith("shell__"):
+                cmd = tool_input.parameters.get("command", "")
+                visibility = {"type": "shell_output", "command": cmd}
+            
+            return ToolOutput(success=True, result={"output": content}, visibility=visibility)
         except Exception as e:
-            logger.error(f"MCP tool execution error: {e}")
             return ToolOutput(success=False, error=str(e))
 
 
@@ -271,27 +279,40 @@ class ToolRegistry:
                 error=f"Tool not found: {tool_name}"
             )
 
-        if registered.mcp_tool and registered.tool:
-            tool_input = ToolInput(parameters=parameters)
-            result = await registered.tool.execute(tool_input)
-            if result.success:
-                registered.use_count += 1
-                registered.last_used = datetime.utcnow().isoformat()
-            return result
-
         if not registered.tool:
             return ToolOutput(success=False, error=f"Tool '{tool_name}' has no implementation")
 
         try:
             tool_input = ToolInput(parameters=parameters)
             result = await registered.tool.execute(tool_input)
-            if result.success:
-                registered.use_count += 1
-                registered.last_used = datetime.utcnow().isoformat()
-            return result
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
-            return ToolOutput(success=False, error=str(e))
+            result = ToolOutput(success=False, error=str(e))
+
+        # SINGLE EMISSION POINT
+        try:
+            from ..observability.bus import observability_bus
+            from ..observability.models import ObservabilityEventType
+            task_id = parameters.get("_task_id", "unknown")
+            await observability_bus.emit_safe(
+                ObservabilityEventType.TOOL_RESULT,
+                task_id=task_id,
+                payload={
+                    "tool_name": tool_name,
+                    "success": result.success,
+                    "result": result.result,
+                    "visibility": result.visibility,
+                    "error": result.error,
+                },
+                source="tool_registry",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to emit tool result visibility: {e}")
+
+        if result.success:
+            registered.use_count += 1
+            registered.last_used = datetime.utcnow().isoformat()
+        return result
 
 
 tool_registry = ToolRegistry()
