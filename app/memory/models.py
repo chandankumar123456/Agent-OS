@@ -1,12 +1,13 @@
 from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean, UniqueConstraint, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
 from datetime import datetime
 import uuid
 from uuid import uuid4
 from enum import Enum as PyEnum
 
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 
 class ToolV2Model(Base):

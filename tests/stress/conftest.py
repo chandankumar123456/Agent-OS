@@ -1,13 +1,17 @@
 """Fixtures for stress tests."""
 from __future__ import annotations
 
-import os
+import logging
 
 import httpx
 import pytest
+import pytest_asyncio
 
 from app.auth.utils import create_access_token
+from app.main import app
 from .runner import StressTestRunner
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture(scope="session")
@@ -17,39 +21,112 @@ def stress_test_token():
     return token
 
 
-@pytest.fixture(scope="session")
-def server_available():
-    """Check if the AgentOS server is running locally."""
-    base_url = os.getenv("AGENTOS_STRESS_URL", "http://localhost:8000")
+@pytest_asyncio.fixture
+async def stress_async_client():
+    """Provide an async HTTP client wired directly to the FastAPI ASGI app.
+
+    Function-scoped so each stress test gets a fresh app lifespan (and fresh DB/Redis connections).
+    """
+    from app.memory.long_term import db
+    from app.memory.short_term import redis_client
+    from app.memory.redis_pubsub import redis_pubsub_client
+    from app.runtime.runtime import AgentRuntime
+
     try:
-        resp = httpx.get(f"{base_url}/health", timeout=5.0)
-        return resp.status_code == 200
-    except Exception:
-        return False
+        await db.connect()
+    except Exception as e:
+        logger.error(f"Database connection failed in stress_async_client: {e}")
+        raise
+
+    try:
+        from app.memory.long_term import user_repo
+        existing = await user_repo.get_by_id("stress-test-user")
+        if not existing:
+            await user_repo.create(
+                user_id="stress-test-user",
+                email="stress@test.com",
+                hashed_password="not-needed",
+                name="Stress Test User",
+                role="admin",
+            )
+    except Exception as e:
+        logger.warning(f"Stress test user setup skipped or failed (may already exist): {e}")
+
+    # Relax rate limits and task caps for stress testing
+    from app.config.settings import settings
+    settings.MAX_ACTIVE_TASKS_PER_USER = 1000
+    settings.RATE_LIMIT_PER_MINUTE = 100000
+
+    # Disable rate limiting entirely for stress tests by patching the check method
+    import app.middleware.rate_limit as rl_module
+    _orig_is_rate_limited = rl_module.RateLimitMiddleware._is_rate_limited
+    async def _patched_is_rate_limited(self, client_id, limit):
+        return False, 0, limit
+    rl_module.RateLimitMiddleware._is_rate_limited = _patched_is_rate_limited
+
+    # Clear any accumulated rate-limit state for the stress test user in Redis
+    try:
+        if redis_client.client:
+            pattern = "agentos:ratelimit:user:stress-test-user:*"
+            keys = []
+            async for key in redis_client.client.scan_iter(match=pattern):
+                keys.append(key)
+            if keys:
+                await redis_client.client.delete(*keys)
+    except Exception as e:
+        logger.warning(f"Failed to clear Redis rate limit keys: {e}")
+
+    try:
+        await redis_client.connect()
+    except Exception as e:
+        logger.error(f"Redis connection failed in stress_async_client: {e}")
+        raise
+
+    try:
+        await redis_pubsub_client.connect()
+    except Exception as e:
+        logger.error(f"Redis PubSub connection failed in stress_async_client: {e}")
+        raise
+
+    runtime = AgentRuntime()
+    try:
+        await runtime.initialize()
+    except Exception as e:
+        logger.error(f"AgentRuntime initialization failed in stress_async_client: {e}")
+        raise
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        yield client
+
+    try:
+        await runtime.shutdown_all()
+    except Exception as e:
+        logger.error(f"AgentRuntime shutdown failed in stress_async_client: {e}")
+
+    try:
+        await redis_pubsub_client.disconnect()
+    except Exception as e:
+        logger.error(f"Redis PubSub disconnect failed in stress_async_client: {e}")
+
+    try:
+        await redis_client.disconnect()
+    except Exception as e:
+        logger.error(f"Redis disconnect failed in stress_async_client: {e}")
+
+    try:
+        await db.disconnect()
+    except Exception as e:
+        logger.error(f"Database disconnect failed in stress_async_client: {e}")
+
+    # Restore original rate limiter
+    rl_module.RateLimitMiddleware._is_rate_limited = _orig_is_rate_limited
 
 
 @pytest.fixture
-def stress_runner(stress_test_token, server_available):
-    """Provide a StressTestRunner pointing at the local test server.
-
-    Skips the test if the server is not reachable or rejects our JWT.
-    """
-    if not server_available:
-        pytest.skip("AgentOS server is not running (checked /health)")
-    base_url = os.getenv("AGENTOS_STRESS_URL", "http://localhost:8000")
-    # Verify token is accepted by the server before running stress scenarios
-    try:
-        resp = httpx.get(
-            f"{base_url}/api/v1/tasks",
-            headers={"Authorization": f"Bearer {stress_test_token}"},
-            timeout=5.0,
-        )
-        if resp.status_code == 401:
-            pytest.skip(
-                "Server rejected stress-test JWT (401). "
-                "Ensure the running server shares the same SECRET_KEY as the test environment."
-            )
-    except Exception as exc:
-        pytest.skip(f"Could not verify auth with server: {exc}")
-    runner = StressTestRunner(base_url=base_url, token=stress_test_token)
-    return runner
+def stress_runner(stress_test_token, stress_async_client):
+    """Provide a StressTestRunner pointing at the ASGI app."""
+    return StressTestRunner(
+        base_url="http://test", token=stress_test_token, client=stress_async_client
+    )

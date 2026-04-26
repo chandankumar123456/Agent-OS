@@ -31,6 +31,9 @@ async def _check_dependencies() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import sys
+    sys.stdout.write("[LIFESPAN] Agent-OS starting up\n")
+    sys.stdout.flush()
     logger.info("Agent-OS starting up")
 
     await _check_dependencies()
@@ -101,6 +104,22 @@ async def lifespan(app: FastAPI):
         initialized.append("mcp_servers")
     except BaseException as e:
         logger.error(f"MCP system servers start failed: {e}")
+
+    try:
+        from .tools.registry import tool_registry
+        await tool_registry.discover_mcp_tools()
+        logger.info("MCP tools discovered at startup")
+        initialized.append("mcp_tools_discovered")
+    except Exception as e:
+        logger.error(f"MCP tool discovery failed at startup: {e}")
+
+    try:
+        from .environments.browser_env import browser_session_manager
+        await browser_session_manager._ensure_browser()
+        logger.info("Browser process warmed at startup")
+        initialized.append("browser_warmed")
+    except Exception as e:
+        logger.warning(f"Browser warm failed (will lazy-load): {e}")
 
     yield
 

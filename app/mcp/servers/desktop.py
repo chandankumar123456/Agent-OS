@@ -1,6 +1,12 @@
 """MCP Desktop Server — provides desktop automation tools to agents."""
-import json
+import os
 import sys
+
+# MUST be set before any imports that may log to stdout, because MCP stdio
+# transport requires stdout to contain *only* JSON-RPC messages.
+os.environ["AGENTOS_LOG_STDERR"] = "1"
+
+import json
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP

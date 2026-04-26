@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 from datetime import datetime
 from typing import Any, Dict
@@ -10,7 +11,9 @@ class AgentOSLogger:
         self.logger.setLevel(logging.INFO)
         
         if not self.logger.handlers:
-            handler = logging.StreamHandler(sys.stdout)
+            # Use stderr when running as an MCP stdio server to avoid corrupting JSON-RPC
+            stream = sys.stderr if os.environ.get("AGENTOS_LOG_STDERR") else sys.stdout
+            handler = logging.StreamHandler(stream)
             handler.setLevel(logging.INFO)
             formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s'

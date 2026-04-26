@@ -1,3 +1,4 @@
+import asyncio
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -69,6 +70,7 @@ class ToolRegistry:
             return
         self.tools: Dict[str, RegisteredTool] = {}
         self._mcp_tools_registered = False
+        self._discovery_lock = asyncio.Lock()
         self._register_default_tools()
         self._register_browser_env_tools()
         self._register_desktop_env_tools()
@@ -101,7 +103,10 @@ class ToolRegistry:
                 if self._action == "launch":
                     return await session.launch(params.get("headless", False))
                 elif self._action == "navigate":
-                    return await session.navigate(params.get("url"))
+                    url = params.get("url")
+                    if not url:
+                        return ToolOutput(success=False, error="Missing required parameter 'url' for browser_env__navigate")
+                    return await session.navigate(url)
                 elif self._action == "search":
                     return await session.search(params.get("query"))
                 elif self._action == "click":
@@ -199,14 +204,15 @@ class ToolRegistry:
 
     async def discover_mcp_tools(self) -> None:
         """Discover and register tools from connected MCP servers."""
-        if self._mcp_tools_registered:
-            return
-        try:
-            from ..mcp.client_manager import mcp_client_manager
-            mcp_tools = await mcp_client_manager.list_tools()
-            self.register_mcp_tools(mcp_tools)
-        except Exception as e:
-            logger.warning(f"MCP tool discovery failed (will retry later): {e}")
+        async with self._discovery_lock:
+            if self._mcp_tools_registered:
+                return
+            try:
+                from ..mcp.client_manager import mcp_client_manager
+                mcp_tools = await mcp_client_manager.list_tools()
+                self.register_mcp_tools(mcp_tools)
+            except Exception as e:
+                logger.warning(f"MCP tool discovery failed (will retry later): {e}")
 
     def get(self, name: str) -> Optional[BaseTool]:
         registered = self.tools.get(name)

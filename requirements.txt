@@ -1,66 +1,95 @@
-# Agent-OS Python Dependencies
-# Last updated: 2026-04-24
-
-# Web Framework
+amqp==5.3.1
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+asyncpg==0.30.0
+attrs==26.1.0
+bcrypt==4.0.1
+beautifulsoup4==4.12.2
+billiard==4.2.4
+celery==5.6.3
+certifi==2026.4.22
+cffi==2.0.0
+charset-normalizer==3.4.7
+click==8.3.3
+click-didyoumean==0.3.1
+click-plugins==1.1.1.2
+click-repl==0.3.0
+colorama==0.4.6
+cryptography==46.0.7
+distro==1.9.0
+dnspython==2.8.0
+ecdsa==0.19.2
+email-validator==2.3.0
 fastapi==0.121.0
-starlette>=0.40.0,<0.46.0
-uvicorn[standard]==0.38.0
-python-multipart==0.0.20
-
-# Data Validation
+greenlet==3.2.4
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.7.1
+httpx==0.28.1
+httpx-sse==0.4.3
+idna==3.13
+jiter==0.14.0
+jsonpatch==1.33
+jsonpointer==3.1.1
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+kombu==5.6.2
+langchain==1.2.15
+langchain-core==1.3.1
+langchain-openai==1.2.0
+langgraph==1.1.9
+langgraph-checkpoint==4.0.2
+langgraph-prebuilt==1.0.10
+langgraph-sdk==0.3.13
+langsmith==0.7.35
+mcp==1.27.0
+openai==2.32.0
+orjson==3.11.8
+ormsgpack==1.12.2
+packaging==26.1
+passlib==1.7.4
+playwright==1.58.0
+prompt_toolkit==3.0.52
+pyasn1==0.6.3
+pycparser==3.0
 pydantic==2.12.3
 pydantic-settings==2.12.0
-email-validator==2.3.0
-
-# Database
-sqlalchemy[asyncio]==2.0.44
-asyncpg==0.30.0
-greenlet==3.2.4
-
-# Cache & Queue
-redis>=5.0.0,<6.0.0
-celery==5.6.3
-
-# HTTP Client
-httpx==0.28.1
-
-# AI / LLM
-openai>=1.30.0,<2.0.0
-anthropic
-google-generativeai
-langgraph==1.1.9
-langchain>=0.3.0,<0.4.0
-langchain-core>=0.3.0,<0.4.0
-langchain-openai==1.2.0
-
-# Document parsing
-pypdf
-
-# MCP (Model Context Protocol)
-mcp==1.27.0
-
-# Authentication & Security
-python-jose==3.5.0
-passlib==1.7.4
-bcrypt==4.0.1
-
-# Utilities
+pydantic_core==2.41.4
+pyee==13.0.1
+PyJWT==2.12.1
+python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
-beautifulsoup4==4.12.2
-pyyaml>=6.0
-
-# Browser Automation
-playwright==1.51.0
-
-# Desktop Automation
-pyautogui>=0.9.54
-pyperclip>=1.8.2
-pygetwindow>=0.0.9
-mss>=9.0.1
-Pillow>=10.0.0
-opencv-python>=4.8.0
-psutil>=5.9.0
-
-# Testing
-pytest==8.3.0
-pytest-asyncio==0.24.0
+python-jose==3.5.0
+python-multipart==0.0.20
+pywin32==311
+PyYAML==6.0.3
+redis==7.4.0
+referencing==0.37.0
+regex==2026.4.4
+requests==2.33.1
+requests-toolbelt==1.0.0
+rpds-py==0.30.0
+rsa==4.9.1
+six==1.17.0
+sniffio==1.3.1
+soupsieve==2.8.3
+SQLAlchemy==2.0.44
+sse-starlette==3.0.3
+starlette==0.45.3
+tenacity==9.1.4
+tiktoken==0.12.0
+tqdm==4.67.3
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+tzdata==2026.1
+tzlocal==5.3.1
+urllib3==2.6.3
+uuid_utils==0.14.1
+uvicorn==0.38.0
+vine==5.1.0
+watchfiles==1.1.1
+wcwidth==0.6.0
+websockets==16.0
+xxhash==3.6.0
+zstandard==0.25.0

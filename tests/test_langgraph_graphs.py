@@ -53,3 +53,11 @@ def test_compile_collaboration_graph_returns_compiled_graph():
 def test_get_checkpointer_returns_postgres_saver():
     cp = get_checkpointer()
     assert isinstance(cp, PostgresCheckpointSaver)
+
+
+def test_graph_cache_reuses_instances():
+    from app.langgraph.graphs import get_cached_graph, _graph_cache
+    _graph_cache.clear()
+    g1 = get_cached_graph("task")
+    g2 = get_cached_graph("task")
+    assert g1 is g2

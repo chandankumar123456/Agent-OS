@@ -8,6 +8,20 @@ from app.capabilities.models import VerificationResult
 from app.capabilities.verification import DeterministicVerificationEngine
 
 
+def _make_mock_httpx_client(response_or_side_effect):
+    """Return a mock httpx.AsyncClient that works as an async context manager."""
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    if isinstance(response_or_side_effect, BaseException):
+        client.get = AsyncMock(side_effect=response_or_side_effect)
+    elif callable(response_or_side_effect) and not isinstance(response_or_side_effect, MagicMock):
+        client.get = AsyncMock(side_effect=response_or_side_effect)
+    else:
+        client.get = AsyncMock(return_value=response_or_side_effect)
+    return client
+
+
 @pytest.fixture
 def engine():
     return DeterministicVerificationEngine()
@@ -118,8 +132,8 @@ class TestCodeRuns:
 
     @pytest.mark.asyncio
     async def test_fail_on_timeout(self, engine):
-        mock_proc = AsyncMock()
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc = MagicMock()
+        mock_proc.communicate = MagicMock(return_value=asyncio.Future())
         mock_proc.kill = MagicMock()
 
         with patch(
@@ -152,10 +166,7 @@ class TestDeploymentHealthy:
         mock_response.status_code = 200
         mock_response.elapsed.total_seconds.return_value = 0.1
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client = _make_mock_httpx_client(mock_response)
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
@@ -171,10 +182,7 @@ class TestDeploymentHealthy:
         mock_response.status_code = 404
         mock_response.elapsed.total_seconds.return_value = 0.1
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client = _make_mock_httpx_client(mock_response)
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
@@ -187,10 +195,7 @@ class TestDeploymentHealthy:
         mock_response = MagicMock()
         mock_response.status_code = 500
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client = _make_mock_httpx_client(mock_response)
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
@@ -202,10 +207,7 @@ class TestDeploymentHealthy:
 
     @pytest.mark.asyncio
     async def test_fail_on_connection_error(self, engine):
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=Exception("Connection refused"))
+        mock_client = _make_mock_httpx_client(Exception("Connection refused"))
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
@@ -228,10 +230,7 @@ class TestWebContent:
         mock_response.status_code = 200
         mock_response.text = "<html>Hello</html>"
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client = _make_mock_httpx_client(mock_response)
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
@@ -246,10 +245,7 @@ class TestWebContent:
         mock_response.status_code = 200
         mock_response.text = "<html>Hello</html>"
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client = _make_mock_httpx_client(mock_response)
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
@@ -263,10 +259,7 @@ class TestWebContent:
         mock_response.status_code = 200
         mock_response.text = "<html>Hello</html>"
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_response)
+        mock_client = _make_mock_httpx_client(mock_response)
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
@@ -277,10 +270,7 @@ class TestWebContent:
 
     @pytest.mark.asyncio
     async def test_fail_on_request_error(self, engine):
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=Exception("timeout"))
+        mock_client = _make_mock_httpx_client(Exception("timeout"))
 
         with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(

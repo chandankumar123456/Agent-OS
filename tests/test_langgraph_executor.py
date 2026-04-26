@@ -8,8 +8,10 @@ from app.langgraph.state import AgentState
 
 
 @pytest.mark.asyncio
-async def test_executor_node_invokes_tool_when_llm_requests_it():
+@patch("app.langgraph.nodes.observability_bus")
+async def test_executor_node_invokes_tool_when_llm_requests_it(mock_obs_bus):
     """Executor should call a tool when the LLM returns a tool_call JSON."""
+    mock_obs_bus.emit_safe = AsyncMock(return_value=None)
     state = AgentState(
         task_id="test-task",
         user_id="user-1",
@@ -54,11 +56,12 @@ async def test_executor_node_invokes_tool_when_llm_requests_it():
             mock_registry.execute = AsyncMock(return_value=mock_tool_output)
 
             with patch("app.langgraph.nodes.recovery_engine") as mock_recovery:
-                mock_recovery.decide = AsyncMock(return_value=AsyncMock(
-                    action=AsyncMock(value="retry"),
-                    reason="Mock recovery",
-                    next_tool=None,
-                ))
+                mock_decision = MagicMock()
+                mock_decision.action = MagicMock(value="retry")
+                mock_decision.reason = "Mock recovery"
+                mock_decision.next_tool = None
+                mock_decision.model_dump = MagicMock(return_value={"action": "retry", "reason": "Mock recovery", "next_tool": None})
+                mock_recovery.decide = AsyncMock(return_value=mock_decision)
                 result = await executor_node(state)
 
     assert result["status"] == "step_executed"
@@ -74,8 +77,10 @@ async def test_executor_node_invokes_tool_when_llm_requests_it():
 
 
 @pytest.mark.asyncio
-async def test_executor_node_falls_back_to_answer_without_tool():
+@patch("app.langgraph.nodes.observability_bus")
+async def test_executor_node_falls_back_to_answer_without_tool(mock_obs_bus):
     """Executor should return answer directly when no tool is needed."""
+    mock_obs_bus.emit_safe = AsyncMock(return_value=None)
     state = AgentState(
         task_id="test-task",
         user_id="user-1",
@@ -112,8 +117,10 @@ async def test_executor_node_falls_back_to_answer_without_tool():
 
 
 @pytest.mark.asyncio
-async def test_planner_node_produces_valid_plan():
+@patch("app.langgraph.nodes.observability_bus")
+async def test_planner_node_produces_valid_plan(mock_obs_bus):
     """Planner should return a plan with all required fields."""
+    mock_obs_bus.emit_safe = AsyncMock(return_value=None)
     state = AgentState(
         task_id="test-task",
         user_id="user-1",

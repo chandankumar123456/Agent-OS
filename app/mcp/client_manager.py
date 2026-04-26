@@ -11,6 +11,18 @@ from mcp.types import CallToolResult
 
 from ..logs.logger import logger
 
+# Handle both built-in (Python 3.11+) and backport exceptiongroup
+try:
+    from builtins import BaseExceptionGroup, ExceptionGroup
+except ImportError:
+    try:
+        from exceptiongroup import BaseExceptionGroup, ExceptionGroup
+    except ImportError:
+        class BaseExceptionGroup(BaseException):
+            pass
+        class ExceptionGroup(BaseExceptionGroup):
+            pass
+
 
 @dataclass
 class ServerConnection:
@@ -34,6 +46,7 @@ class MCPClientManager:
         self.connections: Dict[str, ServerConnection] = {}
         self._tool_to_server: Dict[str, str] = {}
         self._exit_stacks: Dict[str, AsyncExitStack] = {}
+        self._raw_contexts: Dict[str, Any] = {}
 
     # ── Connection management ──────────────────────────────────────────
 
@@ -57,11 +70,12 @@ class MCPClientManager:
         )
 
         exit_stack = AsyncExitStack()
+        ctx = None
         try:
             # Enter stdio_client context
-            read_stream, write_stream = await exit_stack.enter_async_context(
-                stdio_client(params)
-            )
+            ctx = stdio_client(params)
+            read_stream, write_stream = await exit_stack.enter_async_context(ctx)
+            self._raw_contexts[name] = ctx
             # Enter ClientSession context
             session = await exit_stack.enter_async_context(
                 ClientSession(read_stream, write_stream)
@@ -91,11 +105,58 @@ class MCPClientManager:
             logger.info(f"MCP server '{name}' connected with {len(conn.tools)} tools")
             return conn
         except asyncio.TimeoutError:
-            await exit_stack.aclose()
+            if ctx:
+                await self._safe_aclose_generator(name, ctx)
+                self._raw_contexts.pop(name, None)
+            await self._safe_close_exit_stack(name, exit_stack)
             raise RuntimeError(f"MCP server '{name}' initialization timed out")
         except Exception:
-            await exit_stack.aclose()
+            if ctx:
+                await self._safe_aclose_generator(name, ctx)
+                self._raw_contexts.pop(name, None)
+            await self._safe_close_exit_stack(name, exit_stack)
             raise
+
+    async def _safe_close_exit_stack(self, name: str, exit_stack: AsyncExitStack) -> None:
+        """Gracefully close an AsyncExitStack, suppressing cross-task cleanup errors."""
+        try:
+            await exit_stack.aclose()
+        except RuntimeError as e:
+            logger.warning(
+                f"RuntimeError during MCP server '{name}' disconnect (cross-task cleanup): {e}"
+            )
+        except GeneratorExit as e:
+            logger.warning(
+                f"GeneratorExit during MCP server '{name}' disconnect: {e}"
+            )
+        except BaseExceptionGroup as e:
+            logger.warning(
+                f"ExceptionGroup during MCP server '{name}' disconnect: {e}"
+            )
+        except Exception as e:
+            logger.warning(f"Error disconnecting MCP server '{name}': {e}")
+
+    async def _safe_aclose_generator(self, name: str, ctx) -> None:
+        """Manually aclose the raw async generator to avoid finalizer stack traces."""
+        gen = getattr(ctx, "gen", None)
+        if gen is None:
+            return
+        try:
+            await gen.aclose()
+        except RuntimeError as e:
+            logger.warning(
+                f"RuntimeError during MCP server '{name}' generator cleanup (cross-task): {e}"
+            )
+        except GeneratorExit as e:
+            logger.warning(
+                f"GeneratorExit during MCP server '{name}' generator cleanup: {e}"
+            )
+        except BaseExceptionGroup as e:
+            logger.warning(
+                f"ExceptionGroup during MCP server '{name}' generator cleanup: {e}"
+            )
+        except Exception as e:
+            logger.warning(f"Error during MCP server '{name}' generator cleanup: {e}")
 
     async def connect_http(self, name: str, url: str) -> ServerConnection:
         """Connect to an MCP server via HTTP/SSE transport.
@@ -111,18 +172,23 @@ class MCPClientManager:
             return
         for tool in conn.tools:
             self._tool_to_server.pop(tool["name"], None)
+        # Manually close the raw stdio_client generator first to prevent
+        # cross-task RuntimeError stack traces from the asyncgen finalizer.
+        ctx = self._raw_contexts.pop(name, None)
+        if ctx:
+            await self._safe_aclose_generator(name, ctx)
         exit_stack = self._exit_stacks.pop(name, None)
         if exit_stack:
-            try:
-                await exit_stack.aclose()
-            except Exception as e:
-                logger.warning(f"Error disconnecting MCP server '{name}': {e}")
+            await self._safe_close_exit_stack(name, exit_stack)
         logger.info(f"MCP server '{name}' disconnected")
 
     async def disconnect_all(self) -> None:
         """Disconnect all MCP servers."""
         for name in list(self.connections.keys()):
-            await self.disconnect(name)
+            try:
+                await self.disconnect(name)
+            except Exception as e:
+                logger.warning(f"Error during disconnect_all for '{name}': {e}")
 
     # ── Tool operations ────────────────────────────────────────────────
 

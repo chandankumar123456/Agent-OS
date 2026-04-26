@@ -1,12 +1,38 @@
 """LangGraph graph compilers for AgentOS execution modes."""
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, List, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.types import Send
 
 from .state import AgentState
 from .nodes import planner_node, executor_node, verifier_node, approval_node, summarizer_node
 from .checkpointer import PostgresCheckpointSaver
 from ..logs.logger import logger
+from ..agents.llm_client import get_llm_client
+
+_graph_cache: Dict[str, Any] = {}
+
+
+def get_cached_graph(mode: str, **kwargs) -> Any:
+    """Return a pre-compiled graph for the given mode."""
+    cache_key = f"{mode}:{hash(str(sorted(kwargs.items())))}"
+    if cache_key in _graph_cache:
+        return _graph_cache[cache_key]
+
+    if mode == "task":
+        graph = compile_task_graph(**kwargs)
+    elif mode == "autonomous":
+        graph = compile_autonomous_graph(**kwargs)
+    elif mode == "workflow":
+        graph = compile_workflow_graph(**kwargs)
+    elif mode == "collaboration":
+        graph = compile_collaboration_graph(**kwargs)
+    else:
+        graph = compile_task_graph(**kwargs)
+
+    _graph_cache[cache_key] = graph
+    return graph
 
 
 def _should_continue(state: AgentState) -> str:
@@ -178,17 +204,124 @@ def compile_workflow_graph(
     return graph
 
 
-def compile_collaboration_graph(checkpointer: Optional[BaseCheckpointSaver] = None) -> Any:
-    """Compile a collaboration graph with parallel subgraphs.
+def compile_collaboration_graph(
+    collaboration_config: Optional[Dict[str, Any]] = None,
+    checkpointer: Optional[BaseCheckpointSaver] = None,
+) -> Any:
+    """Compile a collaboration graph with parallel fan-out/fan-in using Send.
 
-    Currently delegates to task graph; parallel fan-out/fan-in can be added
-    when multi-agent parallel execution is needed.
+    Flow: distributor -> parallel workers (via Send) -> aggregator -> summarizer.
     """
-    # TODO: implement parallel subgraph compilation when needed
-    logger.info("Collaboration graph falls back to task graph (parallel mode not yet implemented)")
-    return compile_task_graph(checkpointer=checkpointer)
+    config = collaboration_config or {}
+    agents = config.get("agents", [])
+    merge_strategy = config.get("merge_strategy", "summarize")
+
+    if not agents:
+        logger.info("Collaboration graph: no agents configured; falling back to task graph")
+        return compile_task_graph(checkpointer=checkpointer)
+
+    async def distributor_node(state: AgentState) -> Dict[str, Any]:
+        """Entry point: initialize collaboration state."""
+        task_id = state.get("task_id", "")
+        logger.info(f"[distributor_node] Distributing to {len(agents)} agents for task {task_id}")
+        return {
+            "status": "distributing",
+            "collaboration_results": {},
+        }
+
+    async def worker_node(state: AgentState) -> Dict[str, Any]:
+        """Process the query with an agent-specific role/prompt."""
+        task_id = state.get("task_id", "")
+        query = state.get("query", "")
+        agent_config = state.get("agent_config", {})
+        agent_id = agent_config.get("agent_id", "unknown")
+        role = agent_config.get("role", "assistant")
+        prompt = agent_config.get("prompt", "")
+
+        logger.info(f"[worker_node] Agent {agent_id} ({role}) executing for task {task_id}")
+
+        llm = get_llm_client()
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"Role: {role}\n\nQuery: {query}"},
+        ]
+
+        try:
+            response = await llm.complete_json(messages=messages)
+            result = response.get("answer") or response.get("summary") or json.dumps(response)
+        except Exception as e:
+            logger.error(f"[worker_node] Agent {agent_id} failed: {e}")
+            result = f"Error during execution: {e}"
+
+        return {
+            "collaboration_results": {
+                agent_id: {
+                    "role": role,
+                    "result": result,
+                }
+            },
+        }
+
+    async def aggregator_node(state: AgentState) -> Dict[str, Any]:
+        """Wait for all workers and merge their outputs."""
+        task_id = state.get("task_id", "")
+        results = state.get("collaboration_results", {})
+
+        logger.info(f"[aggregator_node] Aggregating {len(results)} worker results for task {task_id}")
+
+        if merge_strategy == "concatenate":
+            merged_output = "\n\n---\n\n".join(
+                f"[{info['role']}]: {info['result']}"
+                for info in results.values()
+            )
+        else:
+            # Default summarize: pass structured data to the summarizer
+            merged_output = json.dumps(
+                {aid: info["result"] for aid, info in results.items()},
+                indent=2,
+            )
+
+        return {
+            "steps": [
+                {
+                    "step_number": 1,
+                    "description": "Collaboration aggregation",
+                    "output": merged_output,
+                }
+            ],
+            "status": "aggregated",
+        }
+
+    def _distribute_to_workers(state: AgentState) -> List[Send]:
+        """Fan-out: return Send objects to invoke worker_node for each agent."""
+        return [
+            Send("worker", {"agent_config": agent})
+            for agent in agents
+        ]
+
+    builder = StateGraph(AgentState)
+    builder.add_node("distributor", distributor_node)
+    builder.add_node("worker", worker_node)
+    builder.add_node("aggregator", aggregator_node)
+    builder.add_node("summarizer", summarizer_node)
+
+    builder.set_entry_point("distributor")
+    builder.add_conditional_edges("distributor", _distribute_to_workers, ["worker"])
+    builder.add_edge("worker", "aggregator")
+    builder.add_edge("aggregator", "summarizer")
+    builder.add_edge("summarizer", END)
+
+    graph = builder.compile(checkpointer=checkpointer)
+    logger.info("Compiled collaboration graph")
+    return graph
+
+
+_checkpointer_instance: Optional[PostgresCheckpointSaver] = None
 
 
 def get_checkpointer() -> PostgresCheckpointSaver:
     """Factory for the default PostgreSQL checkpointer."""
-    return PostgresCheckpointSaver()
+    global _checkpointer_instance
+    if _checkpointer_instance is None:
+        _checkpointer_instance = PostgresCheckpointSaver()
+    return _checkpointer_instance

@@ -109,13 +109,7 @@ class FeasibilityEngine:
 
     async def _get_available_tools(self) -> List[str]:
         """List currently registered tool names."""
-        try:
-            # Ensure MCP tools are lazily discovered
-            await tool_registry.discover_mcp_tools()
-            return [t["name"] for t in tool_registry.list_tools()]
-        except Exception as e:
-            logger.warning(f"Tool discovery failed during feasibility check: {e}")
-            return [t["name"] for t in tool_registry.list_tools()]
+        return [t["name"] for t in tool_registry.list_tools()]
 
     def _check_environment(self) -> bool:
         """Check basic environment health."""

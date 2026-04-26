@@ -19,6 +19,7 @@ from ..langgraph.graphs import (
     compile_workflow_graph,
     compile_collaboration_graph,
     get_checkpointer,
+    get_cached_graph,
 )
 from ..langgraph.state import AgentState
 
@@ -169,9 +170,6 @@ class TaskRunner:
                 }, source="orchestrator"),
             )
 
-            # Ensure MCP tools are discovered
-            await tool_registry.discover_mcp_tools()
-
             checkpointer = get_checkpointer()
             state = self._build_initial_state(
                 query, config, task_id, user_id,
@@ -181,20 +179,14 @@ class TaskRunner:
                 resume_state=resume_state,
             )
 
-            if mode == "task":
-                graph = compile_task_graph(checkpointer=checkpointer)
-            elif mode == "autonomous":
-                graph = compile_autonomous_graph(checkpointer=checkpointer)
-            elif mode == "workflow":
+            if mode == "workflow":
                 workflow_def = None
                 workflow = await workflow_repo.get_by_task(str(task_id))
                 if workflow and workflow.definition:
                     workflow_def = workflow.definition
-                graph = compile_workflow_graph(workflow_definition=workflow_def, checkpointer=checkpointer)
-            elif mode == "collaboration":
-                graph = compile_collaboration_graph(checkpointer=checkpointer)
+                graph = get_cached_graph("workflow", checkpointer=checkpointer, workflow_definition=workflow_def)
             else:
-                graph = compile_task_graph(checkpointer=checkpointer)
+                graph = get_cached_graph(mode, checkpointer=checkpointer)
 
             thread_config = {
                 "configurable": {

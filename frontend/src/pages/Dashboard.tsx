@@ -9,6 +9,8 @@ import EmptyState from '../components/EmptyState';
 import { TourProvider, dashboardTourSteps } from '../components/Onboarding';
 import { useToast } from '../components/ToastProvider';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { useTaskResults } from '../hooks/useTaskResults';
+import { ResultCard } from '../components/results';
 import { AnimatedNumber } from '../components/ui/AnimatedNumber';
 import { SkeletonTaskItem, Skeleton } from '../components/ui/Skeleton';
 import { StatusBadge } from '../components/ui/StatusBadge';
@@ -40,7 +42,8 @@ const Dashboard = () => {
     ? currentTask.task_id
     : null;
 
-  const { messages, status: wsStatus } = useWebSocket({ taskId: wsTaskId });
+  const { results, addResult, clearResults } = useTaskResults();
+  const { messages, status: wsStatus } = useWebSocket({ taskId: wsTaskId, onMessage: addResult });
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -80,6 +83,10 @@ const Dashboard = () => {
       }
     }
   }, [messages, showToast]);
+
+  useEffect(() => {
+    clearResults();
+  }, [wsTaskId, clearResults]);
 
   useEffect(() => {
     const checkOnboarding = async () => {
@@ -477,6 +484,19 @@ const Dashboard = () => {
                 ))}
               </div>
             )}
+
+            {/* Execution Results */}
+            <div className="mt-4 space-y-3">
+              <h4 className="text-sm font-semibold text-primaryText uppercase tracking-wide">Execution Results</h4>
+              {results.length === 0 && (
+                <p className="text-sm text-secondaryText italic">No visible results yet. Results will appear here as tools execute.</p>
+              )}
+              <div className="space-y-3">
+                {results.map((r, i) => (
+                  <ResultCard key={`${r.task_id}-${i}`} event={r} />
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </motion.div>

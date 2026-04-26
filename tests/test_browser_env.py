@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.environments.browser_env import BrowserSession, BrowserSessionManager, DOMAIN_SELECTORS
+from app.environments.browser_env import BrowserSession, BrowserSessionManager, DOMAIN_SELECTORS, browser_session_manager
 
 
 @pytest.mark.asyncio
@@ -9,7 +9,10 @@ async def test_browser_session_launch():
     session = BrowserSession("task-1")
     mock_page = AsyncMock()
     mock_page.is_closed = MagicMock(return_value=False)
+    mock_page.url = "https://example.com"
+    mock_page.evaluate = AsyncMock(return_value=100)
     mock_browser = AsyncMock()
+    mock_browser.is_connected = MagicMock(return_value=True)
     mock_context = AsyncMock()
     mock_context.new_page = AsyncMock(return_value=mock_page)
     mock_browser.new_context = AsyncMock(return_value=mock_context)
@@ -24,7 +27,13 @@ async def test_browser_session_launch():
     with patch("app.environments.browser_env.async_playwright", return_value=async_mock_pw):
         result = await session.launch()
         assert result.success
-        assert session.is_alive()
+        assert await session.is_alive()
+
+    # Cleanup singleton
+    await browser_session_manager.close_all()
+    browser_session_manager._playwright = None
+    browser_session_manager._browser = None
+    browser_session_manager._sessions.clear()
 
 
 def test_detect_domain_google():
@@ -51,13 +60,50 @@ def test_domain_selectors_coverage():
 @pytest.mark.asyncio
 async def test_browser_session_manager_reuse():
     mgr = BrowserSessionManager()
-    # Patch BrowserSession.launch to avoid real playwright
-    with patch.object(BrowserSession, "launch", new_callable=AsyncMock) as mock_launch:
-        mock_launch.return_value = MagicMock(success=True)
+    # Patch _ensure_browser to avoid real playwright
+    with patch.object(mgr, "_ensure_browser", new_callable=AsyncMock) as mock_ensure:
+        mock_page = AsyncMock()
+        mock_page.is_closed = MagicMock(return_value=False)
+        mock_page.url = "https://example.com"
+        mock_page.evaluate = AsyncMock(return_value=100)
+        mock_context = AsyncMock()
+        mock_context.new_page = AsyncMock(return_value=mock_page)
+        mock_browser = AsyncMock()
+        mock_browser.new_context = AsyncMock(return_value=mock_context)
+        mock_browser.is_connected = MagicMock(return_value=True)
+        mgr._browser = mock_browser
+
         session1 = await mgr.get_or_create_session("task-a")
         # Simulate an alive page so the manager reuses the session
-        session1._page = MagicMock()
-        session1._page.is_closed = MagicMock(return_value=False)
+        session1._page = mock_page
         session2 = await mgr.get_or_create_session("task-a")
         assert session1 is session2
-        mock_launch.assert_awaited_once()
+        mock_ensure.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_browser_session_manager_persistent_browser():
+    mgr = BrowserSessionManager()
+    mock_page = AsyncMock()
+    mock_page.is_closed = MagicMock(return_value=False)
+    mock_page.url = "https://example.com"
+    mock_page.evaluate = AsyncMock(return_value=100)
+    mock_browser = AsyncMock()
+    mock_browser.is_connected = MagicMock(return_value=True)
+    mock_context = AsyncMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+    mock_browser.new_context = AsyncMock(return_value=mock_context)
+
+    mock_pw = MagicMock()
+    mock_pw.chromium = MagicMock(launch=AsyncMock(return_value=mock_browser))
+    mock_pw.stop = AsyncMock()
+
+    async_mock_pw = AsyncMock()
+    async_mock_pw.start = AsyncMock(return_value=mock_pw)
+
+    with patch("app.environments.browser_env.async_playwright", return_value=async_mock_pw):
+        s1 = await mgr.get_or_create_session("task-a")
+        assert s1._browser is not None
+        s2 = await mgr.get_or_create_session("task-b")
+        assert s2._browser is s1._browser
+    await mgr.close_all()
