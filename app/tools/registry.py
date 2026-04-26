@@ -41,7 +41,9 @@ class MCPWrappedTool:
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         from ..mcp.client_manager import mcp_client_manager
         try:
-            result = await mcp_client_manager.call_tool(self.name, tool_input.parameters)
+            # Strip internal params (e.g., _task_id) before sending to MCP server
+            arguments = {k: v for k, v in tool_input.parameters.items() if not k.startswith("_")}
+            result = await mcp_client_manager.call_tool(self.name, arguments)
             content = ""
             if hasattr(result, "content"):
                 content = "\n".join(
@@ -50,7 +52,7 @@ class MCPWrappedTool:
                 )
             else:
                 content = str(result)
-            
+
             visibility = None
             if self.name.startswith("filesystem__"):
                 path = tool_input.parameters.get("path", "")
@@ -58,7 +60,7 @@ class MCPWrappedTool:
             elif self.name.startswith("shell__"):
                 cmd = tool_input.parameters.get("command", "")
                 visibility = {"type": "shell_output", "command": cmd}
-            
+
             return ToolOutput(success=True, result={"output": content}, visibility=visibility)
         except Exception as e:
             return ToolOutput(success=False, error=str(e))
@@ -83,11 +85,22 @@ class ToolRegistry:
         self._register_browser_env_tools()
         self._register_desktop_env_tools()
         self._initialized = True
+        # Initialize dynamic tool builder
+        try:
+            from .builder import init_dynamic_tool_factory
+            init_dynamic_tool_factory(self)
+        except Exception as e:
+            logger.warning(f"Dynamic tool factory init failed: {e}")
 
     def _register_default_tools(self):
         self.register(SearchTool())
         self.register(CalculatorTool())
         self.register(TextProcessorTool())
+        try:
+            from ..pipelines.document_ingestion import DocumentParseTool
+            self.register(DocumentParseTool())
+        except Exception as e:
+            logger.warning(f"Could not register DocumentParseTool at startup: {e}")
         logger.info("Default tools registered")
 
     def _register_browser_env_tools(self):
@@ -224,7 +237,38 @@ class ToolRegistry:
 
     def get(self, name: str) -> Optional[BaseTool]:
         registered = self.tools.get(name)
-        return registered.tool if registered else None
+        if registered:
+            return registered.tool
+        # Try dynamic build
+        try:
+            from .builder import dynamic_tool_factory
+            if dynamic_tool_factory:
+                # Fire-and-forget async build (sync wrapper)
+                import asyncio
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(dynamic_tool_factory.ensure_tool(name))
+                except RuntimeError:
+                    pass
+                # Re-check after giving async a moment
+                registered = self.tools.get(name)
+                if registered:
+                    return registered.tool
+        except Exception as e:
+            logger.debug(f"Dynamic tool build attempt failed for {name}: {e}")
+        return None
+
+    def get_by_prefix(self, prefix: str) -> List[Dict[str, Any]]:
+        """Return all tools whose name starts with the given prefix."""
+        return [
+            {
+                **(registered.tool.get_schema() if registered.tool else {}),
+                "type": registered.type,
+                "status": "active",
+            }
+            for registered in self.tools.values()
+            if registered.name.startswith(prefix)
+        ]
 
     def get_tool(self, name: str) -> Optional[BaseTool]:
         return self.get(name)
@@ -271,6 +315,7 @@ class ToolRegistry:
         tool_name: str,
         parameters: Dict[str, Any]
     ) -> ToolOutput:
+        import asyncio
         registered = self.tools.get(tool_name)
 
         if not registered:
@@ -284,7 +329,15 @@ class ToolRegistry:
 
         try:
             tool_input = ToolInput(parameters=parameters)
-            result = await registered.tool.execute(tool_input)
+            # Enforce tool timeout to prevent hanging (e.g., recursive file searches)
+            tool_timeout = parameters.get("_timeout", 60)
+            result = await asyncio.wait_for(
+                registered.tool.execute(tool_input),
+                timeout=tool_timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Tool '{tool_name}' timed out after {tool_timeout}s")
+            result = ToolOutput(success=False, error=f"Tool '{tool_name}' timed out after {tool_timeout}s")
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
             result = ToolOutput(success=False, error=str(e))

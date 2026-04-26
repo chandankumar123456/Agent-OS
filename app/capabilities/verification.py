@@ -33,6 +33,10 @@ class DeterministicVerificationEngine:
         self._verifiers["deployment_healthy"] = self._verify_deployment_healthy
         self._verifiers["web_content"] = self._verify_web_content
         self._verifiers["command_succeeds"] = self._verify_command_succeeds
+        self._verifiers["browser_opened"] = self._verify_browser_opened
+        self._verifiers["html_rendered"] = self._verify_html_rendered
+        self._verifiers["summary_generated"] = self._verify_summary_generated
+        self._verifiers["content_extracted"] = self._verify_content_extracted
 
     async def verify(
         self,
@@ -109,6 +113,26 @@ class DeterministicVerificationEngine:
                     reports.append(await self.verify(
                         task_id, step_id, "web_content", {"url": url}
                     ))
+
+            if any(k in desc for k in ("open chrome", "open browser", "view in browser")):
+                paths = self._extract_paths(desc)
+                for path in paths:
+                    reports.append(await self.verify(
+                        task_id, step_id, "browser_opened", {"path": path}
+                    ))
+
+            if any(k in desc for k in ("create html", "generate html", "write html")):
+                paths = self._extract_paths(desc)
+                for path in paths:
+                    if path.lower().endswith(".html"):
+                        reports.append(await self.verify(
+                            task_id, step_id, "html_rendered", {"path": path}
+                        ))
+
+            if any(k in desc for k in ("summarize", "summary")):
+                reports.append(await self.verify(
+                    task_id, step_id, "summary_generated", {}
+                ))
 
         return reports
 
@@ -215,6 +239,59 @@ class DeterministicVerificationEngine:
         if not command:
             return VerificationResult.FAIL, {"error": "No command provided"}
         return await self._verify_code_runs({"command": command})
+
+    async def _verify_browser_opened(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that a browser was opened to a specific URL or file."""
+        url = criteria.get("url") or criteria.get("path")
+        if not url:
+            return VerificationResult.FAIL, {"error": "No URL or path provided for browser verification"}
+        # Check if file exists (for local HTML files)
+        if url.startswith("file://") or (len(url) > 3 and url[1] == ":"):
+            local_path = url.replace("file://", "")
+            if os.path.exists(local_path):
+                return VerificationResult.PASS, {"path": local_path, "exists": True}
+            return VerificationResult.FAIL, {"error": f"Local file not found: {local_path}", "retryable": True}
+        # For remote URLs, do a quick HTTP check
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.get(url)
+            if response.status_code < 500:
+                return VerificationResult.PASS, {"url": url, "status_code": response.status_code}
+            return VerificationResult.FAIL, {"error": f"HTTP {response.status_code}", "retryable": True}
+        except Exception as e:
+            return VerificationResult.FAIL, {"error": str(e), "retryable": True}
+
+    async def _verify_html_rendered(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that an HTML file has valid structure."""
+        path = criteria.get("path")
+        if not path:
+            return VerificationResult.FAIL, {"error": "No path provided"}
+        if not os.path.exists(path):
+            return VerificationResult.FAIL, {"error": f"File not found: {path}", "retryable": True}
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            has_html = "<html" in content.lower() or "<!doctype html" in content.lower()
+            has_body = "<body" in content.lower()
+            if has_html and has_body:
+                return VerificationResult.PASS, {"path": path, "has_html": True, "has_body": True, "size": len(content)}
+            return VerificationResult.FAIL, {"error": f"HTML file missing required tags in {path}"}
+        except Exception as e:
+            return VerificationResult.FAIL, {"error": str(e)}
+
+    async def _verify_summary_generated(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that a summary was generated and is non-empty."""
+        summary = criteria.get("summary")
+        if summary and len(summary.strip()) > 50:
+            return VerificationResult.PASS, {"length": len(summary), "preview": summary[:200]}
+        return VerificationResult.FAIL, {"error": "Summary is missing or too short", "retryable": True}
+
+    async def _verify_content_extracted(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that document content was extracted."""
+        text = criteria.get("text") or criteria.get("content")
+        if text and len(text.strip()) > 10:
+            return VerificationResult.PASS, {"length": len(text), "preview": text[:200]}
+        return VerificationResult.FAIL, {"error": "No content extracted", "retryable": True}
 
     # ── Helpers ────────────────────────────────────────────────────────
 

@@ -7,6 +7,9 @@ from uuid import uuid4
 from typing import List, Dict, Any
 from .llm_client import get_llm_client
 from ..logs.logger import logger
+from ..tools.grounding import tool_grounding_layer
+from ..tools.registry import tool_registry
+from ..workflows.decomposer import workflow_decomposer
 
 
 def _get_desktop_path() -> str:
@@ -57,6 +60,11 @@ STRICT RULES (must be followed exactly):
    - Each step object MUST have:
      * "id" (string, unique within the plan, e.g., "step_1", "step_2")
      * "step" (clear action description — be specific about what tool to use)
+     * "step_type" (exactly one of: file_search, file_read, file_write, document_processing, content_generation, browser_open, browser_navigation, desktop_automation, shell_execution, web_search, general)
+     * "allowed_tools" (list of exact tool names this step may use)
+     * "fallback_tools" (list of exact fallback tool names if primary fails)
+     * "expected_output" (what this step should produce)
+     * "required" (boolean, true if downstream steps depend on this step succeeding)
      * "agent_type" (always "executor")
      * "depends_on" (list of node IDs this step depends on)
 
@@ -78,19 +86,30 @@ STRICT RULES (must be followed exactly):
    - Avoid over-decomposition.
    - If the task is simple, use 1 node with empty depends_on.
 
-5. Tool Awareness:
+5. Environment Isolation (CRITICAL):
+   - Each step MUST use tools from ONLY ONE execution environment.
+   - file_search / file_read / file_write / document_processing / content_generation steps: ONLY filesystem__* and shell__* tools.
+   - browser_open / browser_navigation steps: ONLY browser_env__* tools.
+   - desktop_automation steps: ONLY desktop_env__* tools.
+   - shell_execution steps: ONLY shell__* tools.
+   - web_search steps: ONLY cloud__* or web_search tools.
+   - NEVER mix browser, desktop, and filesystem tools in the same step.
+   - For local file tasks, prefer filesystem tools first. Use desktop tools ONLY as a fallback.
+   - NEVER use browser tools to search the local filesystem.
+
+6. Tool Awareness:
    - You have access to the following tools. When a step requires a tool, mention the exact tool name in the step description so the executor knows which one to use.
    - Available tools: {tools}
 
-6. Consistency:
+7. Consistency:
    - IDs must be consistent and reused correctly.
    - No duplicate IDs.
    - All dependencies must match EXACT node IDs.
 
 EXAMPLE (valid):
 [
-  {{"id": "step_1", "step": "Find cheapest healthy breakfast ingredients", "agent_type": "executor", "depends_on": []}},
-  {{"id": "step_2", "step": "Rank ingredients by cost-effectiveness and nutrition", "agent_type": "executor", "depends_on": ["step_1"]}}
+  {{"id": "step_1", "step": "Search filesystem for the major project report", "step_type": "file_search", "allowed_tools": ["filesystem__search_files", "filesystem__list_directory"], "fallback_tools": ["shell__execute_command"], "expected_output": "Path to the report file", "required": true, "agent_type": "executor", "depends_on": []}},
+  {{"id": "step_2", "step": "Read the report file", "step_type": "file_read", "allowed_tools": ["filesystem__read_file"], "fallback_tools": [], "expected_output": "Raw content of the report", "required": true, "agent_type": "executor", "depends_on": ["step_1"]}}
 ]
 
 Current operating system: {os_info}
@@ -102,11 +121,6 @@ When tasks involve file paths, use the EXACT paths provided above. On Windows us
 Query to process: {query}
 
 Return ONLY valid JSON. No explanation.
-
-Execution Environment Awareness:
-- Browser UI tasks (open chrome, search in browser, login, click, fill forms) MUST use browser_env__* tools.
-- Information retrieval tasks (general search, summarize, fetch data) MUST use cloud__search_web or cloud__http_request.
-- Do NOT confuse browser UI automation with backend web search.
 """
 
 
@@ -126,7 +140,7 @@ class PlannerAgent:
             desktop_path = _get_desktop_path()
 
         if result is None:
-            return [{"id": "step_1", "step": "analyze query", "agent_type": "executor", "depends_on": []}]
+            return [{"id": "step_1", "step": "analyze query", "step_type": "general", "allowed_tools": [], "fallback_tools": [], "expected_output": "analysis", "required": False, "agent_type": "executor", "depends_on": []}]
 
         if isinstance(result, dict):
             if "steps" in result and isinstance(result["steps"], list):
@@ -139,6 +153,7 @@ class PlannerAgent:
         if not isinstance(result, list):
             raise ValueError("Planner output must be a list or wrapped steps/nodes object")
 
+        all_tools = tool_registry.list_tools()
         steps: List[Dict[str, Any]] = []
         for index, item in enumerate(result, start=1):
             if not isinstance(item, dict):
@@ -146,7 +161,6 @@ class PlannerAgent:
                 continue
             step_name = item.get("step") or item.get("task") or item.get("description") or item.get("result") or item.get("action")
             if not step_name:
-                # If the item has an 'id', generate a generic step name rather than failing
                 step_id = str(item.get("id", f"step_{index}"))
                 logger.warning(f"Planner step {step_id} missing name fields, using generic description")
                 step_name = f"Execute step {step_id}"
@@ -155,9 +169,28 @@ class PlannerAgent:
             # Normalize hallucinated paths in step text
             step_name = _normalize_paths_in_text(step_name, home_path, desktop_path)
 
+            # Extract or infer structured fields
+            step_type = item.get("step_type") or tool_grounding_layer.classify_intent(step_name)
+            allowed_tools = item.get("allowed_tools")
+            fallback_tools = item.get("fallback_tools")
+            expected_output = item.get("expected_output", "")
+            required = item.get("required", False)
+
+            if not allowed_tools:
+                primary = tool_grounding_layer.get_primary_tools(step_type, all_tools, exclude_desktop_for_non_desktop=True)
+                allowed_tools = [t["name"] for t in primary[:8]]
+            if not fallback_tools:
+                fallback = tool_grounding_layer.get_fallback_tools(step_type, all_tools)
+                fallback_tools = [t["name"] for t in fallback[:4]]
+
             normalized = {
                 "id": step_id,
                 "step": step_name,
+                "step_type": step_type,
+                "allowed_tools": allowed_tools,
+                "fallback_tools": fallback_tools,
+                "expected_output": expected_output,
+                "required": required,
                 "agent_type": item.get("agent_type", "executor"),
                 "depends_on": item.get("depends_on", []),
             }
@@ -165,7 +198,7 @@ class PlannerAgent:
 
         if not steps:
             logger.warning("Planner produced no valid steps, falling back to single-step plan")
-            steps = [{"id": "step_1", "step": "Process the request", "agent_type": "executor", "depends_on": []}]
+            steps = [{"id": "step_1", "step": "Process the request", "step_type": "general", "allowed_tools": [], "fallback_tools": [], "expected_output": "result", "required": False, "agent_type": "executor", "depends_on": []}]
 
         # Validate and sanitize dependencies
         valid_ids = {step["id"] for step in steps}
@@ -184,6 +217,10 @@ class PlannerAgent:
                         f"Stripping it. Valid IDs: {valid_ids}"
                     )
             step["depends_on"] = sanitized
+            # Auto-mark as required if any downstream step depends on it
+            for other in steps:
+                if step["id"] in other.get("depends_on", []):
+                    step["required"] = True
 
         return steps
     
@@ -202,6 +239,36 @@ class PlannerAgent:
         desktop_path = _get_desktop_path()
 
         logger.info(f"Planner executing for query: {query}")
+
+        phases = workflow_decomposer.decompose(query)
+        if len(phases) > 1:
+            all_tools = tool_registry.list_tools()
+            steps = []
+            for i, phase in enumerate(phases):
+                primary = tool_grounding_layer.get_primary_tools(phase.intent, all_tools, exclude_desktop_for_non_desktop=True)
+                fallback = tool_grounding_layer.get_fallback_tools(phase.intent, all_tools)
+                allowed_names = [t["name"] for t in primary[:8]]
+                fallback_names = [t["name"] for t in fallback[:4]]
+                suggested = allowed_names[0] if allowed_names else (fallback_names[0] if fallback_names else None)
+                steps.append({
+                    "id": f"step_{i+1}",
+                    "step": phase.description,
+                    "step_type": phase.name,
+                    "allowed_tools": allowed_names,
+                    "fallback_tools": fallback_names,
+                    "expected_output": f"Completed {phase.name}",
+                    "required": phase.name in ("file_search", "file_read", "document_processing", "content_generation", "browser_open"),
+                    "agent_type": "executor",
+                    "depends_on": [f"step_{j+1}" for j in range(i)],
+                })
+            return AgentOutput(
+                task_id=input_data.task_id,
+                step_id=input_data.step_id,
+                status=AgentStatus.SUCCESS,
+                output_data={"steps": steps, "total_steps": len(steps)},
+                confidence=0.95,
+                reasoning_trace=[f"Deterministic decomposition: {len(phases)} phases"],
+            )
 
         messages = [
             {"role": "system", "content": PLANNER_PROMPT.format(

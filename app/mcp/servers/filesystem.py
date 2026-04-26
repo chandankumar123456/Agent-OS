@@ -6,6 +6,8 @@ from typing import List
 
 from mcp.server.fastmcp import FastMCP
 
+from app.tools.file_discovery import FastFileDiscovery
+
 mcp = FastMCP("filesystem")
 
 # Security: restrict to working directory and common safe paths
@@ -130,14 +132,11 @@ async def search_files(path: str, pattern: str) -> str:
         target = _resolve_path(path)
         if not target.exists():
             return f"Error: Path not found: {path}"
-        matches: List[str] = []
-        for root, _, files in os.walk(target):
-            for filename in files:
-                if fnmatch.fnmatch(filename, pattern):
-                    matches.append(os.path.join(root, filename))
+        engine = FastFileDiscovery()
+        matches = await engine.search(str(target), pattern, max_results=100)
         if not matches:
             return f"No files matching '{pattern}' found in {path}"
-        return "\n".join(matches[:100])  # Limit results
+        return "\n".join(matches)
     except Exception as e:
         return f"Error searching files: {e}"
 

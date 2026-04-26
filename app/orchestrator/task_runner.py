@@ -6,6 +6,7 @@ and execution (graph compilation, state management, checkpoint recovery).
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
 from datetime import datetime
@@ -35,6 +36,7 @@ from ..capabilities import (
 )
 from ..capabilities.models import FeasibilityResult
 from ..memory.long_term import workflow_repo
+from ..config import settings
 
 
 class TaskRunner:
@@ -195,12 +197,23 @@ class TaskRunner:
                 }
             }
 
+            # Enforce workflow-level timeout (slightly shorter than Celery task timeout)
+            workflow_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT) - 10
+            if workflow_timeout < 10:
+                workflow_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT)
+
             if resume_value and Command is not None:
                 logger.info(f"[LangGraph] Resuming {mode} graph for task {task_id} with resume_value")
-                final_state = await graph.ainvoke(Command(resume=resume_value), config=thread_config)
+                final_state = await asyncio.wait_for(
+                    graph.ainvoke(Command(resume=resume_value), config=thread_config),
+                    timeout=workflow_timeout,
+                )
             else:
                 logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
-                final_state = await graph.ainvoke(state, config=thread_config)
+                final_state = await asyncio.wait_for(
+                    graph.ainvoke(state, config=thread_config),
+                    timeout=workflow_timeout,
+                )
 
             # Cleanup environment
             execution_environment.cleanup(str(task_id))

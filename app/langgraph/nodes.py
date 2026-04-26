@@ -2,17 +2,21 @@
 import json
 import os
 import platform
-from typing import Dict, Any, List, Set
+import re
+from typing import Dict, Any, List, Set, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langgraph.types import interrupt
 
 from ..agents.llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.registry import tool_registry
+from ..tools.grounding import tool_grounding_layer
+from ..workflows.decomposer import workflow_decomposer
 from ..capabilities import verification_engine, recovery_engine
 from ..capabilities.models import VerificationResult, RecoveryAction
 from ..observability import observability_bus, ObservabilityEventType
 from ..safety.gate import SafetyGate, ActionSeverity
+from ..orchestrator.v2.event_bus import event_bus, Event
 from .state import AgentState
 
 
@@ -39,12 +43,96 @@ def _get_desktop_path() -> str:
         return os.path.join(home, "Desktop")
 
 
+def _extract_path_from_description(description: str) -> Optional[str]:
+    """Extract a likely file path from a step description."""
+    import re
+    # Match Windows or Unix absolute paths
+    matches = re.findall(r"([A-Za-z]:\\[^\s\"'<>]+|/~?(?:/[^\s\"'<>]+)+)", description)
+    if matches:
+        return matches[0]
+    return None
+
+
+def _build_default_params(tool_name: str, description: str) -> Optional[Dict[str, Any]]:
+    """Build default parameters for obviously-intented tools without LLM."""
+    path = _extract_path_from_description(description)
+    if tool_name == "filesystem__read_file" and path:
+        return {"path": path}
+    if tool_name == "filesystem__write_file" and path:
+        # For write, we can't guess content; return None to force LLM
+        return None
+    if tool_name == "filesystem__list_directory" and path:
+        return {"path": path}
+    if tool_name == "filesystem__search_files":
+        path_match = re.findall(r"([A-Za-z]:\\[^\s\"'<>]*|/~?(?:/[^\s\"'<>]+)*)", description)
+        search_path = path_match[0] if path_match else _get_desktop_path()
+        words = description.lower().split()
+        stopwords = {"find", "search", "locate", "look", "for", "my", "the", "a", "in", "under", "at", "file", "files", "and", "or"}
+        pattern = "*"
+        for w in words:
+            if w not in stopwords and len(w) > 2:
+                pattern = f"*{w}*"
+                break
+        return {"path": search_path, "pattern": pattern}
+    if tool_name == "document__parse" and path:
+        return {"path": path}
+    if tool_name == "shell__execute_command":
+        # Only auto-build for very obvious commands
+        if "open" in description.lower() and "chrome" in description.lower() and path:
+            return {"command": f'start chrome "{path}"'}
+        if "open" in description.lower() and "explorer" in description.lower():
+            open_path = path or os.path.expanduser("~")
+            return {"command": f'explorer "{open_path}"'}
+    if tool_name.startswith("browser_env__"):
+        if "navigate" in description.lower() or "go to" in description.lower():
+            url_match = re.findall(r"https?://[^\s\"'<>]+", description)
+            if url_match:
+                return {"url": url_match[0]}
+        return {}
+    if tool_name.startswith("desktop_env__"):
+        return {}
+    return None
+
+
+def _deterministic_tool_select(description: str, available_tools: List[Dict[str, Any]]) -> Optional[str]:
+    """If a step description maps to exactly one obvious tool, return it without LLM."""
+    grounded = tool_grounding_layer.filter_tools_for_step(description, available_tools)
+    if len(grounded) == 1:
+        name = grounded[0].get("name")
+        # Only auto-select for very safe, obvious tools
+        safe_tools = {
+            "filesystem__read_file", "filesystem__list_directory", "filesystem__search_files",
+            "document__parse", "shell__execute_command", "browser_env__navigate",
+            "browser_env__screenshot", "desktop_env__screenshot", "desktop_env__get_window_list",
+        }
+        if name in safe_tools:
+            return name
+    return None
+
+
 PLANNER_SYSTEM_PROMPT_TEMPLATE = """You are an expert planning agent. Given a user query, break it down into a clear, ordered list of steps.
-Each step should specify:
+Each step MUST specify:
 - step_number: integer starting at 1
 - description: what to do (be specific about file paths and tool names)
-- tool: tool name to use (or null if no tool needed)
+- step_type: exactly one of [file_search, file_read, file_write, document_processing, content_generation, browser_open, browser_navigation, desktop_automation, shell_execution, web_search, general]
+- tool: primary tool name to use (or null if no tool needed)
+- allowed_tools: list of exact tool names this step may use
+- fallback_tools: list of exact fallback tool names if primary fails
 - expected_output: what the step should produce
+- required: boolean, true if downstream steps depend on this step succeeding
+- depends_on: list of step_numbers this step depends on (empty for first step)
+
+CRITICAL RULES:
+- Each step MUST use tools from ONLY ONE execution environment.
+- file_search / file_read / file_write / document_processing / content_generation steps: ONLY filesystem__* and shell__* tools.
+- browser_open / browser_navigation steps: ONLY browser_env__* tools.
+- desktop_automation steps: ONLY desktop_env__* tools.
+- shell_execution steps: ONLY shell__* tools.
+- web_search steps: ONLY cloud__* or web_search tools.
+- NEVER mix browser, desktop, and filesystem tools in the same step.
+- For local file tasks, prefer filesystem tools first. Use desktop tools ONLY as a fallback.
+- NEVER use browser tools to search the local filesystem.
+- Chrome should only be used at the final display step, not for file discovery.
 
 When the task involves files:
 - Use exact absolute paths, never relative paths.
@@ -59,7 +147,7 @@ When the task involves creating/writing files, always use the filesystem__write_
 When the task involves running commands, always use the shell__execute_command tool.
 
 Respond ONLY with valid JSON in this format:
-{{"plan": [{{"step_number": 1, "description": "...", "tool": "...", "expected_output": "..."}}]}}
+{{"plan": [{{"step_number": 1, "description": "...", "step_type": "...", "tool": "...", "allowed_tools": ["..."], "fallback_tools": ["..."], "expected_output": "...", "required": true/false, "depends_on": []}}]}}
 
 Execution Environment Awareness:
 - If the user asks to "open chrome", "open browser", "search in browser", "login to", "click", "fill form", or "navigate website", use browser_env__* tools (e.g., browser_env__launch, browser_env__search).
@@ -76,7 +164,11 @@ Respond ONLY with valid JSON:
 
 
 async def planner_node(state: AgentState) -> Dict[str, Any]:
-    """Generate an execution plan from the user query, informed by capability assessment."""
+    """Generate an execution plan from the user query, informed by capability assessment.
+
+    Uses deterministic workflow decomposition first for complex multi-step tasks.
+    Falls back to LLM planner for simple or ambiguous queries.
+    """
     query = state.get("query", "")
     task_id = state.get("task_id", "")
     logger.info(f"[planner_node] Planning for task {task_id}")
@@ -85,7 +177,82 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
     home_path = os.path.expanduser("~")
     desktop_path = _get_desktop_path()
 
-    # Inject capability assessment into prompt if available
+    # ── Deterministic Workflow Decomposition ──────────────────────────
+    phases = workflow_decomposer.decompose(query)
+    if len(phases) > 1:
+        logger.info(f"[planner_node] Using deterministic decomposition: {len(phases)} phases")
+        plan = []
+        for i, phase in enumerate(phases):
+            # Strict tool grounding using phase.intent (NOT description keyword matching)
+            all_tools = tool_registry.list_tools()
+            primary_tools = tool_grounding_layer.get_primary_tools(phase.intent, all_tools, exclude_desktop_for_non_desktop=True)
+            fallback_tools = tool_grounding_layer.get_fallback_tools(phase.intent, all_tools)
+
+            allowed_tool_names = [t["name"] for t in primary_tools[:8]]
+            fallback_tool_names = [t["name"] for t in fallback_tools[:4]]
+            suggested_tool = allowed_tool_names[0] if allowed_tool_names else (fallback_tool_names[0] if fallback_tool_names else None)
+
+            tool_hint = ""
+            if allowed_tool_names:
+                tool_hint = f"Use one of: {', '.join(allowed_tool_names[:5])}."
+
+            # Extract paths from query for this phase
+            paths = workflow_decomposer.extract_paths(query)
+            path_hint = ""
+            if paths and phase.name in ("file_search", "file_read", "document_processing", "content_generation"):
+                path_hint = f" Paths mentioned: {', '.join(paths[:2])}."
+
+            # Build a contextual description that includes the original query
+            desc = phase.description
+            if phase.name == "file_search":
+                desc = f"Search the filesystem to locate the file or folder requested by the user. Original task: {query}"
+            elif phase.name == "file_read":
+                desc = f"Read and extract the full contents of the file found in the previous step. Original task: {query}"
+            elif phase.name == "document_processing":
+                desc = f"Process, parse, or summarize the document content extracted in the previous step. Original task: {query}"
+            elif phase.name == "content_generation":
+                desc = f"Create or generate the requested files (HTML, CSS, JS, etc.) based on the processed content. Original task: {query}"
+            elif phase.name == "browser_open":
+                desc = f"Open the created file or result in Chrome / the default browser. Original task: {query}"
+            elif phase.name == "browser_navigation":
+                desc = f"Navigate the browser to perform web-based actions. Original task: {query}"
+            elif phase.name == "desktop_automation":
+                desc = f"Use desktop UI automation if needed to complete GUI interactions. Original task: {query}"
+            elif phase.name == "shell_execution":
+                desc = f"Run the necessary system commands. Original task: {query}"
+            elif phase.name == "web_search":
+                desc = f"Search the web for information. Original task: {query}"
+
+            # Hard dependency gate: file processing chain steps are REQUIRED
+            required = phase.name in ("file_search", "file_read", "document_processing", "content_generation", "browser_open")
+
+            plan.append({
+                "step_number": i + 1,
+                "description": f"{desc}.{path_hint} {tool_hint}",
+                "step_type": phase.name,
+                "tool": suggested_tool,
+                "allowed_tools": allowed_tool_names,
+                "fallback_tools": fallback_tool_names,
+                "depends_on": [j + 1 for j in range(i)],  # all prior step numbers
+                "expected_output": f"Completed {phase.name} for: {query}",
+                "required": required,
+            })
+
+        await observability_bus.emit_safe(
+            ObservabilityEventType.PLANNER_REASONING,
+            task_id=task_id,
+            trace_id=state.get("trace_id"),
+            payload={"plan": plan, "capability_context": f"deterministic_decomposition:{[p.name for p in phases]}"},
+            source="planner_node",
+        )
+        return {
+            "plan": plan,
+            "current_step_index": 0,
+            "messages": [AIMessage(content=f"Deterministic plan: {json.dumps(plan, indent=2)}")],
+            "status": "planning_complete",
+        }
+
+    # ── Fallback to LLM planner for simple/ambiguous tasks ────────────
     cap_assessment = state.get("capability_assessment")
     capability_context = ""
     if cap_assessment:
@@ -158,7 +325,15 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
 
 
 async def executor_node(state: AgentState) -> Dict[str, Any]:
-    """Execute the current step using available tools via LLM-driven selection."""
+    """Execute the current step using grounded tool selection.
+
+    Flow:
+    1. Ground tools to step intent (filter allowed tools)
+    2. Try deterministic tool selection (skip LLM for obvious cases)
+    3. If ambiguous, use LLM with ONLY grounded tools
+    4. Reject LLM tool choices outside grounded set
+    5. If tool missing, try dynamic build
+    """
     plan = state.get("plan", [])
     idx = state.get("current_step_index", 0)
     task_id = state.get("task_id", "")
@@ -183,17 +358,81 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
         source="executor_node",
     )
 
-    # Tools should already be discovered by orchestrator entry point.
-    # Do NOT call discover_mcp_tools() here to avoid redundant work per step.
+    # ── Dependency Gate ───────────────────────────────────────────────
+    prior_steps = state.get("steps", [])[:idx]
+    for prior in prior_steps:
+        if prior.get("required", False):
+            tool_results = prior.get("tool_results", [])
+            if not any(r.get("success") for r in tool_results):
+                error_msg = (
+                    f"Required step {prior['step_number']} ({prior.get('description', '')[:60]}) failed. "
+                    f"Cannot proceed to step {step_number}."
+                )
+                logger.error(f"[executor_node] {error_msg}")
+                # Halt the workflow entirely — do not advance to subsequent steps
+                return {
+                    "steps": state.get("steps", []),
+                    "current_step_index": len(plan),  # Skip to end so graph terminates
+                    "error": error_msg,
+                    "tool_calls": state.get("tool_calls", []),
+                    "messages": [AIMessage(content=f"Workflow halted: {error_msg}")],
+                    "status": "failed",
+                }
+
+    # ── Tool Selection: Use Planner Constraints (NO re-grounding) ─────
     available_tools = tool_registry.list_tools()
-    tools_json = json.dumps(available_tools, indent=2, default=str)
+    available_tool_map = {t["name"]: t for t in available_tools}
+
+    # Primary: planner's allowed_tools
+    explicit_allowed = step.get("allowed_tools", [])
+    explicit_fallback = step.get("fallback_tools", [])
+
+    grounded_tools = []
+    if explicit_allowed:
+        grounded_tools = [available_tool_map[name] for name in explicit_allowed if name in available_tool_map]
+    if not grounded_tools and explicit_fallback:
+        grounded_tools = [available_tool_map[name] for name in explicit_fallback if name in available_tool_map]
+    if not grounded_tools:
+        # Legacy fallback: only if planner didn't specify constraints
+        grounded_tools = tool_grounding_layer.filter_tools_for_step(description, available_tools)
+
+    grounded_tool_names = {t["name"] for t in grounded_tools}
+    logger.info(f"[executor_node] Grounded tools for step {step_number}: {grounded_tool_names}")
+
+    # ── Deterministic Execution (skip LLM for obvious cases) ──────────
+    # Try planner's suggested tool first
+    det_tool = None
+    if suggested_tool and suggested_tool in grounded_tool_names:
+        det_tool = suggested_tool
+    else:
+        # Obey planner constraints: pick the first grounded tool instead of re-grounding
+        if grounded_tools:
+            det_tool = grounded_tools[0].get("name")
+
+    if det_tool and det_tool in grounded_tool_names:
+        default_params = _build_default_params(det_tool, description)
+        if default_params is not None:
+            logger.info(f"[executor_node] Deterministic execution: {det_tool}")
+            tool_params = default_params.copy()
+            return await _execute_tool_call(
+                task_id=task_id,
+                step_number=step_number,
+                description=description,
+                tool_name=det_tool,
+                tool_params=tool_params,
+                state=state,
+                idx=idx,
+                grounded_tool_names=grounded_tool_names,
+            )
+
+    # ── LLM-Driven Parameter Generation Only ──────────────────────────
+    tools_json = json.dumps(grounded_tools, indent=2, default=str)
 
     os_info = f"{platform.system()} {platform.release()}"
     home = os.path.expanduser("~")
     desktop_path = os.path.join(home, "Desktop")
 
     # Build execution context from prior steps
-    prior_steps = state.get("steps", [])[:idx]
     prior_context = ""
     if prior_steps:
         prior_context_lines = []
@@ -206,7 +445,7 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
 
     # Browser state hint
     browser_hint = ""
-    if any(t.get("name", "").startswith("browser_env__") for t in available_tools):
+    if any(t.get("name", "").startswith("browser_env__") for t in grounded_tools):
         browser_hint = (
             "\nIMPORTANT: If a browser_env tool has already been used in a previous step, "
             "do NOT launch or navigate again unless explicitly required. Reuse the existing session."
@@ -214,13 +453,17 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
 
     # Suggested tool hint
     suggested_hint = ""
-    if suggested_tool:
-        suggested_hint = f"\nSuggested tool for this step (use if appropriate): {suggested_tool}"
+    if suggested_tool and suggested_tool in grounded_tool_names:
+        suggested_hint = f"\nUse this tool if it fits the step: {suggested_tool}"
+
+    original_query = state.get("query", "")
 
     system_prompt = f"""You are an execution agent. Your job is to CARRY OUT the given step by any means necessary.
-You have access to the following tools. You MUST use a tool when the step requires interacting with the filesystem, running code, using a calculator, searching the web, or executing shell commands.
+You have access to the following GROUNDED tools. You MUST select a tool from this list ONLY.
 
-Available tools:
+Original user query: {original_query}
+
+Allowed tools for this step:
 {tools_json}
 
 Current operating system: {os_info}
@@ -228,16 +471,16 @@ User home directory: {home}
 User Desktop path: {desktop_path}{prior_context}{browser_hint}{suggested_hint}
 
 CRITICAL RULES:
-1. If the step asks you to create, write, read, or modify a file, you MUST use the filesystem tool.
-2. If the step asks you to run a command or script, you MUST use the shell tool.
-3. If the step asks you to browse or scrape the web, you MUST use the browser tool.
-4. If the step requires calculation, use the calculator tool.
+1. You MUST select a tool from the ALLOWED TOOLS list above. NEVER use a tool not in the list.
+2. If the step asks you to create, write, read, or modify a file, use a filesystem tool.
+3. If the step asks you to run a command or script, use the shell tool.
+4. If the step asks you to browse or scrape the web, use the browser tool.
 5. Do NOT just describe what you would do — actually invoke the tool with concrete parameters.
 6. Use exact parameter names from the tool schema.
 7. ALWAYS use ABSOLUTE file paths. NEVER use relative paths.
 8. When creating files on Windows, use backslashes. On Linux/macOS, use forward slashes.
-9. If the user asks for "desktop", use the Desktop path provided above.
-10. NEVER repeat a tool call that was already successfully executed in a previous step unless the user explicitly asks you to do it again.
+9. NEVER repeat a tool call that was already successfully executed in a previous step unless the user explicitly asks you to do it again.
+10. If NO tool is needed, provide a direct answer.
 
 Respond with JSON in one of these formats:
 
@@ -254,7 +497,6 @@ To provide a direct answer (only if no tool is needed):
     ]
 
     MAX_ROUNDS = state.get("max_tool_rounds", 5)
-    # Track calls within this step to prevent exact duplicates
     calls_this_step: set = set()
     tool_calls = state.get("tool_calls", [])
     step_tool_results = []
@@ -264,7 +506,6 @@ To provide a direct answer (only if no tool is needed):
 
     for round_num in range(MAX_ROUNDS):
         try:
-            # Use json_object (no strict schema) so LLM can choose between tool_call and answer
             response = await get_llm_client().complete_json(
                 messages=_to_openai_messages(messages)
             )
@@ -273,17 +514,32 @@ To provide a direct answer (only if no tool is needed):
             final_answer = f"Error during execution: {e}"
             break
 
-        tool_call = response.get("tool_call")
-        if tool_call and isinstance(tool_call, dict):
-            tool_name = tool_call.get("name")
-            tool_params = tool_call.get("params", {})
-            # Inject task_id for browser environment tools to enable session reuse
-            if tool_name.startswith("browser_env__"):
-                tool_params["_task_id"] = task_id
+        tool_call_data = response.get("tool_call")
+        if tool_call_data and isinstance(tool_call_data, dict):
+            tool_name = tool_call_data.get("name")
+            tool_params = tool_call_data.get("params", {})
 
             if not tool_name:
                 final_answer = response.get("answer") or response.get("details") or json.dumps(response)
                 break
+
+            # ── Grounding Guard: reject tools outside allowed set ──────
+            if tool_name not in grounded_tool_names:
+                logger.warning(
+                    f"[executor_node] LLM selected '{tool_name}' which is NOT in grounded set {grounded_tool_names}. "
+                    f"Rejecting and forcing retry."
+                )
+                warn_msg = (
+                    f"ERROR: '{tool_name}' is NOT allowed for this step. "
+                    f"You MUST select from: {', '.join(sorted(grounded_tool_names))}. "
+                    f"Try again with an allowed tool."
+                )
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(content=warn_msg))
+                continue
+
+            # Inject task_id for observability and session management
+            tool_params["_task_id"] = task_id
 
             # Duplicate-call guard
             call_signature = json.dumps({"name": tool_name, "params": tool_params}, sort_keys=True, default=str)
@@ -297,10 +553,20 @@ To provide a direct answer (only if no tool is needed):
                 continue
             calls_this_step.add(call_signature)
 
-            # Validate tool exists
+            # Validate tool exists (triggers dynamic build if missing)
             tool = tool_registry.get(tool_name)
             if not tool:
-                error_msg = f"Tool '{tool_name}' not found"
+                # Try dynamic build explicitly
+                try:
+                    from ..tools.builder import dynamic_tool_factory
+                    if dynamic_tool_factory:
+                        await dynamic_tool_factory.ensure_tool(tool_name)
+                        tool = tool_registry.get(tool_name)
+                except Exception as build_err:
+                    logger.error(f"[executor_node] Dynamic build failed for {tool_name}: {build_err}")
+
+            if not tool:
+                error_msg = f"Tool '{tool_name}' not found and could not be built"
                 logger.error(f"[executor_node] {error_msg}")
                 messages.append(AIMessage(content=json.dumps(response)))
                 messages.append(HumanMessage(content=f"Error: {error_msg}. Use a valid tool or provide a direct answer."))
@@ -325,6 +591,16 @@ To provide a direct answer (only if no tool is needed):
                 payload={"tool": tool_name, "params": tool_params},
                 source="executor_node",
             )
+
+            # Emit progress heartbeat so frontend stays alive during long operations
+            try:
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.progress", {"task_id": task_id, "step": step_number, "tool": tool_name, "status": "executing"}, source="executor"),
+                )
+            except Exception:
+                pass
+
             try:
                 tool_output = await tool_registry.execute(tool_name, tool_params)
                 tool_result = {
@@ -336,7 +612,7 @@ To provide a direct answer (only if no tool is needed):
                 logger.error(f"[executor_node] Tool execution error: {e}")
                 tool_result = {"success": False, "error": str(e)}
 
-            # Always record tool result first
+            # Record tool result
             tool_calls.append({
                 "step": step_number,
                 "tool": tool_name,
@@ -346,7 +622,6 @@ To provide a direct answer (only if no tool is needed):
 
             # ── Deterministic Verification ─────────────────────────────
             if tool_result["success"]:
-                # Auto-verify based on tool type
                 if "filesystem" in tool_name and tool_params.get("path"):
                     v_report = await verification_engine.verify(
                         task_id, None, "file_exists",
@@ -354,7 +629,6 @@ To provide a direct answer (only if no tool is needed):
                     )
                     verification_reports.append(v_report.model_dump())
                     if v_report.result == VerificationResult.FAIL:
-                        # Trigger recovery for next iteration
                         decision = await recovery_engine.decide(
                             task_id, None,
                             error=v_report.failure_reason,
@@ -378,7 +652,6 @@ To provide a direct answer (only if no tool is needed):
                             messages.append(HumanMessage(
                                 content=f"Verification failed. Switching to alternative tool: {decision.next_tool}"
                             ))
-                            # Continue to next round with new tool instruction
                             continue
                         elif decision.action == RecoveryAction.RETRY:
                             messages.append(HumanMessage(
@@ -398,6 +671,11 @@ To provide a direct answer (only if no tool is needed):
     else:
         final_answer = f"Reached maximum tool rounds. Partial results: {json.dumps(step_tool_results, indent=2, default=str)}"
 
+    if isinstance(final_answer, dict):
+        final_answer = json.dumps(final_answer, indent=2, ensure_ascii=False)
+    elif not isinstance(final_answer, str):
+        final_answer = str(final_answer)
+
     step_output = {
         "step_number": step_number,
         "description": description,
@@ -414,6 +692,137 @@ To provide a direct answer (only if no tool is needed):
         trace_id=state.get("trace_id"),
         step_id=str(step_number),
         payload={"status": "completed", "output_preview": final_answer[:200]},
+        source="executor_node",
+    )
+
+    return {
+        "steps": steps,
+        "current_step_index": idx + 1,
+        "tool_calls": tool_calls,
+        "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
+        "verification_reports": verification_reports,
+        "recovery_decisions": recovery_decisions,
+        "status": "step_executed",
+    }
+
+
+async def _execute_tool_call(
+    task_id: str,
+    step_number: int,
+    description: str,
+    tool_name: str,
+    tool_params: Dict[str, Any],
+    state: AgentState,
+    idx: int,
+    grounded_tool_names: Set[str],
+) -> Dict[str, Any]:
+    """Execute a single tool call and return state update (used by deterministic shortcut)."""
+    # Inject task_id for observability and session management
+    tool_params["_task_id"] = task_id
+
+    tool_calls = state.get("tool_calls", [])
+    step_tool_results = []
+    verification_reports = state.get("verification_reports", [])
+    recovery_decisions = state.get("recovery_decisions", [])
+
+    # Validate tool exists (triggers dynamic build if missing)
+    tool = tool_registry.get(tool_name)
+    if not tool:
+        try:
+            from ..tools.builder import dynamic_tool_factory
+            if dynamic_tool_factory:
+                await dynamic_tool_factory.ensure_tool(tool_name)
+                tool = tool_registry.get(tool_name)
+        except Exception as build_err:
+            logger.error(f"[_execute_tool_call] Dynamic build failed for {tool_name}: {build_err}")
+
+    if not tool:
+        final_answer = f"Tool '{tool_name}' not found and could not be built"
+        step_output = {
+            "step_number": step_number,
+            "description": description,
+            "output": final_answer,
+            "tool_results": [{"success": False, "error": final_answer}],
+        }
+        steps = state.get("steps", [])
+        steps.append(step_output)
+        return {
+            "steps": steps,
+            "current_step_index": idx + 1,
+            "tool_calls": tool_calls,
+            "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
+            "verification_reports": verification_reports,
+            "recovery_decisions": recovery_decisions,
+            "status": "step_executed",
+        }
+
+    severity = SafetyGate().check_tool_call(tool_name, tool_params, state.get("query", ""))
+    if severity == ActionSeverity.IRREVERSIBLE:
+        await observability_bus.emit_safe(
+            ObservabilityEventType.SAFETY_CHECK,
+            task_id=task_id,
+            trace_id=state.get("trace_id"),
+            payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
+            source="safety_gate",
+        )
+
+    logger.info(f"[_execute_tool_call] Invoking tool '{tool_name}' with params: {tool_params}")
+    await observability_bus.emit_safe(
+        ObservabilityEventType.TOOL_INVOKED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        step_id=str(step_number),
+        payload={"tool": tool_name, "params": tool_params},
+        source="executor_node",
+    )
+    try:
+        tool_output = await tool_registry.execute(tool_name, tool_params)
+        tool_result = {
+            "success": tool_output.success,
+            "data": tool_output.result if tool_output.result is not None else str(tool_output),
+            "error": tool_output.error,
+        }
+    except Exception as e:
+        logger.error(f"[_execute_tool_call] Tool execution error: {e}")
+        tool_result = {"success": False, "error": str(e)}
+
+    tool_calls.append({
+        "step": step_number,
+        "tool": tool_name,
+        "result": tool_result,
+    })
+    step_tool_results.append(tool_result)
+
+    # Deterministic verification
+    if tool_result["success"]:
+        if "filesystem" in tool_name and tool_params.get("path"):
+            v_report = await verification_engine.verify(
+                task_id, None, "file_exists",
+                {"path": tool_params["path"]},
+            )
+            verification_reports.append(v_report.model_dump())
+
+    final_answer = tool_result.get("data", "") if tool_result["success"] else tool_result.get("error", "")
+    if isinstance(final_answer, dict):
+        final_answer = json.dumps(final_answer, indent=2, ensure_ascii=False)
+    elif not isinstance(final_answer, str):
+        final_answer = str(final_answer)
+    step_output = {
+        "step_number": step_number,
+        "description": description,
+        "output": final_answer,
+        "tool_results": step_tool_results,
+    }
+
+    steps = state.get("steps", [])
+    steps.append(step_output)
+
+    await observability_bus.emit_safe(
+        ObservabilityEventType.STEP_STARTED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        step_id=str(step_number),
+        payload={"status": "completed", "output_preview": str(final_answer)[:200]},
         source="executor_node",
     )
 
@@ -584,7 +993,14 @@ async def summarizer_node(state: AgentState) -> Dict[str, Any]:
 
     logger.info(f"[summarizer_node] Summarizing task {task_id}")
 
-    outputs = [s.get("output", "") for s in steps]
+    outputs = []
+    for s in steps:
+        out = s.get("output", "")
+        if isinstance(out, dict):
+            out = json.dumps(out, indent=2, ensure_ascii=False)
+        elif not isinstance(out, str):
+            out = str(out)
+        outputs.append(out)
     combined = "\n\n".join(outputs)
 
     # Use LLM to produce a concise user-facing summary

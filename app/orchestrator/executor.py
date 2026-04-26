@@ -54,7 +54,9 @@ class StepExecutor:
         )
 
         step_input = step_row.get("input_data", {})
-        allowed_tools = getattr(agent_instance, "allowed_tools", None)
+        raw_step = step_input.get("raw_step", {})
+        allowed_tools = raw_step.get("allowed_tools") or getattr(agent_instance, "allowed_tools", None)
+        fallback_tools = raw_step.get("fallback_tools")
         exec_input = AgentInput(
             task_id=task_id,
             step_id=UUID(step_id) if isinstance(step_id, str) else step_id,
@@ -67,6 +69,7 @@ class StepExecutor:
             context=dict(context.context),
             constraints=config,
             allowed_tools=allowed_tools,
+            fallback_tools=fallback_tools,
         )
 
         try:

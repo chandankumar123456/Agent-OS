@@ -27,6 +27,7 @@ class AgentInput(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
     constraints: Optional[Dict[str, Any]] = None
     allowed_tools: Optional[List[str]] = None
+    fallback_tools: Optional[List[str]] = None
 
 
 class AgentOutput(BaseModel):

@@ -121,7 +121,7 @@ def _remap_tool_params(params: Dict[str, Any], home_path: str, desktop_path: str
 
 EXECUTOR_PROMPT = """You are an Executor agent for Agent-OS. Your role is to EXECUTE specific steps from a plan using available tools.
 
-Available Tools:
+ALLOWED TOOLS (you MUST select from this list ONLY):
 {tools}
 
 Step: {step}
@@ -131,14 +131,15 @@ Operating System: {os_info}
 User Desktop Path: {desktop_path}
 
 ABSOLUTE RULES — FOLLOW WITHOUT EXCEPTION:
-1. If the step involves creating, writing, reading, or modifying a file, you MUST call the filesystem tool (e.g., filesystem__write_file, filesystem__read_file) with concrete parameters.
-2. If the step involves running a command or script, you MUST call the shell tool (e.g., shell__execute_command) with the exact command.
-3. If the step involves web browsing or scraping, you MUST call the browser tool.
-4. If the step involves calculation, you MUST call the calculator tool.
-5. NEVER just describe what you would do — actually invoke the tool.
-6. NEVER ask the user to run commands manually — use the shell tool.
-7. ALWAYS use ABSOLUTE file paths. NEVER use relative paths like ./file.py.
-8. On Windows, use backslashes in paths (e.g., C:\\Users\\Name\\Desktop\\file.txt). On macOS/Linux, use forward slashes.
+1. You MUST select a tool from the ALLOWED TOOLS list above ONLY. NEVER use a tool outside this list.
+2. If the step involves creating, writing, reading, or modifying a file, you MUST call the filesystem tool (e.g., filesystem__write_file, filesystem__read_file) with concrete parameters.
+3. If the step involves running a command or script, you MUST call the shell tool (e.g., shell__execute_command) with the exact command.
+4. If the step involves web browsing or scraping, you MUST call the browser tool.
+5. If the step involves calculation, you MUST call the calculator tool.
+6. NEVER just describe what you would do — actually invoke the tool.
+7. NEVER ask the user to run commands manually — use the shell tool.
+8. ALWAYS use ABSOLUTE file paths. NEVER use relative paths like ./file.py.
+9. On Windows, use backslashes in paths (e.g., C:\\Users\\Name\\Desktop\\file.txt). On macOS/Linux, use forward slashes.
 
 If you need to use a tool, return JSON with a tool_call:
 {{"tool_call": {{"name": "tool_name", "params": {{"param1": "value1"}}}}}}
@@ -159,6 +160,12 @@ class ExecutorAgent:
             return input_data.allowed_tools
         return self.allowed_tools
 
+    def _get_fallback_tools(self, input_data: AgentInput) -> Optional[List[str]]:
+        """Determine fallback tools from agent config or input."""
+        if input_data.fallback_tools is not None:
+            return input_data.fallback_tools
+        return None
+
     def _filter_tools(self, tools_schema: List[Dict[str, Any]], allowed: Optional[List[str]]) -> List[Dict[str, Any]]:
         if allowed is None:
             return tools_schema
@@ -172,17 +179,18 @@ class ExecutorAgent:
         allowed = self._get_allowed_tools(input_data)
         visible_tools = self._filter_tools(tools_schema, allowed)
 
-        # Fail fast if step requires filesystem but no filesystem tool is available
-        has_filesystem_tool = any("filesystem" in t.get("name", "") for t in visible_tools)
+        # Fail fast if step requires filesystem but no filesystem tool is registered in this worker
+        registered_tools = tool_registry.list_tools()
+        has_filesystem_tool = any("filesystem" in t.get("name", "") for t in registered_tools)
         step_lower = step.lower()
         if any(k in step_lower for k in ("file", "write", "create", "read", "desktop", "directory", "folder")) and not has_filesystem_tool:
-            logger.error(f"Step requires filesystem tool but none available: {step}")
+            logger.error(f"Step requires filesystem tool but none registered in worker: {step}")
             return AgentOutput(
                 task_id=input_data.task_id,
                 step_id=input_data.step_id,
                 status=AgentStatus.FAILURE,
                 error_type="tool_unavailable",
-                error_message="Filesystem tools are not available in this worker. Required for step: " + step,
+                error_message="Filesystem tools are not registered in this worker. Required for step: " + step,
                 recoverable=False,
             )
 

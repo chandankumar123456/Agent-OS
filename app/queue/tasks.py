@@ -65,8 +65,29 @@ def on_worker_process_init(**kwargs):
 
         loop.run_until_complete(_ensure_runtime_initialized())
 
-        # NOTE: MCP system servers are started lazily on-demand by mcp_client_manager
-        # to avoid spawning duplicate subprocesses in every Celery worker process.
+        # Register built-in tools and MCP tools (mirrors FastAPI lifespan)
+        try:
+            from ..tools.builtin import register_builtin_tools
+            from ..tools.registry import tool_registry
+            register_builtin_tools(tool_registry)
+            logger.info("Built-in tools registered in Celery worker")
+        except Exception as e:
+            logger.error(f"Built-in tools registration failed in Celery worker: {e}")
+
+        try:
+            from ..mcp.client_manager import mcp_client_manager
+            loop.run_until_complete(mcp_client_manager.start_system_servers())
+            logger.info("MCP system servers started in Celery worker")
+        except BaseException as e:
+            logger.error(f"MCP system servers start failed in Celery worker: {e}")
+
+        try:
+            from ..tools.registry import tool_registry
+            loop.run_until_complete(tool_registry.discover_mcp_tools())
+            logger.info("MCP tools discovered in Celery worker")
+        except Exception as e:
+            logger.error(f"MCP tool discovery failed in Celery worker: {e}")
+
         logger.info("AgentRuntime eagerly initialized in Celery worker process")
     except Exception as e:
         logger.error(f"Celery worker eager initialization failed: {e}")
@@ -106,6 +127,20 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
     from ..memory.short_term import redis_client
     from ..memory.redis_pubsub import redis_pubsub_client
 
+    async def _heartbeat(heartbeat_event_bus, interval: float = 5.0):
+        """Publish periodic heartbeat events so the frontend knows the task is alive."""
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await heartbeat_event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.heartbeat", {"task_id": task_id, "status": "running"}, source="celery"),
+                )
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.debug(f"Heartbeat task ended for {task_id}: {e}")
+
     async def run():
         # Re-validate connections on the persistent worker loop; no-ops if healthy
         await db.connect()
@@ -133,9 +168,16 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
             f"task:{task_id}",
             Event("task.status_changed", {"task_id": task_id, "status": "running"}, source="celery"),
         )
+
+        # Start heartbeat to keep frontend alive during long operations
+        heartbeat_task = asyncio.create_task(_heartbeat(event_bus))
+
         try:
-            result = await orchestrator.execute_task(
-                query, config, task_id=UUID(task_id), user_id=user_id
+            # Enforce hard timeout on the entire task execution
+            task_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT)
+            result = await asyncio.wait_for(
+                orchestrator.execute_task(query, config, task_id=UUID(task_id), user_id=user_id),
+                timeout=task_timeout,
             )
             if result.status.value == "success":
                 await task_repo.update(
@@ -154,6 +196,15 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
                     Event("task.failed", {"task_id": task_id, "error": result.error_message}, source="celery"),
                 )
             return result
+        except asyncio.TimeoutError:
+            error_msg = f"Task timed out after {task_timeout}s"
+            logger.error(f"[execute_task] {error_msg}")
+            await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=error_msg)
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("task.failed", {"task_id": task_id, "error": error_msg, "reason": "timeout"}, source="celery"),
+            )
+            raise RuntimeError(error_msg)
         except Exception as exc:
             await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
             await event_bus.publish(
@@ -161,6 +212,12 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
                 Event("task.failed", {"task_id": task_id, "error": str(exc)}, source="celery"),
             )
             raise
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await asyncio.wait_for(heartbeat_task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
 
     loop = _worker_event_loop
     if loop is None or loop.is_closed():

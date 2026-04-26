@@ -1,5 +1,7 @@
 import asyncio
+import json
 import urllib.parse
+from datetime import datetime
 from typing import Dict, List, Optional
 from fastapi import WebSocket, WebSocketDisconnect, Query
 from ..orchestrator.v2.event_bus import event_bus, Event
@@ -106,8 +108,20 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, max_backoff)
 
+    async def _keepalive() -> None:
+        """Send periodic ping frames to prevent connection timeout."""
+        try:
+            while True:
+                await asyncio.sleep(15.0)
+                await websocket.send_text(json.dumps({"type": "heartbeat", "task_id": task_id, "ts": datetime.utcnow().isoformat()}))
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
     try:
         subscription_task = asyncio.create_task(_subscribe())
+        keepalive_task = asyncio.create_task(_keepalive())
         while True:
             # Keep the connection alive and handle incoming client messages
             try:
@@ -121,10 +135,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     except Exception as e:
         logger.warning(f"WebSocket error for task {task_id}: {e}")
     finally:
-        if subscription_task is not None:
-            subscription_task.cancel()
-            try:
-                await asyncio.wait_for(subscription_task, timeout=5.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
+        for t in (subscription_task, keepalive_task):
+            if t is not None:
+                t.cancel()
+                try:
+                    await asyncio.wait_for(t, timeout=5.0)
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
         await manager.disconnect(task_id, websocket)

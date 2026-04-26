@@ -153,7 +153,17 @@ class BrowserSession:
                     return False
             except Exception:
                 return False
-        # Content guard
+        # Structural check only: can we talk to the page?
+        try:
+            await self._page.evaluate("1 + 1")
+        except Exception:
+            return False
+        return True
+
+    async def has_content(self) -> bool:
+        """Return True if the page has meaningful content (not about:blank)."""
+        if self._page is None or self._page.is_closed():
+            return False
         try:
             url = self._page.url
             if url in ("about:blank", "", None):
@@ -212,7 +222,9 @@ class BrowserSession:
             try:
                 verify_url = page.url
                 html_len = await page.evaluate("document.body ? document.body.innerHTML.length : 0")
-                if verify_url in ("about:blank", "", None) or html_len < 50:
+                # about:blank is a valid destination; only flag error if we expected real content
+                is_blank = verify_url in ("", None) or (verify_url != "about:blank" and html_len < 50)
+                if is_blank:
                     screenshot_path = os.path.join(tempfile.gettempdir(), f"agentos_blank_{self.task_id}.png")
                     await page.screenshot(path=screenshot_path, full_page=True)
                     logger.error(f"BrowserSession[{self.task_id}]: blank page detected. Screenshot: {screenshot_path}")

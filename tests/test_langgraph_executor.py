@@ -73,7 +73,7 @@ async def test_executor_node_invokes_tool_when_llm_requests_it(mock_obs_bus):
     assert len(step["tool_results"]) == 1
     assert step["tool_results"][0]["success"] is True
     assert len(result["tool_calls"]) == 1
-    mock_registry.execute.assert_called_once_with("filesystem__write_file", {"path": "/tmp/test.txt", "content": "hello"})
+    mock_registry.execute.assert_called_once_with("filesystem__write_file", {"path": "/tmp/test.txt", "content": "hello", "_task_id": "test-task"})
 
 
 @pytest.mark.asyncio
