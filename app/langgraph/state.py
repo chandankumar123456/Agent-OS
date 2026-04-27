@@ -63,3 +63,6 @@ class AgentState(TypedDict, total=False):
 
     # Execution config
     max_tool_rounds: int
+
+    # Desktop goal-driven loop tracking
+    desktop_iterations: int

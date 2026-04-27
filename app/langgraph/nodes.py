@@ -96,6 +96,304 @@ def _build_default_params(tool_name: str, description: str) -> Optional[Dict[str
     return None
 
 
+async def _observe_desktop_state(task_id: str) -> Dict[str, Any]:
+    """Capture current desktop state for goal-driven loop decisions."""
+    from datetime import datetime
+    state = {"timestamp": datetime.utcnow().isoformat()}
+
+    # Try window list
+    try:
+        tool = tool_registry.get("desktop_env__get_window_list")
+        if tool:
+            output = await tool_registry.execute("desktop_env__get_window_list", {"_task_id": task_id})
+            if output.success and output.result:
+                state["windows"] = output.result
+    except Exception as e:
+        logger.debug(f"[_observe_desktop_state] window list failed: {e}")
+
+    # Try UI tree
+    try:
+        tool = tool_registry.get("desktop__get_ui_tree")
+        if tool:
+            output = await tool_registry.execute("desktop__get_ui_tree", {"_task_id": task_id})
+            if output.success and output.result:
+                state["ui_tree"] = str(output.result)[:2000]
+    except Exception as e:
+        logger.debug(f"[_observe_desktop_state] ui tree failed: {e}")
+
+    # Try focused window
+    try:
+        output = await tool_registry.execute("desktop_env__get_window_list", {"_task_id": task_id})
+        if output.success and output.result:
+            windows = output.result if isinstance(output.result, list) else []
+            focused = [w for w in windows if w.get("is_focused") or w.get("focused")]
+            state["focused_window"] = focused[0] if focused else None
+    except Exception as e:
+        logger.debug(f"[_observe_desktop_state] focused window failed: {e}")
+
+    return state
+
+
+async def _check_desktop_goal(
+    task_id: str,
+    step_description: str,
+) -> tuple:
+    """Check if the desktop goal is reached using deterministic verification."""
+    reports = await verification_engine.verify_plan(task_id, [
+        {"step": step_description, "id": "desktop_goal"}
+    ])
+    for r in reports:
+        if r.result == VerificationResult.PASS:
+            return True, f"Goal reached: {r.evidence}"
+        if r.result == VerificationResult.FAIL:
+            return False, f"Goal not reached: {r.failure_reason}"
+    return False, "No deterministic verification matched"
+
+
+_DESKTOP_LOOP_SYSTEM_PROMPT = """You are a desktop automation agent. Your goal is to bring the desktop to the desired state.
+
+CURRENT DESKTOP STATE:
+{desktop_state}
+
+ORIGINAL TASK: {query}
+CURRENT STEP: {description}
+
+ALLOWED TOOLS:
+{tools_json}
+
+RULES:
+1. You MUST select a tool from the ALLOWED TOOLS list only.
+2. ALWAYS observe the current state before deciding the next action.
+3. Choose the SINGLE most logical next action to move toward the goal.
+4. After each action, the system will re-observe the state and check if the goal is reached.
+5. Do NOT say the task is complete unless the goal state is actually true.
+6. If the goal is already reached, respond with a direct answer.
+7. Use ABSOLUTE file paths when needed.
+
+Respond with JSON in one of these formats:
+
+To call a tool:
+{{"tool_call": {{"name": "tool_name", "params": {{"param1": "value1"}}}}}}
+
+To provide a direct answer (only if goal is truly reached):
+{{"answer": "your response", "details": "additional info"}}
+"""
+
+
+async def _run_desktop_goal_loop(
+    task_id: str,
+    query: str,
+    description: str,
+    grounded_tools: List[Dict[str, Any]],
+    grounded_tool_names: Set[str],
+    max_iterations: int,
+    state: AgentState,
+) -> Dict[str, Any]:
+    """Run observe -> act -> verify loop for desktop tasks."""
+    tool_calls = list(state.get("tool_calls", []))
+    step_tool_results = []
+    verification_reports = list(state.get("verification_reports", []))
+    recovery_decisions = list(state.get("recovery_decisions", []))
+    final_answer = ""
+    iteration = 0
+    goal_reached = False
+    messages: List = []
+
+    while iteration < max_iterations:
+        iteration += 1
+        logger.info(f"[_run_desktop_goal_loop] Iteration {iteration}/{max_iterations} for task {task_id}")
+
+        # 1. OBSERVE
+        desktop_state = await _observe_desktop_state(task_id)
+        logger.info(f"[_run_desktop_goal_loop][TRACE] OBSERVED STATE: {json.dumps(desktop_state, indent=2, default=str)[:500]}")
+
+        # 2. CHOOSE ACTION (LLM with state)
+        tools_json = json.dumps(grounded_tools, indent=2, default=str)
+        system_prompt = _DESKTOP_LOOP_SYSTEM_PROMPT.format(
+            desktop_state=json.dumps(desktop_state, indent=2, default=str),
+            query=query,
+            description=description,
+            tools_json=tools_json,
+        )
+
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"Choose the next action. Iteration {iteration}/{max_iterations}."),
+        ]
+
+        try:
+            response = await get_llm_client().complete_json(
+                messages=_to_openai_messages(messages)
+            )
+        except Exception as e:
+            logger.error(f"[_run_desktop_goal_loop] LLM execution failed: {e}")
+            final_answer = f"Error during execution: {e}"
+            break
+
+        tool_call_data = response.get("tool_call")
+        if tool_call_data and isinstance(tool_call_data, dict):
+            tool_name = tool_call_data.get("name")
+            tool_params = tool_call_data.get("params", {})
+
+            if not tool_name:
+                final_answer = response.get("answer") or response.get("details") or json.dumps(response)
+                # Check goal even on answer, then continue if not reached
+                goal_reached, goal_notes = await _check_desktop_goal(task_id, description)
+                logger.info(f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} notes={goal_notes}")
+                if goal_reached:
+                    final_answer = f"Goal achieved after {iteration} iterations. {goal_notes}"
+                    break
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(
+                    content="You provided an answer but the goal is not yet reached. Continue with the next tool call."
+                ))
+                continue
+
+            # ── Grounding Guard: reject tools outside allowed set ──────
+            if tool_name not in grounded_tool_names:
+                logger.warning(
+                    f"[_run_desktop_goal_loop] LLM selected '{tool_name}' which is NOT in grounded set {grounded_tool_names}. "
+                    f"Rejecting and forcing retry."
+                )
+                warn_msg = (
+                    f"ERROR: '{tool_name}' is NOT allowed for this step. "
+                    f"You MUST select from: {', '.join(sorted(grounded_tool_names))}. "
+                    f"Try again with an allowed tool."
+                )
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(content=warn_msg))
+                continue
+
+            # Inject task_id for observability and session management
+            tool_params["_task_id"] = task_id
+
+            # Validate tool exists (triggers dynamic build if missing)
+            tool = tool_registry.get(tool_name)
+            if not tool:
+                try:
+                    from ..tools.builder import dynamic_tool_factory
+                    if dynamic_tool_factory:
+                        await dynamic_tool_factory.ensure_tool(tool_name)
+                        tool = tool_registry.get(tool_name)
+                except Exception as build_err:
+                    logger.error(f"[_run_desktop_goal_loop] Dynamic build failed for {tool_name}: {build_err}")
+
+            if not tool:
+                error_msg = f"Tool '{tool_name}' not found and could not be built"
+                logger.error(f"[_run_desktop_goal_loop] {error_msg}")
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(content=f"Error: {error_msg}. Use a valid tool or provide a direct answer."))
+                continue
+
+            severity = SafetyGate().check_tool_call(tool_name, tool_params, query)
+            if severity == ActionSeverity.IRREVERSIBLE:
+                await observability_bus.emit_safe(
+                    ObservabilityEventType.SAFETY_CHECK,
+                    task_id=task_id,
+                    trace_id=state.get("trace_id"),
+                    payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
+                    source="safety_gate",
+                )
+
+            logger.info(f"[_run_desktop_goal_loop][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
+            logger.info(f"[_run_desktop_goal_loop][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
+            await observability_bus.emit_safe(
+                ObservabilityEventType.TOOL_INVOKED,
+                task_id=task_id,
+                trace_id=state.get("trace_id"),
+                step_id=str(state.get("current_step_index", 0) + 1),
+                payload={"tool": tool_name, "params": tool_params},
+                source="executor_node",
+            )
+
+            try:
+                tool_output = await tool_registry.execute(tool_name, tool_params)
+                logger.info(f"[_run_desktop_goal_loop][TRACE] RAW TOOL RESPONSE: success={tool_output.success} result={tool_output.result} error={tool_output.error}")
+                tool_result = {
+                    "success": tool_output.success,
+                    "data": tool_output.result if tool_output.result is not None else str(tool_output),
+                    "error": tool_output.error,
+                }
+            except Exception as e:
+                logger.error(f"[_run_desktop_goal_loop][TRACE] Tool execution EXCEPTION: {e}")
+                logger.error(f"[_run_desktop_goal_loop] Tool execution error: {e}")
+                tool_result = {"success": False, "error": str(e)}
+
+            tool_calls.append({
+                "step": state.get("current_step_index", 0) + 1,
+                "tool": tool_name,
+                "result": tool_result,
+            })
+            step_tool_results.append(tool_result)
+
+            # 3. CHECK GOAL after action
+            goal_reached, goal_notes = await _check_desktop_goal(task_id, description)
+            logger.info(f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} notes={goal_notes}")
+
+            if goal_reached:
+                final_answer = f"Goal achieved after {iteration} iterations. {goal_notes}"
+                break
+
+            messages.append(AIMessage(content=json.dumps(response)))
+            messages.append(HumanMessage(
+                content=f"Tool '{tool_name}' returned: {json.dumps(tool_result, indent=2)}. "
+                        f"The goal has not been reached yet. Choose the next action."
+            ))
+            continue
+        else:
+            final_answer = response.get("answer") or response.get("details") or json.dumps(response)
+            # Check goal even on answer
+            goal_reached, goal_notes = await _check_desktop_goal(task_id, description)
+            logger.info(f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} notes={goal_notes}")
+            if goal_reached:
+                final_answer = f"Goal achieved after {iteration} iterations. {goal_notes}"
+                break
+            messages.append(AIMessage(content=json.dumps(response)))
+            messages.append(HumanMessage(
+                content="You provided an answer but the goal is not yet reached. Continue with the next tool call."
+            ))
+            continue
+    else:
+        final_answer = f"Reached maximum iterations ({max_iterations}) without achieving goal. Partial results: {json.dumps(step_tool_results, indent=2, default=str)}"
+
+    if isinstance(final_answer, dict):
+        final_answer = json.dumps(final_answer, indent=2, ensure_ascii=False)
+    elif not isinstance(final_answer, str):
+        final_answer = str(final_answer)
+
+    step_output = {
+        "step_number": state.get("current_step_index", 0) + 1,
+        "description": description,
+        "output": final_answer,
+        "tool_results": step_tool_results,
+    }
+
+    steps = state.get("steps", [])
+    steps.append(step_output)
+
+    status = "step_executed" if goal_reached else "incomplete"
+
+    await observability_bus.emit_safe(
+        ObservabilityEventType.STEP_STARTED,
+        task_id=task_id,
+        trace_id=state.get("trace_id"),
+        step_id=str(state.get("current_step_index", 0) + 1),
+        payload={"status": status, "output_preview": final_answer[:200]},
+        source="executor_node",
+    )
+
+    return {
+        "steps": steps,
+        "current_step_index": state.get("current_step_index", 0) + 1,
+        "tool_calls": tool_calls,
+        "messages": [AIMessage(content=f"Step {state.get('current_step_index', 0) + 1} result: {final_answer}")],
+        "verification_reports": verification_reports,
+        "recovery_decisions": recovery_decisions,
+        "status": status,
+        "desktop_iterations": iteration,
+    }
+
+
 def _deterministic_tool_select(description: str, available_tools: List[Dict[str, Any]]) -> Optional[str]:
     """If a step description maps to exactly one obvious tool, return it without LLM."""
     grounded = tool_grounding_layer.filter_tools_for_step(description, available_tools)
@@ -435,6 +733,23 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     # Diagnostic: log what was rejected
     rejected = [t["name"] for t in available_tools if t["name"] not in grounded_tool_names]
     logger.info(f"[executor_node] Rejected tools for step {step_number}: {rejected[:20]}")
+
+    # ── Desktop Goal-Driven Execution Loop ─────────────────────────────
+    is_desktop_step = bool(
+        any(t.get("name", "").startswith(("desktop_env__", "desktop__")) for t in grounded_tools)
+        or step.get("step_type", "").lower() == "desktop_automation"
+    )
+    if is_desktop_step:
+        logger.info(f"[executor_node] Desktop step detected for task {task_id}. Running goal-driven loop.")
+        return await _run_desktop_goal_loop(
+            task_id=task_id,
+            query=state.get("query", ""),
+            description=description,
+            grounded_tools=grounded_tools,
+            grounded_tool_names=grounded_tool_names,
+            max_iterations=state.get("max_tool_rounds", 5),
+            state=state,
+        )
 
     # ── Deterministic Execution (skip LLM for obvious cases) ──────────
     # Try planner's suggested tool first
@@ -965,6 +1280,14 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
             env_notes = "Cloud API environment selected but no cloud tools were invoked."
         else:
             env_notes = f"Cloud API verified: {len(cloud_calls)} API calls made."
+    elif env_type == "desktop":
+        tool_calls = state.get("tool_calls", [])
+        desktop_calls = [t for t in tool_calls if t.get("tool", "").startswith(("desktop_env__", "desktop__"))]
+        if not desktop_calls:
+            env_verified = False
+            env_notes = "Desktop environment selected but no desktop tools were invoked."
+        else:
+            env_notes = f"Desktop automation verified: {len(desktop_calls)} desktop actions performed."
 
     # Final verdict: both deterministic and LLM must agree for PASS
     verified = det_pass and llm_verified and env_verified

@@ -233,6 +233,16 @@ class TaskRunner:
                     output_data=result,
                 )
 
+            if not verified:
+                return AgentOutput(
+                    task_id=str(task_id),
+                    step_id=uuid4(),
+                    status=AgentStatus.FAILURE,
+                    error_type="verification_failed",
+                    error_message="Task execution completed but verification failed. The goal state was not reached.",
+                    output_data=result,
+                )
+
             return AgentOutput(
                 task_id=str(task_id),
                 step_id=uuid4(),
