@@ -25,3 +25,29 @@ def test_desktop_grounding_includes_actual_semantic_tools():
     assert "desktop__click_element" in desktop_tools
     assert "desktop__type_element" in desktop_tools
     assert "desktop__focus_and_interact" in desktop_tools
+
+def test_desktop_env_tools_have_parameter_schemas():
+    from app.tools.registry import tool_registry
+    for action in ["screenshot", "click", "type_text", "press_key", "get_window_list",
+                   "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position",
+                   "scroll", "close"]:
+        name = f"desktop_env__{action}"
+        schema = tool_registry.get(name).get_schema()
+        params = schema.get("parameters", {})
+        assert isinstance(params, dict), f"{name} parameters is not a dict"
+        assert "properties" in params or params == {}, f"{name} missing properties"
+        if action == "type_text":
+            props = params.get("properties", {})
+            assert "text" in props, f"desktop_env__type_text missing 'text' property"
+
+def test_browser_env_tools_have_parameter_schemas():
+    from app.tools.registry import tool_registry
+    for action in ["launch", "navigate", "search", "click", "type", "screenshot", "get_text", "close"]:
+        name = f"browser_env__{action}"
+        schema = tool_registry.get(name).get_schema()
+        params = schema.get("parameters", {})
+        assert isinstance(params, dict), f"{name} parameters is not a dict"
+        assert "properties" in params or params == {}, f"{name} missing properties"
+        if action == "navigate":
+            props = params.get("properties", {})
+            assert "url" in props, f"browser_env__navigate missing 'url' property"

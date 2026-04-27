@@ -114,7 +114,31 @@ class ToolRegistry:
                 self._action = action
 
             def get_schema(self):
-                return {"name": self.name, "description": self.description, "parameters": {}}
+                schema = {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": {}}}
+                action = self._action
+                if action == "navigate":
+                    schema["parameters"]["properties"] = {"url": {"type": "string", "description": "URL to navigate to"}}
+                    schema["parameters"]["required"] = ["url"]
+                elif action == "search":
+                    schema["parameters"]["properties"] = {"query": {"type": "string", "description": "Search query"}}
+                    schema["parameters"]["required"] = ["query"]
+                elif action == "click":
+                    schema["parameters"]["properties"] = {"selector": {"type": "string", "description": "CSS selector or xpath"}}
+                    schema["parameters"]["required"] = ["selector"]
+                elif action == "type":
+                    schema["parameters"]["properties"] = {
+                        "selector": {"type": "string", "description": "CSS selector or xpath"},
+                        "text": {"type": "string", "description": "Text to type"}
+                    }
+                    schema["parameters"]["required"] = ["selector", "text"]
+                elif action == "screenshot":
+                    schema["parameters"]["properties"] = {"path": {"type": "string", "description": "Optional file path to save screenshot"}}
+                elif action == "get_text":
+                    schema["parameters"]["properties"] = {"selector": {"type": "string", "description": "CSS selector or xpath"}}
+                    schema["parameters"]["required"] = ["selector"]
+                elif action == "launch":
+                    schema["parameters"]["properties"] = {"headless": {"type": "boolean", "description": "Run in headless mode"}}
+                return schema
 
             async def execute(self, tool_input: ToolInput):
                 params = tool_input.parameters
@@ -157,7 +181,60 @@ class ToolRegistry:
                 self._action = action
 
             def get_schema(self):
-                return {"name": self.name, "description": self.description, "parameters": {}}
+                schema = {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": {}}}
+                action = self._action
+                if action == "click":
+                    schema["parameters"]["properties"] = {
+                        "x": {"type": "integer", "description": "X coordinate"},
+                        "y": {"type": "integer", "description": "Y coordinate"}
+                    }
+                    schema["parameters"]["required"] = ["x", "y"]
+                elif action == "type_text":
+                    schema["parameters"]["properties"] = {
+                        "text": {"type": "string", "description": "Text to type"},
+                        "interval": {"type": "number", "description": "Typing interval in seconds", "default": 0.01}
+                    }
+                    schema["parameters"]["required"] = ["text"]
+                elif action == "press_key":
+                    schema["parameters"]["properties"] = {"keys": {"type": "string", "description": "Key or key combination to press (e.g., 'ctrl+c')"}}
+                    schema["parameters"]["required"] = ["keys"]
+                elif action == "screenshot":
+                    schema["parameters"]["properties"] = {"path": {"type": "string", "description": "Optional file path to save screenshot"}}
+                elif action == "focus_window":
+                    schema["parameters"]["properties"] = {"title": {"type": "string", "description": "Window title substring to focus"}}
+                    schema["parameters"]["required"] = ["title"]
+                elif action == "get_window_list":
+                    schema["parameters"]["properties"] = {}
+                elif action == "get_clipboard":
+                    schema["parameters"]["properties"] = {}
+                elif action == "set_clipboard":
+                    schema["parameters"]["properties"] = {"text": {"type": "string", "description": "Text to copy to clipboard"}}
+                    schema["parameters"]["required"] = ["text"]
+                elif action == "get_mouse_position":
+                    schema["parameters"]["properties"] = {}
+                elif action == "scroll":
+                    schema["parameters"]["properties"] = {"amount": {"type": "integer", "description": "Scroll amount (positive=down, negative=up)"}}
+                    schema["parameters"]["required"] = ["amount"]
+                elif action == "close":
+                    schema["parameters"]["properties"] = {}
+                elif action == "get_ui_tree":
+                    schema["parameters"]["properties"] = {}
+                elif action == "click_element":
+                    schema["parameters"]["properties"] = {"element_id": {"type": "integer", "description": "Element ID from get_ui_tree"}}
+                    schema["parameters"]["required"] = ["element_id"]
+                elif action == "type_element":
+                    schema["parameters"]["properties"] = {
+                        "element_id": {"type": "integer", "description": "Element ID from get_ui_tree"},
+                        "text": {"type": "string", "description": "Text to type"}
+                    }
+                    schema["parameters"]["required"] = ["element_id", "text"]
+                elif action == "focus_and_interact":
+                    schema["parameters"]["properties"] = {
+                        "element_id": {"type": "integer", "description": "Element ID from get_ui_tree"},
+                        "key": {"type": "string", "description": "Key to press", "default": "enter"}
+                    }
+                    schema["parameters"]["required"] = ["element_id"]
+                return schema
 
             async def execute(self, tool_input: ToolInput):
                 params = tool_input.parameters
