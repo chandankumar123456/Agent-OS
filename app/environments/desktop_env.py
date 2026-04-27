@@ -113,34 +113,12 @@ class DesktopSession:
         return None
 
     async def _sync_wait(self, timeout: float = 2.0, poll_interval: float = 0.3) -> None:
-        await asyncio.sleep(0.5)
-        if self._is_headless() or auto is None:
-            await asyncio.sleep(0.5)
-            return
+        """Wait for the UI to stabilize after an action.
 
-        saved_map = self._ui_element_map.copy()
-        saved_next_id = self._next_element_id
-        last_hash = self._last_tree_hash
-        start_time = asyncio.get_event_loop().time()
-
-        while True:
-            self._ui_element_map.clear()
-            self._next_element_id = 1
-            tree = self._build_ui_tree_windows(max_depth=6)
-            current_hash = self._compute_tree_hash(tree)
-
-            if current_hash != last_hash:
-                last_hash = current_hash
-                await asyncio.sleep(poll_interval)
-                if asyncio.get_event_loop().time() - start_time >= timeout:
-                    await asyncio.sleep(0.5)
-                    break
-            else:
-                self._last_tree_hash = current_hash
-                break
-
-        self._ui_element_map = saved_map
-        self._next_element_id = saved_next_id
+        Currently uses a fixed sleep of 1.0s. Future enhancement: poll the
+        accessibility tree hash and wait until it stabilizes.
+        """
+        await asyncio.sleep(1.0)
 
     # ------------------------------------------------------------------
     # Accessibility tree helpers
@@ -403,11 +381,15 @@ class DesktopSession:
             return ToolOutput(success=False, error=str(e))
 
     async def click_element(self, element_id: int) -> ToolOutput:
+        if pyautogui is None:
+            return ToolOutput(
+                success=False, error="Input automation library (pyautogui) not available"
+            )
         meta = self._ui_element_map.get(element_id)
         if not meta:
             return ToolOutput(
                 success=False,
-                error="Element not found. Please call desktop__get_ui_tree first to refresh the UI tree.",
+                error="Element not found. Call get_ui_tree first to refresh the UI tree.",
             )
         center = meta.get("center")
         if not center:
@@ -437,11 +419,15 @@ class DesktopSession:
         return result
 
     async def type_element(self, element_id: int, text: str) -> ToolOutput:
+        if pyautogui is None:
+            return ToolOutput(
+                success=False, error="Input automation library (pyautogui) not available"
+            )
         meta = self._ui_element_map.get(element_id)
         if not meta:
             return ToolOutput(
                 success=False,
-                error="Element not found. Please call desktop__get_ui_tree first to refresh the UI tree.",
+                error="Element not found. Call get_ui_tree first to refresh the UI tree.",
             )
         center = meta.get("center")
         if center:
@@ -473,11 +459,15 @@ class DesktopSession:
         return result
 
     async def focus_and_interact(self, element_id: int, key: str = "enter") -> ToolOutput:
+        if pyautogui is None:
+            return ToolOutput(
+                success=False, error="Input automation library (pyautogui) not available"
+            )
         meta = self._ui_element_map.get(element_id)
         if not meta:
             return ToolOutput(
                 success=False,
-                error="Element not found. Please call desktop__get_ui_tree first to refresh the UI tree.",
+                error="Element not found. Call get_ui_tree first to refresh the UI tree.",
             )
         element = meta.get("element")
         focused = False
