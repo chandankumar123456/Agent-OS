@@ -1,4 +1,5 @@
 """Desktop Environment — native desktop UI automation."""
+import hashlib
 import json
 import os
 import subprocess
@@ -143,28 +144,27 @@ class DesktopSession:
             return True
 
         # Keep explicitly actionable types even if nameless
-        if control_type in {
-            "button", "checkbox", "combobox", "edit", "hyperlink",
-            "menuitem", "radiobutton", "slider", "spinner", "splitbutton",
-            "tabitem", "treeitem", "listitem",
-        }:
+        if self._is_actionable_type(control_type):
             return True
 
         # Discard generic layout containers with no text
         if control_type in {"pane", "window", "group", "custom", "document", "scrollpane"}:
             return False
 
-        # Default: keep if it looks like it carries information
-        return bool(name or value or node_info.get("is_focusable"))
+        # Default: keep if it is focusable
+        return bool(node_info.get("is_focusable"))
 
     def _get_element_center(self, element) -> Optional[Tuple[int, int]]:
         """Extract center coordinates from a uiautomation element."""
         try:
             rect = element.BoundingRectangle
-            if rect and rect.Width > 0 and rect.Height > 0:
-                center_x = rect.Left + rect.Width // 2
-                center_y = rect.Top + rect.Height // 2
-                return (center_x, center_y)
+            if rect:
+                width = rect.right - rect.left
+                height = rect.bottom - rect.top
+                if width > 0 and height > 0:
+                    center_x = rect.left + width // 2
+                    center_y = rect.top + height // 2
+                    return (center_x, center_y)
         except Exception:
             pass
         return None
@@ -198,10 +198,14 @@ class DesktopSession:
 
         try:
             control_type = (element.ControlTypeName or "Unknown").strip()
+            # uiautomation returns suffixed names like "ButtonControl"; strip suffix
+            if control_type.lower().endswith("control"):
+                control_type = control_type[:-7]
             name = (element.Name or "").strip()
             value = ""
             try:
-                value = (element.GetValuePattern().Value or "") if element.GetValuePattern() else ""
+                vp = element.GetValuePattern()
+                value = (vp.Value or "") if vp else ""
             except Exception:
                 pass
 
@@ -224,7 +228,7 @@ class DesktopSession:
             try:
                 is_enabled = element.IsEnabled
                 is_visible = element.IsVisible
-                offscreen = not element.IsOffscreen if hasattr(element, "IsOffscreen") else False
+                offscreen = element.IsOffscreen if hasattr(element, "IsOffscreen") else False
                 is_focusable = element.IsKeyboardFocusable
             except Exception:
                 pass
@@ -283,7 +287,6 @@ class DesktopSession:
 
     def _compute_tree_hash(self, tree: List[Dict[str, Any]]) -> str:
         """Compute a simple hash of the tree for sync detection."""
-        import hashlib
         canonical = json.dumps(tree, sort_keys=True, ensure_ascii=True)
         return hashlib.md5(canonical.encode("utf-8")).hexdigest()
 
@@ -318,14 +321,10 @@ class DesktopSession:
 
             self._last_tree_hash = self._compute_tree_hash(tree)
 
-            # Phase 4 fallback: if too few actionable nodes, flag for vision
+            # If too few actionable nodes, recommend vision fallback
             actionable_count = sum(
                 1 for node in tree
-                if node.get("type", "").lower() in {
-                    "button", "checkbox", "combobox", "edit", "hyperlink",
-                    "menuitem", "radiobutton", "slider", "spinner",
-                    "splitbutton", "tabitem", "treeitem", "listitem",
-                }
+                if self._is_actionable_type(node.get("type", ""))
             )
 
             result_payload = {
