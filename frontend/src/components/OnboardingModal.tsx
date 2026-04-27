@@ -17,25 +17,33 @@ interface OnboardingModalProps {
 
 const OnboardingModal: React.FC<OnboardingModalProps> = ({ onClose }) => {
   const [step, setStep] = useState(0);
+  const [isSeeding, setIsSeeding] = useState(false);
   const navigate = useNavigate();
 
-  const handleSelection = async (path: string) => {
+  const runSeed = async () => {
+    if (isSeeding) return;
+    const alreadySeeded = localStorage.getItem('hasSeededExampleData');
+    if (alreadySeeded === 'true') return;
+    setIsSeeding(true);
     try {
       await apiClient.seedExampleData();
+      localStorage.setItem('hasSeededExampleData', 'true');
     } catch {
       // Ignore seed errors
+    } finally {
+      setIsSeeding(false);
     }
+  };
+
+  const handleSelection = async (path: string) => {
+    await runSeed();
     localStorage.setItem('hasCompletedOnboarding', 'true');
     onClose();
     navigate(path);
   };
 
   const handleSkip = async () => {
-    try {
-      await apiClient.seedExampleData();
-    } catch {
-      // Ignore seed errors
-    }
+    await runSeed();
     localStorage.setItem('hasCompletedOnboarding', 'true');
     onClose();
   };

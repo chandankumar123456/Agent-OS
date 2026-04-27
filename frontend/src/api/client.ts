@@ -263,9 +263,14 @@ class ApiClient {
           if (retryResponse.ok) {
             return retryResponse.json();
           }
+          // Retry also failed — do NOT auto-logout if refresh succeeded.
+          // The retry failure is likely a permission/server issue, not auth.
+          throw new Error(message);
         }
+        // Refresh failed — token is genuinely invalid
         window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
       } else if (response.status === 401) {
+        // Non-token_expired 401 — token might be missing or malformed
         window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
       }
       throw new Error(message);
@@ -289,6 +294,10 @@ class ApiClient {
       if (data.refresh_token) {
         localStorage.setItem('refreshToken', data.refresh_token);
       }
+      // Notify AuthContext to update its state so UI stays in sync
+      window.dispatchEvent(new CustomEvent('auth:token_refreshed', {
+        detail: { access_token: data.access_token, user: data.user }
+      }));
       return true;
     } catch {
       return false;
@@ -320,12 +329,18 @@ class ApiClient {
     taskId: string,
     onStatusChange?: (task: Task) => void,
     interval: number = 2000,
-    maxAttempts: number = 60
+    maxAttempts: number = 60,
+    signal?: AbortSignal
   ): Promise<Task> {
     let attempts = 0;
 
     return new Promise((resolve, reject) => {
       const poll = async () => {
+        if (signal?.aborted) {
+          reject(new Error('Polling aborted'));
+          return;
+        }
+
         try {
           const task = await this.getTask(taskId);
 
@@ -344,7 +359,11 @@ class ApiClient {
             return;
           }
 
-          setTimeout(poll, interval);
+          const timer = setTimeout(poll, interval);
+          signal?.addEventListener('abort', () => {
+            clearTimeout(timer);
+            reject(new Error('Polling aborted'));
+          }, { once: true });
         } catch (error) {
           reject(error);
         }

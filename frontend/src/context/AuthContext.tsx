@@ -101,6 +101,22 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => window.removeEventListener('auth:expired', handleAuthExpired as EventListener);
   }, [logout]);
 
+  useEffect(() => {
+    const handleTokenRefreshed = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.access_token) {
+        setAccessToken(detail.access_token);
+        if (detail.user) {
+          setUser(detail.user);
+          localStorage.setItem('user', JSON.stringify(detail.user));
+        }
+      }
+    };
+
+    window.addEventListener('auth:token_refreshed', handleTokenRefreshed as EventListener);
+    return () => window.removeEventListener('auth:token_refreshed', handleTokenRefreshed as EventListener);
+  }, []);
+
   const login = useCallback(async (email: string, password: string) => {
     const response = await fetch(`${API_BASE_URL}/auth/login`, {
       method: 'POST',

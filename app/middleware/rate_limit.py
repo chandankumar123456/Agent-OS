@@ -1,3 +1,4 @@
+import os
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,6 +14,15 @@ FREE_USER_LIMIT = 60
 PREMIUM_USER_LIMIT = 300
 API_KEY_LIMIT = 120
 BURST_SIZE = 10
+
+# Local development: much higher limits to avoid blocking during testing
+LOCAL_DEV_LIMIT = 600
+LOCAL_DEV_BURST = 100
+
+
+def _is_local_dev() -> bool:
+    """Return True if running in local development mode."""
+    return os.environ.get("AGENTOS_ENV", "").lower() == "development" or os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -78,7 +88,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             burst_results = await burst_pipe.execute()
             burst_count = burst_results[0]
 
-            if burst_count > self.burst_size:
+            burst_limit = LOCAL_DEV_BURST if _is_local_dev() else self.burst_size
+            if burst_count > burst_limit:
                 retry_after = 1
                 return True, retry_after, remaining
 
@@ -92,6 +103,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         client_id, limit = await self._get_client_info(request)
+
+        # Local development: use relaxed limits
+        if _is_local_dev():
+            limit = LOCAL_DEV_LIMIT
+
         is_limited, retry_after, remaining = await self._is_rate_limited(client_id, limit)
 
         if is_limited:

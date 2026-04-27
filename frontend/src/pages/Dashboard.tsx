@@ -37,6 +37,7 @@ const Dashboard = () => {
   const [showTour, setShowTour] = useState(false);
   const { showToast } = useToast();
   const processedTaskIds = useRef<Set<string>>(new Set());
+  const pollAbortRef = useRef<AbortController | null>(null);
 
   const wsTaskId = currentTask?.task_id && (currentTask.status === 'pending' || currentTask.status === 'running')
     ? currentTask.task_id
@@ -44,6 +45,16 @@ const Dashboard = () => {
 
   const { results, addResult, clearResults } = useTaskResults();
   const { messages, status: wsStatus } = useWebSocket({ taskId: wsTaskId, onMessage: addResult });
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollAbortRef.current) {
+        pollAbortRef.current.abort();
+        pollAbortRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -69,16 +80,8 @@ const Dashboard = () => {
           newStatus === 'completed' ? 'Task completed successfully' : `Task ${newStatus}`,
           newStatus === 'completed' ? 'success' : 'error'
         );
-        apiClient.getTask(taskId)
-          .then((task) => {
-            setCurrentTask(task);
-            setTasks((prev) =>
-              prev.some((t) => t.task_id === task.task_id)
-                ? prev.map((t) => (t.task_id === task.task_id ? task : t))
-                : [task, ...prev]
-            );
-          })
-          .catch(() => {});
+        // WebSocket already gives us status updates; only fetch full task if needed
+        // Avoid duplicate getTask since pollTaskStatus already fetches it
         loadTaskTrace(taskId);
       }
     }
@@ -169,8 +172,17 @@ const Dashboard = () => {
     e.preventDefault();
     if (!query.trim()) return;
 
+    // Abort any existing polling before starting a new task
+    if (pollAbortRef.current) {
+      pollAbortRef.current.abort();
+    }
+    pollAbortRef.current = new AbortController();
+    const signal = pollAbortRef.current.signal;
+
     setIsSubmitting(true);
     setShowResult(false);
+    setLoadError('');
+    processedTaskIds.current.clear();
     try {
       const request: CreateTaskRequest = {
         query: query.trim(),
@@ -182,6 +194,7 @@ const Dashboard = () => {
       apiClient.pollTaskStatus(
         response.task_id,
           (task) => {
+            if (signal.aborted) return;
             setCurrentTask(task);
             setTasks(prev => prev.some(t => t.task_id === task.task_id) ? prev.map(t => t.task_id === task.task_id ? task : t) : [task, ...prev]);
             if (task.status === 'completed' || task.status === 'failed') {
@@ -191,10 +204,12 @@ const Dashboard = () => {
             }
           },
           2000,
-          150
-        ).catch(() => {
+          150,
+          signal
+        ).catch((err) => {
+        if (signal.aborted) return;
         setIsSubmitting(false);
-        setLoadError('Task polling timed out');
+        setLoadError(err instanceof Error ? err.message : 'Task polling timed out');
       });
       
       setQuery('');
