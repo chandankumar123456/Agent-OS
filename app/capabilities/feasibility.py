@@ -105,6 +105,7 @@ class FeasibilityEngine:
         caps.add(Capability.SHELL)
         caps.add(Capability.WEB)
         caps.add(Capability.DEPLOYMENT)
+        caps.add(Capability.DESKTOP)
         return caps
 
     async def _get_available_tools(self) -> List[str]:

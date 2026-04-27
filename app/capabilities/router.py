@@ -77,6 +77,7 @@ class CapabilityRouter:
             "screenshot", "screen", "clipboard", "open app", "launch app",
             "menu", "dialog", "notification", "focus", "minimize", "maximize",
             "drag", "scroll", "right-click", "double-click", "form", "native",
+            "open", "launch", "run app", "open notepad", "open file explorer",
         ],
     }
 
@@ -180,7 +181,7 @@ class CapabilityRouter:
             Capability.RESEARCH: ["cloud_api__search_web", "cloud_api__http_request"],
             Capability.COMMUNICATION: ["cloud_api__send_email", "cloud_api__send_message"],
             Capability.DATA_PROCESSING: ["local__process_data", "local__compute_statistics"],
-            Capability.DESKTOP: ["desktop__screenshot", "desktop__click", "desktop__type_text", "desktop__press_key", "desktop__get_window_list", "desktop__focus_window"],
+            Capability.DESKTOP: ["desktop_env__screenshot", "desktop_env__click", "desktop_env__type_text", "desktop_env__press_key", "desktop_env__get_window_list", "desktop_env__focus_window"],
         }
         return suggestions.get(cap, [])
 
