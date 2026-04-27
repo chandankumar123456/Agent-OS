@@ -88,9 +88,11 @@ def _build_default_params(tool_name: str, description: str) -> Optional[Dict[str
             url_match = re.findall(r"https?://[^\s\"'<>]+", description)
             if url_match:
                 return {"url": url_match[0]}
-        return {}
+        # Empty dict is NOT valid params for browser tools — force LLM generation
+        return None
     if tool_name.startswith("desktop_env__"):
-        return {}
+        # Empty dict is NOT valid params for desktop tools — force LLM generation
+        return None
     return None
 
 
