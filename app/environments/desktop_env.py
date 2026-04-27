@@ -86,13 +86,17 @@ class DesktopSession:
         **kwargs,
     ) -> ToolOutput:
         """Wrap a synchronous call in safety checks and return a ToolOutput."""
+        func_name = getattr(func, '__name__', str(func))
+        logger.info(f"[desktop_env][TRACE] OS CALL: {func_name} args={args} kwargs={kwargs}")
         if self._is_headless():
+            logger.error(f"[desktop_env][TRACE] OS CALL BLOCKED: headless environment")
             return ToolOutput(
                 success=False,
                 error="Desktop automation unavailable: running headless (no display detected)",
             )
         try:
             result = func(*args, **kwargs)
+            logger.info(f"[desktop_env][TRACE] OS CALL SUCCESS: {func_name} returned={result}")
             return ToolOutput(
                 success=True,
                 result=result if default_result is None else default_result,
@@ -100,7 +104,10 @@ class DesktopSession:
             )
         except Exception as e:
             logger.error(
-                f"DesktopSession[{self.task_id}]: {getattr(func, '__name__', func)} failed: {e}"
+                f"[desktop_env][TRACE] OS CALL FAILED: {func_name} error={e}"
+            )
+            logger.error(
+                f"DesktopSession[{self.task_id}]: {func_name} failed: {e}"
             )
             return ToolOutput(success=False, error=default_error or str(e))
 
@@ -576,17 +583,20 @@ class DesktopSession:
             return ToolOutput(success=False, error=str(e))
 
     async def click(self, x: int, y: int) -> ToolOutput:
+        logger.info(f"[desktop_env][TRACE] click CALLED: x={x} y={y} headless={self._is_headless()}")
         if self._is_headless():
             return ToolOutput(
                 success=False,
                 error="Desktop automation unavailable: running headless (no display detected)",
             )
         if pyautogui is None:
+            logger.error(f"[desktop_env][TRACE] click ABORTED: pyautogui is None")
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
         error = self._validate_coords(x, y)
         if error:
+            logger.error(f"[desktop_env][TRACE] click ABORTED: {error}")
             return ToolOutput(success=False, error=error)
         result = self._safe_call(
             pyautogui.click,
@@ -595,11 +605,14 @@ class DesktopSession:
             default_result={"message": f"Clicked at ({x}, {y})"},
             visibility={"type": "desktop_click", "x": x, "y": y},
         )
+        logger.info(f"[desktop_env][TRACE] click RESULT: success={result.success} result={result.result} error={result.error}")
         await self._sync_wait()
         return result
 
     async def type_text(self, text: str, interval: float = 0.01) -> ToolOutput:
+        logger.info(f"[desktop_env][TRACE] type_text CALLED: text_len={len(text)} interval={interval} headless={self._is_headless()}")
         if pyautogui is None:
+            logger.error(f"[desktop_env][TRACE] type_text ABORTED: pyautogui is None")
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
@@ -610,6 +623,7 @@ class DesktopSession:
             default_result={"message": f"Typed text (length {len(text)})"},
             visibility={"type": "desktop_type", "text_length": len(text)},
         )
+        logger.info(f"[desktop_env][TRACE] type_text RESULT: success={result.success} result={result.result} error={result.error}")
         await self._sync_wait()
         return result
 
@@ -618,13 +632,16 @@ class DesktopSession:
 
         Examples: 'enter', 'ctrl+c', 'alt+f4'
         """
+        logger.info(f"[desktop_env][TRACE] press_key CALLED: keys='{keys}' headless={self._is_headless()}")
         if pyautogui is None:
+            logger.error(f"[desktop_env][TRACE] press_key ABORTED: pyautogui is None")
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
         keys = keys.strip().lower()
         if "+" in keys:
             parts = [p.strip() for p in keys.split("+")]
+            logger.info(f"[desktop_env][TRACE] press_key EXECUTING HOTKEY: parts={parts}")
             result = self._safe_call(
                 pyautogui.hotkey,
                 *parts,
@@ -632,12 +649,14 @@ class DesktopSession:
                 visibility={"type": "desktop_key", "keys": keys},
             )
         else:
+            logger.info(f"[desktop_env][TRACE] press_key EXECUTING: key='{keys}'")
             result = self._safe_call(
                 pyautogui.press,
                 keys,
                 default_result={"message": f"Pressed key {keys}"},
                 visibility={"type": "desktop_key", "keys": keys},
             )
+        logger.info(f"[desktop_env][TRACE] press_key RESULT: success={result.success} result={result.result} error={result.error}")
         await self._sync_wait()
         return result
 

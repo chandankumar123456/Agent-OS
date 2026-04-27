@@ -40,6 +40,7 @@ class MCPWrappedTool:
 
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         from ..mcp.client_manager import mcp_client_manager
+        logger.info(f"[registry][TRACE] MCP INVOKE: name='{self.name}' args={ {k:v for k,v in tool_input.parameters.items() if not k.startswith('_')} }")
         try:
             # Strip internal params (e.g., _task_id) before sending to MCP server
             arguments = {k: v for k, v in tool_input.parameters.items() if not k.startswith("_")}
@@ -52,6 +53,7 @@ class MCPWrappedTool:
                 )
             else:
                 content = str(result)
+            logger.info(f"[registry][TRACE] MCP RESULT: name='{self.name}' success=True content_preview='{content[:200]}'")
 
             visibility = None
             if self.name.startswith("filesystem__"):
@@ -63,6 +65,7 @@ class MCPWrappedTool:
 
             return ToolOutput(success=True, result={"output": content}, visibility=visibility)
         except Exception as e:
+            logger.error(f"[registry][TRACE] MCP ERROR: name='{self.name}' error={e}")
             return ToolOutput(success=False, error=str(e))
 
 
@@ -239,6 +242,7 @@ class ToolRegistry:
             async def execute(self, tool_input: ToolInput):
                 params = tool_input.parameters
                 task_id = params.get("_task_id", "default")
+                logger.info(f"[registry][TRACE] DESKTOP TOOL WRAPPER: name='{self.name}' action='{self._action}' task_id='{task_id}' params={ {k:v for k,v in params.items() if not k.startswith('_')} }")
                 session = await desktop_session_manager.get_or_create_session(task_id)
 
                 if self._action == "screenshot":
@@ -271,6 +275,7 @@ class ToolRegistry:
                     return await session.type_element(params.get("element_id", 0), params.get("text", ""))
                 elif self._action == "focus_and_interact":
                     return await session.focus_and_interact(params.get("element_id", 0), params.get("key", "enter"))
+                logger.error(f"[registry][TRACE] DESKTOP TOOL WRAPPER: unknown action '{self._action}'")
                 return ToolOutput(success=False, error=f"Unknown action: {self._action}")
 
         for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close"]:
@@ -404,17 +409,21 @@ class ToolRegistry:
         parameters: Dict[str, Any]
     ) -> ToolOutput:
         import asyncio
+        logger.info(f"[registry][TRACE] EXECUTE ENTRY: tool_name='{tool_name}' params_keys={list(parameters.keys())}")
         registered = self.tools.get(tool_name)
 
         if not registered:
+            logger.error(f"[registry][TRACE] EXECUTE FAIL: tool '{tool_name}' not found in registry")
             return ToolOutput(
                 success=False,
                 error=f"Tool not found: {tool_name}"
             )
 
         if not registered.tool:
+            logger.error(f"[registry][TRACE] EXECUTE FAIL: tool '{tool_name}' has no implementation")
             return ToolOutput(success=False, error=f"Tool '{tool_name}' has no implementation")
 
+        logger.info(f"[registry][TRACE] EXECUTE DISPATCH: tool_name='{tool_name}' type={getattr(registered.tool, 'tool_type', 'unknown')} mcp={registered.mcp_tool}")
         try:
             tool_input = ToolInput(parameters=parameters)
             # Enforce tool timeout to prevent hanging (e.g., recursive file searches)
@@ -423,10 +432,13 @@ class ToolRegistry:
                 registered.tool.execute(tool_input),
                 timeout=tool_timeout,
             )
+            logger.info(f"[registry][TRACE] EXECUTE RESULT: tool_name='{tool_name}' success={result.success} result={result.result} error={result.error}")
         except asyncio.TimeoutError:
+            logger.error(f"[registry][TRACE] EXECUTE TIMEOUT: tool_name='{tool_name}' after {tool_timeout}s")
             logger.error(f"Tool '{tool_name}' timed out after {tool_timeout}s")
             result = ToolOutput(success=False, error=f"Tool '{tool_name}' timed out after {tool_timeout}s")
         except Exception as e:
+            logger.error(f"[registry][TRACE] EXECUTE EXCEPTION: tool_name='{tool_name}' error={e}")
             logger.error(f"Tool execution error: {e}")
             result = ToolOutput(success=False, error=str(e))
 

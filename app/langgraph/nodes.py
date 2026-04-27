@@ -619,7 +619,8 @@ To provide a direct answer (only if no tool is needed):
                     source="safety_gate",
                 )
 
-            logger.info(f"[executor_node] Invoking tool '{tool_name}' with params: {tool_params}")
+            logger.info(f"[executor_node][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
+            logger.info(f"[executor_node][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
             await observability_bus.emit_safe(
                 ObservabilityEventType.TOOL_INVOKED,
                 task_id=task_id,
@@ -640,12 +641,14 @@ To provide a direct answer (only if no tool is needed):
 
             try:
                 tool_output = await tool_registry.execute(tool_name, tool_params)
+                logger.info(f"[executor_node][TRACE] RAW TOOL RESPONSE: success={tool_output.success} result={tool_output.result} error={tool_output.error}")
                 tool_result = {
                     "success": tool_output.success,
                     "data": tool_output.result if tool_output.result is not None else str(tool_output),
                     "error": tool_output.error,
                 }
             except Exception as e:
+                logger.error(f"[executor_node][TRACE] Tool execution EXCEPTION: {e}")
                 logger.error(f"[executor_node] Tool execution error: {e}")
                 tool_result = {"success": False, "error": str(e)}
 
@@ -803,7 +806,8 @@ async def _execute_tool_call(
             source="safety_gate",
         )
 
-    logger.info(f"[_execute_tool_call] Invoking tool '{tool_name}' with params: {tool_params}")
+    logger.info(f"[_execute_tool_call][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
+    logger.info(f"[_execute_tool_call][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
     await observability_bus.emit_safe(
         ObservabilityEventType.TOOL_INVOKED,
         task_id=task_id,
@@ -814,12 +818,14 @@ async def _execute_tool_call(
     )
     try:
         tool_output = await tool_registry.execute(tool_name, tool_params)
+        logger.info(f"[_execute_tool_call][TRACE] RAW TOOL RESPONSE: success={tool_output.success} result={tool_output.result} error={tool_output.error}")
         tool_result = {
             "success": tool_output.success,
             "data": tool_output.result if tool_output.result is not None else str(tool_output),
             "error": tool_output.error,
         }
     except Exception as e:
+        logger.error(f"[_execute_tool_call][TRACE] Tool execution EXCEPTION: {e}")
         logger.error(f"[_execute_tool_call] Tool execution error: {e}")
         tool_result = {"success": False, "error": str(e)}
 
@@ -962,6 +968,8 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
 
     # Final verdict: both deterministic and LLM must agree for PASS
     verified = det_pass and llm_verified and env_verified
+    logger.info(f"[verifier_node][TRACE] VERIFICATION RESULT: det_pass={det_pass} llm_verified={llm_verified} env_verified={env_verified} FINAL={verified}")
+    logger.info(f"[verifier_node][TRACE] TOOL CALLS INSPECTED: {state.get('tool_calls', [])}")
     if not det_pass and llm_verified:
         notes = f"Deterministic checks failed but LLM thinks it's OK. {notes}"
     elif det_pass and not llm_verified:
