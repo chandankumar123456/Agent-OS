@@ -132,5 +132,62 @@ async def desktop__set_clipboard(task_id: str = "default", text: str = "") -> st
     return _fmt(result)
 
 
+@mcp.tool()
+async def desktop__get_ui_tree(task_id: str = "default") -> str:
+    """Dump the pruned accessibility tree.
+
+    Args:
+        task_id: Task-scoped session identifier.
+    """
+    session = await _get_session(task_id)
+    result = await session.get_ui_tree()
+    return _fmt(result)
+
+
+@mcp.tool()
+async def desktop__click_element(task_id: str = "default", element_id: int = 0) -> str:
+    """Click a UI element by its element_id.
+
+    Args:
+        task_id: Task-scoped session identifier.
+        element_id: ID of the UI element to click.
+    """
+    session = await _get_session(task_id)
+    result = await session.click_element(element_id)
+    return _fmt(result)
+
+
+@mcp.tool()
+async def desktop__type_element(
+    task_id: str = "default", element_id: int = 0, text: str = ""
+) -> str:
+    """Focus an element and type text.
+
+    Args:
+        task_id: Task-scoped session identifier.
+        element_id: ID of the UI element to focus.
+        text: Text to type.
+    """
+    session = await _get_session(task_id)
+    result = await session.type_element(element_id, text)
+    return _fmt(result)
+
+
+@mcp.tool()
+async def desktop__focus_and_interact(
+    task_id: str = "default", element_id: int = 0, key: str = "enter"
+) -> str:
+    """Force focus and simulate a key press.
+
+    Args:
+        task_id: Task-scoped session identifier.
+        element_id: ID of the UI element to focus.
+        key: Key to press (default is 'enter').
+    """
+    session = await _get_session(task_id)
+    result = await session.focus_and_interact(element_id, key)
+    return _fmt(result)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")
