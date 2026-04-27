@@ -136,6 +136,15 @@ class DesktopSession:
         }
         return control_type.lower() in actionable
 
+    def _is_interactive_type(self, control_type: str) -> bool:
+        """Return True only for truly interactive control types."""
+        interactive = {
+            "button", "checkbox", "combobox", "edit", "hyperlink",
+            "listitem", "menuitem", "radiobutton", "slider", "spinner",
+            "splitbutton", "tabitem", "treeitem",
+        }
+        return control_type.lower() in interactive
+
     def _should_keep_node(self, node_info: Dict[str, Any]) -> bool:
         """Pruning logic: keep actionable or text-bearing visible nodes."""
         # Discard invisible / offscreen
@@ -178,7 +187,7 @@ class DesktopSession:
             pass
         return None
 
-    def _build_ui_tree_windows(self, max_depth: int = 8) -> List[Dict[str, Any]]:
+    def _build_ui_tree_windows(self, max_depth: int = 8, max_nodes: int = 100) -> List[Dict[str, Any]]:
         """Build pruned UI tree on Windows using uiautomation."""
         tree: List[Dict[str, Any]] = []
         if auto is None:
@@ -188,7 +197,9 @@ class DesktopSession:
             root = auto.GetRootControl()
             # Walk descendants — depth-first
             for element in root.GetChildren():
-                self._walk_element_windows(element, tree, depth=0, max_depth=max_depth)
+                self._walk_element_windows(element, tree, depth=0, max_depth=max_depth, max_nodes=max_nodes)
+                if len(tree) >= max_nodes:
+                    break
         except Exception as e:
             logger.warning(f"DesktopSession[{self.task_id}]: uiautomation tree walk failed: {e}")
 
@@ -200,9 +211,12 @@ class DesktopSession:
         tree: List[Dict[str, Any]],
         depth: int,
         max_depth: int,
+        max_nodes: int = 100,
     ) -> None:
         """Recursively walk a Windows UI Automation element."""
         if depth > max_depth:
+            return
+        if len(tree) >= max_nodes:
             return
 
         try:
@@ -277,9 +291,14 @@ class DesktopSession:
                     "is_focusable": is_focusable,
                 })
 
+            if len(tree) >= max_nodes:
+                return
+
             # Walk children regardless of whether parent was kept
             for child in element.GetChildren():
-                self._walk_element_windows(child, tree, depth + 1, max_depth)
+                self._walk_element_windows(child, tree, depth + 1, max_depth, max_nodes)
+                if len(tree) >= max_nodes:
+                    return
         except Exception as e:
             # Individual element failures should not abort the whole tree
             logger.debug(f"DesktopSession[{self.task_id}]: element walk error: {e}")
@@ -352,10 +371,10 @@ class DesktopSession:
 
             self._last_tree_hash = self._compute_tree_hash(tree)
 
-            # If too few actionable nodes, recommend vision fallback
+            # If too few interactive nodes, trigger vision fallback
             actionable_count = sum(
                 1 for node in tree
-                if self._is_actionable_type(node.get("type", ""))
+                if self._is_interactive_type(node.get("type", ""))
             )
 
             result_payload = {
@@ -606,19 +625,21 @@ class DesktopSession:
         keys = keys.strip().lower()
         if "+" in keys:
             parts = [p.strip() for p in keys.split("+")]
-            return self._safe_call(
+            result = self._safe_call(
                 pyautogui.hotkey,
                 *parts,
                 default_result={"message": f"Pressed hotkey {keys}"},
                 visibility={"type": "desktop_key", "keys": keys},
             )
         else:
-            return self._safe_call(
+            result = self._safe_call(
                 pyautogui.press,
                 keys,
                 default_result={"message": f"Pressed key {keys}"},
                 visibility={"type": "desktop_key", "keys": keys},
             )
+        await self._sync_wait()
+        return result
 
     async def get_window_list(self) -> ToolOutput:
         if self._is_headless():
@@ -708,11 +729,13 @@ class DesktopSession:
                 win = matches[0]
                 if hasattr(win, "activate"):
                     win.activate()
-                return ToolOutput(
+                output = ToolOutput(
                     success=True,
                     result={"message": f"Focused window: {win.title}"},
                     visibility={"type": "desktop_focus", "title": win.title},
                 )
+                await self._sync_wait()
+                return output
             elif sys.platform.startswith("linux"):
                 result = subprocess.run(
                     ["wmctrl", "-a", title],
@@ -720,22 +743,26 @@ class DesktopSession:
                     text=True,
                 )
                 if result.returncode == 0:
-                    return ToolOutput(
+                    output = ToolOutput(
                         success=True,
                         result={"message": f"Focused window: {title}"},
                         visibility={"type": "desktop_focus", "title": title},
                     )
+                    await self._sync_wait()
+                    return output
                 result = subprocess.run(
                     ["xdotool", "search", "--name", title, "windowactivate"],
                     capture_output=True,
                     text=True,
                 )
                 if result.returncode == 0:
-                    return ToolOutput(
+                    output = ToolOutput(
                         success=True,
                         result={"message": f"Focused window: {title}"},
                         visibility={"type": "desktop_focus", "title": title},
                     )
+                    await self._sync_wait()
+                    return output
                 return ToolOutput(
                     success=False,
                     error=f"Failed to focus window: {title}",
@@ -751,11 +778,13 @@ class DesktopSession:
                     text=True,
                 )
                 if result.returncode == 0:
-                    return ToolOutput(
+                    output = ToolOutput(
                         success=True,
                         result={"message": f"Focused window: {title}"},
                         visibility={"type": "desktop_focus", "title": title},
                     )
+                    await self._sync_wait()
+                    return output
                 return ToolOutput(
                     success=False,
                     error=f"Failed to focus window: {title}",
@@ -804,12 +833,14 @@ class DesktopSession:
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
-        return self._safe_call(
+        result = self._safe_call(
             pyautogui.scroll,
             amount,
             default_result={"message": f"Scrolled {amount}"},
             visibility={"type": "desktop_scroll", "amount": amount},
         )
+        await self._sync_wait()
+        return result
 
     async def close(self) -> ToolOutput:
         logger.info(f"DesktopSession[{self.task_id}]: session closed")
