@@ -226,4 +226,4 @@ celery_logs.txt
 prime_check.py
 *.txt
 # docs/ intentionally removed — design docs should be tracked
-# tests/ intentionally removed — test suites must be tracked
+# tests/ intentionally removed — test suites must be tracked.worktrees/
