@@ -1,4 +1,5 @@
 """Desktop Environment — native desktop UI automation."""
+import asyncio
 import hashlib
 import json
 import os
@@ -111,6 +112,36 @@ class DesktopSession:
             return f"Coordinates ({x}, {y}) out of screen bounds ({width}, {height})"
         return None
 
+    async def _sync_wait(self, timeout: float = 2.0, poll_interval: float = 0.3) -> None:
+        await asyncio.sleep(0.5)
+        if self._is_headless() or auto is None:
+            await asyncio.sleep(0.5)
+            return
+
+        saved_map = self._ui_element_map.copy()
+        saved_next_id = self._next_element_id
+        last_hash = self._last_tree_hash
+        start_time = asyncio.get_event_loop().time()
+
+        while True:
+            self._ui_element_map.clear()
+            self._next_element_id = 1
+            tree = self._build_ui_tree_windows(max_depth=6)
+            current_hash = self._compute_tree_hash(tree)
+
+            if current_hash != last_hash:
+                last_hash = current_hash
+                await asyncio.sleep(poll_interval)
+                if asyncio.get_event_loop().time() - start_time >= timeout:
+                    await asyncio.sleep(0.5)
+                    break
+            else:
+                self._last_tree_hash = current_hash
+                break
+
+        self._ui_element_map = saved_map
+        self._next_element_id = saved_next_id
+
     # ------------------------------------------------------------------
     # Accessibility tree helpers
     # ------------------------------------------------------------------
@@ -169,7 +200,7 @@ class DesktopSession:
             pass
         return None
 
-    def _build_ui_tree_windows(self) -> List[Dict[str, Any]]:
+    def _build_ui_tree_windows(self, max_depth: int = 8) -> List[Dict[str, Any]]:
         """Build pruned UI tree on Windows using uiautomation."""
         tree: List[Dict[str, Any]] = []
         if auto is None:
@@ -179,7 +210,7 @@ class DesktopSession:
             root = auto.GetRootControl()
             # Walk descendants — depth-first
             for element in root.GetChildren():
-                self._walk_element_windows(element, tree, depth=0, max_depth=8)
+                self._walk_element_windows(element, tree, depth=0, max_depth=max_depth)
         except Exception as e:
             logger.warning(f"DesktopSession[{self.task_id}]: uiautomation tree walk failed: {e}")
 
@@ -290,6 +321,28 @@ class DesktopSession:
         canonical = json.dumps(tree, sort_keys=True, ensure_ascii=True)
         return hashlib.md5(canonical.encode("utf-8")).hexdigest()
 
+    async def _vision_fallback_stub(self) -> ToolOutput:
+        screenshot_result = await self.screenshot()
+        if not screenshot_result.success:
+            return ToolOutput(
+                success=False,
+                error=f"Vision fallback failed: {screenshot_result.error}",
+            )
+        screenshot_path = (
+            screenshot_result.result.get("path")
+            if isinstance(screenshot_result.result, dict)
+            else None
+        )
+        return ToolOutput(
+            success=True,
+            result={
+                "mode": "vision_fallback",
+                "screenshot_path": screenshot_path,
+                "note": "This is a stub for integrating with a grounding model like OmniParser.",
+            },
+            visibility={"type": "vision_fallback", "screenshot_path": screenshot_path},
+        )
+
     async def get_ui_tree(self) -> ToolOutput:
         """Dump the pruned accessibility tree as structured JSON.
 
@@ -334,12 +387,11 @@ class DesktopSession:
             }
 
             if actionable_count < 3:
-                result_payload["vision_fallback_recommended"] = True
-                result_payload["note"] = (
-                    "Very few actionable elements detected. "
-                    "This application may block accessibility APIs. "
-                    "Consider using the vision fallback (screenshot + grounding model)."
+                logger.warning(
+                    f"DesktopSession[{self.task_id}]: sparse tree ({actionable_count} actionable nodes). "
+                    "Triggering vision fallback."
                 )
+                return await self._vision_fallback_stub()
 
             return ToolOutput(
                 success=True,
@@ -349,6 +401,141 @@ class DesktopSession:
         except Exception as e:
             logger.error(f"DesktopSession[{self.task_id}]: get_ui_tree failed: {e}")
             return ToolOutput(success=False, error=str(e))
+
+    async def click_element(self, element_id: int) -> ToolOutput:
+        meta = self._ui_element_map.get(element_id)
+        if not meta:
+            return ToolOutput(
+                success=False,
+                error="Element not found. Please call desktop__get_ui_tree first to refresh the UI tree.",
+            )
+        center = meta.get("center")
+        if not center:
+            return ToolOutput(
+                success=False,
+                error="Element has no center coordinates.",
+            )
+        x, y = center
+        error = self._validate_coords(x, y)
+        if error:
+            return ToolOutput(success=False, error=error)
+        result = self._safe_call(
+            pyautogui.click,
+            x,
+            y,
+            default_result={
+                "message": f"Clicked element {element_id} ({meta.get('name') or meta.get('type')})"
+            },
+            visibility={
+                "type": "desktop_click_element",
+                "element_id": element_id,
+                "x": x,
+                "y": y,
+            },
+        )
+        await self._sync_wait()
+        return result
+
+    async def type_element(self, element_id: int, text: str) -> ToolOutput:
+        meta = self._ui_element_map.get(element_id)
+        if not meta:
+            return ToolOutput(
+                success=False,
+                error="Element not found. Please call desktop__get_ui_tree first to refresh the UI tree.",
+            )
+        center = meta.get("center")
+        if center:
+            x, y = center
+            error = self._validate_coords(x, y)
+            if error:
+                return ToolOutput(success=False, error=error)
+            click_result = self._safe_call(
+                pyautogui.click,
+                x,
+                y,
+                default_result={"message": f"Focused element {element_id}"},
+            )
+            if not click_result.success:
+                await self._sync_wait()
+                return click_result
+        result = self._safe_call(
+            pyautogui.typewrite,
+            text,
+            interval=0.01,
+            default_result={"message": f"Typed text into element {element_id} (length {len(text)})"},
+            visibility={
+                "type": "desktop_type_element",
+                "element_id": element_id,
+                "text_length": len(text),
+            },
+        )
+        await self._sync_wait()
+        return result
+
+    async def focus_and_interact(self, element_id: int, key: str = "enter") -> ToolOutput:
+        meta = self._ui_element_map.get(element_id)
+        if not meta:
+            return ToolOutput(
+                success=False,
+                error="Element not found. Please call desktop__get_ui_tree first to refresh the UI tree.",
+            )
+        element = meta.get("element")
+        focused = False
+        if sys.platform == "win32" and auto is not None and element is not None:
+            try:
+                vp = element.GetValuePattern()
+                if vp:
+                    element.SetFocus()
+                    focused = True
+                else:
+                    ip = element.GetInvokePattern()
+                    if ip:
+                        element.SetFocus()
+                        focused = True
+            except Exception:
+                pass
+        if not focused:
+            center = meta.get("center")
+            if center:
+                x, y = center
+                error = self._validate_coords(x, y)
+                if error:
+                    return ToolOutput(success=False, error=error)
+                click_result = self._safe_call(
+                    pyautogui.click,
+                    x,
+                    y,
+                    default_result={"message": f"Focused element {element_id} via click"},
+                )
+                if not click_result.success:
+                    await self._sync_wait()
+                    return click_result
+        key = key.strip().lower()
+        if "+" in key:
+            parts = [p.strip() for p in key.split("+")]
+            result = self._safe_call(
+                pyautogui.hotkey,
+                *parts,
+                default_result={"message": f"Pressed hotkey {key} on element {element_id}"},
+                visibility={
+                    "type": "desktop_focus_and_interact",
+                    "element_id": element_id,
+                    "key": key,
+                },
+            )
+        else:
+            result = self._safe_call(
+                pyautogui.press,
+                key,
+                default_result={"message": f"Pressed key {key} on element {element_id}"},
+                visibility={
+                    "type": "desktop_focus_and_interact",
+                    "element_id": element_id,
+                    "key": key,
+                },
+            )
+        await self._sync_wait()
+        return result
 
     async def screenshot(self, path: Optional[str] = None) -> ToolOutput:
         if self._is_headless():
@@ -392,26 +579,30 @@ class DesktopSession:
         error = self._validate_coords(x, y)
         if error:
             return ToolOutput(success=False, error=error)
-        return self._safe_call(
+        result = self._safe_call(
             pyautogui.click,
             x,
             y,
             default_result={"message": f"Clicked at ({x}, {y})"},
             visibility={"type": "desktop_click", "x": x, "y": y},
         )
+        await self._sync_wait()
+        return result
 
     async def type_text(self, text: str, interval: float = 0.01) -> ToolOutput:
         if pyautogui is None:
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
-        return self._safe_call(
+        result = self._safe_call(
             pyautogui.typewrite,
             text,
             interval=interval,
             default_result={"message": f"Typed text (length {len(text)})"},
             visibility={"type": "desktop_type", "text_length": len(text)},
         )
+        await self._sync_wait()
+        return result
 
     async def press_key(self, keys: str) -> ToolOutput:
         """Press a key or key combination.
