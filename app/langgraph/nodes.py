@@ -181,7 +181,7 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
 
     # ── Deterministic Workflow Decomposition ──────────────────────────
     phases = workflow_decomposer.decompose(query)
-    if len(phases) > 1:
+    if len(phases) >= 1:
         logger.info(f"[planner_node] Using deterministic decomposition: {len(phases)} phases")
         plan = []
         for i, phase in enumerate(phases):
@@ -293,7 +293,10 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
                             "properties": {
                                 "step_number": {"type": "integer"},
                                 "description": {"type": "string"},
+                                "step_type": {"type": "string"},
                                 "tool": {"type": ["string", "null"]},
+                                "allowed_tools": {"type": "array", "items": {"type": "string"}},
+                                "fallback_tools": {"type": "array", "items": {"type": "string"}},
                                 "expected_output": {"type": "string"},
                             },
                             "required": ["step_number", "description", "tool", "expected_output"],
@@ -396,10 +399,21 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
         grounded_tools = [available_tool_map[name] for name in explicit_fallback if name in available_tool_map]
     if not grounded_tools:
         # Legacy fallback: only if planner didn't specify constraints
-        grounded_tools = tool_grounding_layer.filter_tools_for_step(description, available_tools)
+        step_type = step.get("step_type", "").lower()
+        # If planner declared this a desktop step, do NOT re-ground from description alone;
+        # the description may not contain desktop keywords and will fall back to generic tools.
+        if step_type == "desktop_automation":
+            logger.warning(f"[executor_node] Desktop step {step_number} has no grounded tools and no planner constraints. Returning empty tool set to fail loudly.")
+            grounded_tools = []
+        else:
+            grounded_tools = tool_grounding_layer.filter_tools_for_step(description, available_tools)
 
     grounded_tool_names = {t["name"] for t in grounded_tools}
     logger.info(f"[executor_node] Grounded tools for step {step_number}: {grounded_tool_names}")
+
+    # Diagnostic: log what was rejected
+    rejected = [t["name"] for t in available_tools if t["name"] not in grounded_tool_names]
+    logger.info(f"[executor_node] Rejected tools for step {step_number}: {rejected[:20]}")
 
     # ── Deterministic Execution (skip LLM for obvious cases) ──────────
     # Try planner's suggested tool first

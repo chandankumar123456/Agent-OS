@@ -76,6 +76,19 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
         "desktop__click_element",
         "desktop__type_element",
         "desktop__focus_and_interact",
+        # MCP desktop tools (double-prefix namespace)
+        "desktop__desktop__screenshot",
+        "desktop__desktop__click",
+        "desktop__desktop__type_text",
+        "desktop__desktop__press_key",
+        "desktop__desktop__get_window_list",
+        "desktop__desktop__focus_window",
+        "desktop__desktop__get_clipboard",
+        "desktop__desktop__set_clipboard",
+        "desktop__desktop__get_ui_tree",
+        "desktop__desktop__click_element",
+        "desktop__desktop__type_element",
+        "desktop__desktop__focus_and_interact",
     ],
     "content_generation": [
         "filesystem__write_file",
@@ -133,6 +146,18 @@ STEP_INTENT_MAP: Dict[str, str] = {
     "type text": "desktop_automation",
     "press key": "desktop_automation",
     "focus window": "desktop_automation",
+    "open notepad": "desktop_automation",
+    "launch app": "desktop_automation",
+    "launch application": "desktop_automation",
+    "open app": "desktop_automation",
+    "open application": "desktop_automation",
+    "desktop automation": "desktop_automation",
+    "ui tree": "desktop_automation",
+    "click element": "desktop_automation",
+    "type element": "desktop_automation",
+    "get window list": "desktop_automation",
+    "start menu": "desktop_automation",
+    "run dialog": "desktop_automation",
     # Shell
     "run command": "shell_execution",
     "execute command": "shell_execution",
@@ -165,6 +190,16 @@ class ToolGroundingLayer:
     def classify_intent(self, step_description: str) -> str:
         """Classify a step description into a capability intent."""
         desc_lower = step_description.lower()
+
+        # Fast-path: if description mentions desktop-specific verbs/apps, never default to general
+        desktop_indicators = [
+            "notepad", "desktop automation", "ui tree", "click element", "type element",
+            "focus window", "get window list", "start menu", "run dialog", "launch app",
+            "open app", "open application", "launch application",
+        ]
+        if any(ind in desc_lower for ind in desktop_indicators):
+            return "desktop_automation"
+
         best_intent = "general"
         best_score = 0
         for keyword, intent in STEP_INTENT_MAP.items():
@@ -186,6 +221,9 @@ class ToolGroundingLayer:
                     allowed.append(tool)
                     break
         if not allowed:
+            # For desktop tasks, NEVER silently fall back to generic tools.
+            if intent == "desktop_automation":
+                return []
             forbidden_prefixes = self._get_forbidden_prefixes(intent)
             allowed = [t for t in all_tools if not any(t.get("name", "").startswith(fp) for fp in forbidden_prefixes)]
         return allowed

@@ -12,11 +12,32 @@ def test_build_default_params_never_returns_empty_dict_for_browser():
         result = _build_default_params(f"browser_env__{action}", f"do {action}")
         assert result is None, f"browser_env__{action} returned {result}, expected None"
 
-def test_desktop_grounding_has_no_double_prefix_tools():
+def test_desktop_grounding_includes_mcp_double_prefix_tools():
+    """MCP desktop tools use a double-prefix namespace (desktop__desktop__*).
+
+    These tools are registered at runtime by the MCP desktop server.  If they
+    are omitted from CAPABILITY_TOOL_MAP, the grounding layer silently drops
+    them and falls back to generic tools — the exact bug this suite guards
+    against.
+    """
     from app.tools.grounding import CAPABILITY_TOOL_MAP
     desktop_tools = CAPABILITY_TOOL_MAP.get("desktop_automation", [])
-    for name in desktop_tools:
-        assert "desktop__desktop__" not in name, f"Found double-prefix tool: {name}"
+    mcp_tools = [
+        "desktop__desktop__screenshot",
+        "desktop__desktop__click",
+        "desktop__desktop__type_text",
+        "desktop__desktop__press_key",
+        "desktop__desktop__get_window_list",
+        "desktop__desktop__focus_window",
+        "desktop__desktop__get_clipboard",
+        "desktop__desktop__set_clipboard",
+        "desktop__desktop__get_ui_tree",
+        "desktop__desktop__click_element",
+        "desktop__desktop__type_element",
+        "desktop__desktop__focus_and_interact",
+    ]
+    for name in mcp_tools:
+        assert name in desktop_tools, f"Missing MCP desktop tool in capability map: {name}"
 
 def test_desktop_grounding_includes_actual_semantic_tools():
     from app.tools.grounding import CAPABILITY_TOOL_MAP
