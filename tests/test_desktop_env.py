@@ -41,6 +41,15 @@ def manager():
     return DesktopSessionManager()
 
 
+@pytest.fixture(autouse=True)
+def mock_sync_wait():
+    async def _noop(self, timeout=2.0, poll_interval=0.3):
+        pass
+
+    with patch.object(DesktopSession, "_sync_wait", _noop):
+        yield
+
+
 class TestDesktopSession:
     @pytest.mark.asyncio
     async def test_session_creation_and_reuse(self, manager, mock_pyautogui):
@@ -180,3 +189,81 @@ class TestDesktopSession:
         result = await session.scroll(-500)
         assert result.success is True
         mock_pyautogui.scroll.assert_called_once_with(-500)
+
+    @pytest.mark.asyncio
+    async def test_get_ui_tree_headless(self):
+        session = DesktopSession("task-ui-headless")
+        with patch.object(session, "_is_headless", return_value=True):
+            result = await session.get_ui_tree()
+            assert result.success is False
+            assert "headless" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_click_element_not_found(self, mock_pyautogui):
+        session = DesktopSession("task-click-missing")
+        result = await session.click_element(999)
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_type_element_not_found(self, mock_pyautogui):
+        session = DesktopSession("task-type-missing")
+        result = await session.type_element(999, "hello")
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_focus_and_interact_not_found(self, mock_pyautogui):
+        session = DesktopSession("task-focus-missing")
+        result = await session.focus_and_interact(999, "enter")
+        assert result.success is False
+        assert "not found" in result.error.lower()
+
+    @pytest.mark.asyncio
+    async def test_click_element_success(self, mock_pyautogui):
+        session = DesktopSession("task-click-ok")
+        session._ui_element_map[1] = {
+            "center": (100, 200),
+            "name": "Submit",
+            "type": "Button",
+        }
+        result = await session.click_element(1)
+        assert result.success is True
+        mock_pyautogui.click.assert_called_once_with(100, 200)
+
+    @pytest.mark.asyncio
+    async def test_type_element_success(self, mock_pyautogui):
+        session = DesktopSession("task-type-ok")
+        session._ui_element_map[2] = {
+            "center": (150, 250),
+            "name": "SearchBox",
+            "type": "Edit",
+        }
+        result = await session.type_element(2, "query")
+        assert result.success is True
+        mock_pyautogui.click.assert_called_once_with(150, 250)
+        mock_pyautogui.typewrite.assert_called_once_with("query", interval=0.01)
+
+    @pytest.mark.asyncio
+    async def test_focus_and_interact_success(self, mock_pyautogui):
+        session = DesktopSession("task-focus-ok")
+        session._ui_element_map[3] = {
+            "center": (50, 50),
+            "name": "OK",
+            "type": "Button",
+        }
+        result = await session.focus_and_interact(3, "enter")
+        assert result.success is True
+        mock_pyautogui.press.assert_called_once_with("enter")
+
+    @pytest.mark.asyncio
+    async def test_element_map_cleared_on_get_ui_tree(self, mock_mss):
+        session = DesktopSession("task-clear")
+        session._ui_element_map = {1: {"name": "dummy"}, 2: {"name": "dummy2"}}
+        session._next_element_id = 99
+        with patch.object(session, "_build_ui_tree_windows", return_value=[]):
+            with patch.object(sys, "platform", "win32"):
+                with patch.object(session, "_is_headless", return_value=False):
+                    await session.get_ui_tree()
+                    assert session._ui_element_map == {}
+                    assert session._next_element_id == 1
