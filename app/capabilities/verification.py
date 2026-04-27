@@ -1,5 +1,6 @@
 """Deterministic Verification Engine — replaces weak LLM verification with concrete checks."""
 import os
+import sys
 import json
 import re
 import asyncio
@@ -37,6 +38,8 @@ class DeterministicVerificationEngine:
         self._verifiers["html_rendered"] = self._verify_html_rendered
         self._verifiers["summary_generated"] = self._verify_summary_generated
         self._verifiers["content_extracted"] = self._verify_content_extracted
+        self._verifiers["desktop_app_opened"] = self._verify_desktop_app_opened
+        self._verifiers["desktop_text_typed"] = self._verify_desktop_text_typed
 
     async def verify(
         self,
@@ -133,6 +136,20 @@ class DeterministicVerificationEngine:
                 reports.append(await self.verify(
                     task_id, step_id, "summary_generated", {}
                 ))
+
+            if any(k in desc for k in ("open notepad", "open calculator", "open app", "launch app", "start app", "open ")):
+                app_name = self._extract_app_name(desc)
+                if app_name:
+                    reports.append(await self.verify(
+                        task_id, step_id, "desktop_app_opened", {"process_name": app_name, "window_title": app_name}
+                    ))
+
+            if any(k in desc for k in ("type", "enter text", "input text", "write text")):
+                expected_text = self._extract_typed_text(desc)
+                if expected_text:
+                    reports.append(await self.verify(
+                        task_id, step_id, "desktop_text_typed", {"text": expected_text}
+                    ))
 
         return reports
 
@@ -292,6 +309,84 @@ class DeterministicVerificationEngine:
         if text and len(text.strip()) > 10:
             return VerificationResult.PASS, {"length": len(text), "preview": text[:200]}
         return VerificationResult.FAIL, {"error": "No content extracted", "retryable": True}
+
+    async def _verify_desktop_app_opened(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that a desktop application process is running or window exists."""
+        process_name = criteria.get("process_name", "")
+        window_title = criteria.get("window_title", "")
+        if not process_name and not window_title:
+            return VerificationResult.FAIL, {"error": "No process_name or window_title provided"}
+        try:
+            import subprocess
+            if sys.platform == "win32":
+                if process_name:
+                    result = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {process_name}"], capture_output=True, text=True)
+                    if process_name.lower() in result.stdout.lower():
+                        return VerificationResult.PASS, {"process": process_name, "method": "tasklist"}
+                if window_title:
+                    result = subprocess.run(["tasklist", "/V", "/FI", f"WINDOWTITLE eq {window_title}"], capture_output=True, text=True)
+                    if window_title.lower() in result.stdout.lower():
+                        return VerificationResult.PASS, {"window_title": window_title, "method": "tasklist"}
+            else:
+                if process_name:
+                    result = subprocess.run(["pgrep", "-f", process_name], capture_output=True)
+                    if result.returncode == 0:
+                        return VerificationResult.PASS, {"process": process_name, "method": "pgrep"}
+            try:
+                import pygetwindow as gw
+                if window_title:
+                    windows = gw.getWindowsWithTitle(window_title)
+                    if windows:
+                        return VerificationResult.PASS, {"window_title": window_title, "method": "pygetwindow"}
+            except Exception:
+                pass
+            return VerificationResult.FAIL, {"error": f"App not found: process={process_name}, window={window_title}", "retryable": True}
+        except Exception as e:
+            return VerificationResult.FAIL, {"error": str(e)}
+
+    async def _verify_desktop_text_typed(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that text was typed by checking clipboard or UI state."""
+        expected_text = criteria.get("text", "")
+        window_title = criteria.get("window_title", "")
+        if not expected_text:
+            return VerificationResult.FAIL, {"error": "No expected text provided"}
+        try:
+            try:
+                import pyperclip
+                clipboard_text = pyperclip.paste()
+                if expected_text in clipboard_text:
+                    return VerificationResult.PASS, {"method": "clipboard", "matched": True}
+            except Exception:
+                pass
+            try:
+                import uiautomation as auto
+                if window_title:
+                    window = auto.WindowControl(searchDepth=1, Name=window_title)
+                    if window.Exists():
+                        text = window.GetValuePattern().Value if window.GetValuePattern() else ""
+                        if not text:
+                            text = window.Name
+                        if expected_text in text:
+                            return VerificationResult.PASS, {"method": "uiautomation", "matched": True}
+            except Exception:
+                pass
+            return VerificationResult.FAIL, {"error": f"Text '{expected_text}' not detected", "retryable": True}
+        except Exception as e:
+            return VerificationResult.FAIL, {"error": str(e)}
+
+    def _extract_app_name(self, desc: str) -> Optional[str]:
+        """Heuristic to extract app name from 'open X' descriptions."""
+        match = re.search(r"open\s+(?:the\s+)?([a-zA-Z0-9_\-]+)", desc.lower())
+        if match:
+            return match.group(1)
+        return None
+
+    def _extract_typed_text(self, desc: str) -> Optional[str]:
+        """Heuristic to extract expected text from 'type X' descriptions."""
+        match = re.search(r'type\s+["\']?([^"\']+)["\']?', desc.lower())
+        if match:
+            return match.group(1)
+        return None
 
     # ── Helpers ────────────────────────────────────────────────────────
 
