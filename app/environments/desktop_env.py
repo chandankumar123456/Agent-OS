@@ -32,6 +32,11 @@ except Exception:  # pragma: no cover
     mss = None  # type: ignore
     ScreenShotError = Exception  # type: ignore
 
+try:
+    import uiautomation as auto
+except Exception:  # pragma: no cover
+    auto = None  # type: ignore
+
 
 class DesktopSession:
     """A single desktop automation session scoped to one task."""
@@ -39,6 +44,9 @@ class DesktopSession:
     def __init__(self, task_id: str):
         self.task_id = task_id
         self._screen_size: Tuple[int, int] = (0, 0)
+        self._ui_element_map: Dict[int, Dict[str, Any]] = {}
+        self._next_element_id: int = 1
+        self._last_tree_hash: Optional[str] = None
         self._refresh_screen_size()
 
     def _refresh_screen_size(self) -> None:
@@ -101,6 +109,247 @@ class DesktopSession:
         if not (0 <= x <= width and 0 <= y <= height):
             return f"Coordinates ({x}, {y}) out of screen bounds ({width}, {height})"
         return None
+
+    # ------------------------------------------------------------------
+    # Accessibility tree helpers
+    # ------------------------------------------------------------------
+
+    def _is_actionable_type(self, control_type: str) -> bool:
+        """Return True if the control type is generally actionable."""
+        actionable = {
+            "button", "checkbox", "combobox", "edit", "hyperlink",
+            "listitem", "menuitem", "radiobutton", "slider", "spinner",
+            "splitbutton", "statusbar", "tabitem", "text", "treeitem",
+            "document", "group", "image", "list", "menu", "menubar",
+            "scrollbar", "separator", "table", "thumb", "titlebar",
+            "toolbar", "tooltip", "custom", "pane", "window",
+        }
+        return control_type.lower() in actionable
+
+    def _should_keep_node(self, node_info: Dict[str, Any]) -> bool:
+        """Pruning logic: keep actionable or text-bearing visible nodes."""
+        # Discard invisible / offscreen
+        if not node_info.get("is_visible", True):
+            return False
+        if node_info.get("offscreen", False):
+            return False
+
+        control_type = node_info.get("type", "").lower()
+        name = (node_info.get("name") or "").strip()
+        value = (node_info.get("value") or "").strip()
+
+        # Always keep nodes with explicit names or values
+        if name or value:
+            return True
+
+        # Keep explicitly actionable types even if nameless
+        if control_type in {
+            "button", "checkbox", "combobox", "edit", "hyperlink",
+            "menuitem", "radiobutton", "slider", "spinner", "splitbutton",
+            "tabitem", "treeitem", "listitem",
+        }:
+            return True
+
+        # Discard generic layout containers with no text
+        if control_type in {"pane", "window", "group", "custom", "document", "scrollpane"}:
+            return False
+
+        # Default: keep if it looks like it carries information
+        return bool(name or value or node_info.get("is_focusable"))
+
+    def _get_element_center(self, element) -> Optional[Tuple[int, int]]:
+        """Extract center coordinates from a uiautomation element."""
+        try:
+            rect = element.BoundingRectangle
+            if rect and rect.Width > 0 and rect.Height > 0:
+                center_x = rect.Left + rect.Width // 2
+                center_y = rect.Top + rect.Height // 2
+                return (center_x, center_y)
+        except Exception:
+            pass
+        return None
+
+    def _build_ui_tree_windows(self) -> List[Dict[str, Any]]:
+        """Build pruned UI tree on Windows using uiautomation."""
+        tree: List[Dict[str, Any]] = []
+        if auto is None:
+            return tree
+
+        try:
+            root = auto.GetRootControl()
+            # Walk descendants — depth-first
+            for element in root.GetChildren():
+                self._walk_element_windows(element, tree, depth=0, max_depth=8)
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: uiautomation tree walk failed: {e}")
+
+        return tree
+
+    def _walk_element_windows(
+        self,
+        element,
+        tree: List[Dict[str, Any]],
+        depth: int,
+        max_depth: int,
+    ) -> None:
+        """Recursively walk a Windows UI Automation element."""
+        if depth > max_depth:
+            return
+
+        try:
+            control_type = (element.ControlTypeName or "Unknown").strip()
+            name = (element.Name or "").strip()
+            value = ""
+            try:
+                value = (element.GetValuePattern().Value or "") if element.GetValuePattern() else ""
+            except Exception:
+                pass
+
+            auto_id = ""
+            try:
+                auto_id = (element.AutomationId or "").strip()
+            except Exception:
+                pass
+
+            class_name = ""
+            try:
+                class_name = (element.ClassName or "").strip()
+            except Exception:
+                pass
+
+            is_visible = True
+            offscreen = False
+            is_enabled = True
+            is_focusable = False
+            try:
+                is_enabled = element.IsEnabled
+                is_visible = element.IsVisible
+                offscreen = not element.IsOffscreen if hasattr(element, "IsOffscreen") else False
+                is_focusable = element.IsKeyboardFocusable
+            except Exception:
+                pass
+
+            center = self._get_element_center(element)
+
+            node_info = {
+                "type": control_type,
+                "name": name,
+                "value": value,
+                "auto_id": auto_id,
+                "class_name": class_name,
+                "is_visible": is_visible,
+                "offscreen": offscreen,
+                "is_enabled": is_enabled,
+                "is_focusable": is_focusable,
+                "center": center,
+            }
+
+            if self._should_keep_node(node_info):
+                element_id = self._next_element_id
+                self._next_element_id += 1
+                self._ui_element_map[element_id] = {
+                    "element": element,
+                    "center": center,
+                    "name": name,
+                    "type": control_type,
+                }
+                tree.append({
+                    "id": element_id,
+                    "type": control_type,
+                    "name": name,
+                    "value": value if value else None,
+                    "auto_id": auto_id if auto_id else None,
+                    "class_name": class_name if class_name else None,
+                    "is_enabled": is_enabled,
+                    "is_focusable": is_focusable,
+                })
+
+            # Walk children regardless of whether parent was kept
+            for child in element.GetChildren():
+                self._walk_element_windows(child, tree, depth + 1, max_depth)
+        except Exception as e:
+            # Individual element failures should not abort the whole tree
+            logger.debug(f"DesktopSession[{self.task_id}]: element walk error: {e}")
+
+    def _build_ui_tree_linux(self) -> List[Dict[str, Any]]:
+        """Stub for Linux accessibility tree (pyatspi or AT-SPI fallback)."""
+        # TODO: Implement pyatspi traversal if needed.
+        return []
+
+    def _build_ui_tree_darwin(self) -> List[Dict[str, Any]]:
+        """Stub for macOS accessibility tree (Atomac/AppleScript fallback)."""
+        # TODO: Implement AXUIElement traversal if needed.
+        return []
+
+    def _compute_tree_hash(self, tree: List[Dict[str, Any]]) -> str:
+        """Compute a simple hash of the tree for sync detection."""
+        import hashlib
+        canonical = json.dumps(tree, sort_keys=True, ensure_ascii=True)
+        return hashlib.md5(canonical.encode("utf-8")).hexdigest()
+
+    async def get_ui_tree(self) -> ToolOutput:
+        """Dump the pruned accessibility tree as structured JSON.
+
+        Returns a ToolOutput where result is a JSON list of visible,
+        actionable UI elements with auto-assigned integer IDs.
+        """
+        if self._is_headless():
+            return ToolOutput(
+                success=False,
+                error="Desktop automation unavailable: running headless (no display detected)",
+            )
+
+        # Clear previous map so IDs are stable per call
+        self._ui_element_map.clear()
+        self._next_element_id = 1
+
+        try:
+            if sys.platform == "win32":
+                tree = self._build_ui_tree_windows()
+            elif sys.platform.startswith("linux"):
+                tree = self._build_ui_tree_linux()
+            elif sys.platform == "darwin":
+                tree = self._build_ui_tree_darwin()
+            else:
+                return ToolOutput(
+                    success=False,
+                    error=f"UI tree not supported on platform: {sys.platform}",
+                )
+
+            self._last_tree_hash = self._compute_tree_hash(tree)
+
+            # Phase 4 fallback: if too few actionable nodes, flag for vision
+            actionable_count = sum(
+                1 for node in tree
+                if node.get("type", "").lower() in {
+                    "button", "checkbox", "combobox", "edit", "hyperlink",
+                    "menuitem", "radiobutton", "slider", "spinner",
+                    "splitbutton", "tabitem", "treeitem", "listitem",
+                }
+            )
+
+            result_payload = {
+                "tree": tree,
+                "count": len(tree),
+                "actionable_count": actionable_count,
+            }
+
+            if actionable_count < 3:
+                result_payload["vision_fallback_recommended"] = True
+                result_payload["note"] = (
+                    "Very few actionable elements detected. "
+                    "This application may block accessibility APIs. "
+                    "Consider using the vision fallback (screenshot + grounding model)."
+                )
+
+            return ToolOutput(
+                success=True,
+                result=result_payload,
+                visibility={"type": "desktop_ui_tree", "count": len(tree)},
+            )
+        except Exception as e:
+            logger.error(f"DesktopSession[{self.task_id}]: get_ui_tree failed: {e}")
+            return ToolOutput(success=False, error=str(e))
 
     async def screenshot(self, path: Optional[str] = None) -> ToolOutput:
         if self._is_headless():
