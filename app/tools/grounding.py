@@ -122,30 +122,59 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
 
 # Step intent keywords → capability
 STEP_INTENT_MAP: Dict[str, str] = {
-    # File operations
+    # ── File operations ───────────────────────────────────────────────
     "find file": "file_search",
     "search file": "file_search",
     "locate file": "file_search",
     "list directory": "file_search",
     "open folder": "file_search",
     "open file explorer": "file_search",
+    "where is": "file_search",
+    "look for file": "file_search",
     "read file": "file_read",
+    "open file": "file_read",
+    "view file": "file_read",
+    "get file contents": "file_read",
+    "read document": "file_read",
+    "create file": "file_write",
+    "write file": "file_write",
+    "save file": "file_write",
+    "write to file": "file_write",
+    "append to file": "file_write",
+    "update file": "file_write",
+    "edit file": "file_write",
+    # ── Document processing ───────────────────────────────────────────
     "extract text": "document_processing",
     "parse pdf": "document_processing",
     "parse docx": "document_processing",
+    "parse document": "document_processing",
+    "read pdf": "document_processing",
+    "read docx": "document_processing",
+    "process document": "document_processing",
     "summarize document": "document_processing",
-    # Browser
+    # ── Browser ───────────────────────────────────────────────────────
     "open chrome": "browser_navigation",
     "open browser": "browser_navigation",
     "navigate to": "browser_navigation",
+    "visit website": "browser_navigation",
+    "go to url": "browser_navigation",
+    "open url": "browser_navigation",
+    "browse web": "browser_navigation",
+    "browse to": "browser_navigation",
     "search in browser": "browser_navigation",
     "browse": "browser_navigation",
-    # Desktop
+    "click link": "browser_navigation",
+    "fill form": "browser_navigation",
+    "login to": "browser_navigation",
+    "scroll page": "browser_navigation",
+    "browser screenshot": "browser_navigation",
+    # ── Desktop ───────────────────────────────────────────────────────
     "click": "desktop_automation",
     "screenshot": "desktop_automation",
     "type text": "desktop_automation",
     "press key": "desktop_automation",
     "focus window": "desktop_automation",
+    "take screenshot": "desktop_automation",
     "open notepad": "desktop_automation",
     "launch app": "desktop_automation",
     "launch application": "desktop_automation",
@@ -158,29 +187,62 @@ STEP_INTENT_MAP: Dict[str, str] = {
     "get window list": "desktop_automation",
     "start menu": "desktop_automation",
     "run dialog": "desktop_automation",
-    # Shell
+    # ── Shell ─────────────────────────────────────────────────────────
     "run command": "shell_execution",
     "execute command": "shell_execution",
-    # Browser open (local files)
+    "run shell": "shell_execution",
+    "execute shell": "shell_execution",
+    "bash command": "shell_execution",
+    "powershell": "shell_execution",
+    "terminal": "shell_execution",
+    "command prompt": "shell_execution",
+    # ── Browser open (local files) ────────────────────────────────────
     "open in chrome": "browser_open",
     "open in browser": "browser_open",
     "view in browser": "browser_open",
-    # Web
+    "show in browser": "browser_open",
+    # ── Web search ────────────────────────────────────────────────────
     "search web": "web_search",
+    "search internet": "web_search",
+    "google ": "web_search",
+    "look up": "web_search",
     "fetch data": "web_search",
     "scrape": "web_search",
-    # Code
+    "find online": "web_search",
+    "search for": "web_search",
+    # ── Code execution ────────────────────────────────────────────────
     "run python": "code_execution",
     "execute code": "code_execution",
-    # Write
-    "create file": "file_write",
-    "write file": "file_write",
+    "run script": "code_execution",
+    "run js": "code_execution",
+    "run javascript": "code_execution",
+    "compile code": "code_execution",
+    "execute python": "code_execution",
+    "python script": "code_execution",
+    # ── Content generation ────────────────────────────────────────────
     "generate html": "content_generation",
     "generate css": "content_generation",
     "generate js": "content_generation",
     "create html": "content_generation",
     "create css": "content_generation",
     "create js": "content_generation",
+    "build webpage": "content_generation",
+    "write html": "content_generation",
+    "write css": "content_generation",
+    # ── Communication ─────────────────────────────────────────────────
+    "send email": "communication",
+    "send message": "communication",
+    "email ": "communication",
+    "slack ": "communication",
+    "notify ": "communication",
+    "mail to": "communication",
+    # ── Calculation ───────────────────────────────────────────────────
+    "calculate": "calculation",
+    "compute": "calculation",
+    "sum ": "calculation",
+    "add up": "calculation",
+    "average": "calculation",
+    "percentage": "calculation",
 }
 
 
@@ -191,14 +253,70 @@ class ToolGroundingLayer:
         """Classify a step description into a capability intent."""
         desc_lower = step_description.lower()
 
-        # Fast-path: if description mentions desktop-specific verbs/apps, never default to general
-        desktop_indicators = [
-            "notepad", "desktop automation", "ui tree", "click element", "type element",
-            "focus window", "get window list", "start menu", "run dialog", "launch app",
-            "open app", "open application", "launch application",
-        ]
-        if any(ind in desc_lower for ind in desktop_indicators):
-            return "desktop_automation"
+        # Fast-path indicators: if description mentions intent-specific verbs, never default to general
+        intent_indicators = {
+            "desktop_automation": [
+                "notepad", "desktop automation", "ui tree", "click element", "type element",
+                "focus window", "get window list", "start menu", "run dialog", "launch app",
+                "open app", "open application", "launch application", "press key", "take screenshot",
+                "desktop ", "screenshot", "type text",
+            ],
+            "browser_navigation": [
+                "open chrome", "open browser", "navigate to", "visit website", "go to url",
+                "open url", "browse web", "browse to", "click link", "fill form", "login to",
+                "scroll page", "browser screenshot", "browser", "chrome", "website", "url",
+                "web page", "webpage", "html page",
+            ],
+            "shell_execution": [
+                "run command", "execute command", "run shell", "execute shell", "bash command",
+                "powershell", "terminal", "cmd ", "command prompt", "shell script",
+            ],
+            "file_search": [
+                "find file", "search file", "locate file", "list directory", "open folder",
+                "open file explorer", "where is", "look for file", "where are",
+            ],
+            "file_read": [
+                "read file", "open file", "view file", "get file contents", "read document",
+                "contents of", "read the", ".txt", ".pdf", ".docx", ".md", ".json", ".py",
+            ],
+            "file_write": [
+                "write file", "create file", "save file", "write to file", "append to file",
+                "update file", "edit file", "write to", "save as", ".txt", ".md", ".json",
+            ],
+            "web_search": [
+                "search web", "search internet", "google ", "look up", "fetch data",
+                "scrape", "find online", "search for", "web search", "online search",
+            ],
+            "code_execution": [
+                "run python", "execute code", "run script", "run js", "run javascript",
+                "compile code", "execute python", "python script", "node ", "python ",
+            ],
+            "document_processing": [
+                "parse pdf", "parse docx", "parse document", "read pdf", "read docx",
+                "process document", "summarize document", "pdf", "docx", "extract text",
+                "summarize", "document",
+            ],
+            "content_generation": [
+                "generate html", "generate css", "generate js", "create html", "create css",
+                "create js", "build webpage", "write html", "write css", "build website",
+                "create website",
+            ],
+            "browser_open": [
+                "open in chrome", "open in browser", "view in browser", "show in browser",
+                "in chrome", "in browser", "launch browser",
+            ],
+            "communication": [
+                "send email", "send message", "email ", "slack ", "notify ", "mail to",
+                "email to", "message to",
+            ],
+            "calculation": [
+                "calculate", "compute", "math", "sum ", "add up", "subtract", "multiply",
+                "divide ", "average", "percentage", "total of", "count of",
+            ],
+        }
+        for intent, indicators in intent_indicators.items():
+            if any(ind in desc_lower for ind in indicators):
+                return intent
 
         best_intent = "general"
         best_score = 0
@@ -221,8 +339,9 @@ class ToolGroundingLayer:
                     allowed.append(tool)
                     break
         if not allowed:
-            # For desktop tasks, NEVER silently fall back to generic tools.
-            if intent == "desktop_automation":
+            # For ANY specialized intent, NEVER silently fall back to generic tools.
+            # Only "general" intent is allowed to use the broad fallback.
+            if intent != "general":
                 return []
             forbidden_prefixes = self._get_forbidden_prefixes(intent)
             allowed = [t for t in all_tools if not any(t.get("name", "").startswith(fp) for fp in forbidden_prefixes)]

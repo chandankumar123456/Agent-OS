@@ -313,6 +313,23 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
         logger.error(f"[planner_node] Planning failed: {e}")
         plan = [{"step_number": 1, "description": query, "tool": None, "expected_output": "Answer the user's query"}]
 
+    # ── Post-process LLM plan: ensure tool constraints are always present ──
+    available_tools = tool_registry.list_tools()
+    for step in plan:
+        desc = step.get("description", "")
+        # Ensure step_type is set
+        if not step.get("step_type"):
+            step["step_type"] = tool_grounding_layer.classify_intent(desc)
+        step_type = step.get("step_type", "")
+        # Ensure allowed_tools are grounded if missing
+        if not step.get("allowed_tools"):
+            primary = tool_grounding_layer.get_primary_tools(step_type, available_tools, exclude_desktop_for_non_desktop=True)
+            step["allowed_tools"] = [t["name"] for t in primary[:8]]
+        # Ensure fallback_tools are grounded if missing
+        if not step.get("fallback_tools"):
+            fallback = tool_grounding_layer.get_fallback_tools(step_type, available_tools)
+            step["fallback_tools"] = [t["name"] for t in fallback[:4]]
+
     await observability_bus.emit_safe(
         ObservabilityEventType.PLANNER_REASONING,
         task_id=task_id,
@@ -400,10 +417,14 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     if not grounded_tools:
         # Legacy fallback: only if planner didn't specify constraints
         step_type = step.get("step_type", "").lower()
-        # If planner declared this a desktop step, do NOT re-ground from description alone;
-        # the description may not contain desktop keywords and will fall back to generic tools.
-        if step_type == "desktop_automation":
-            logger.warning(f"[executor_node] Desktop step {step_number} has no grounded tools and no planner constraints. Returning empty tool set to fail loudly.")
+        # For ANY specialized intent, do NOT re-ground from description alone;
+        # the description may not contain the right keywords and will fall back to generic tools.
+        # Only "general" steps may use the description-based re-grounding.
+        if step_type and step_type != "general":
+            logger.warning(
+                f"[executor_node] Step {step_number} (type={step_type}) has no grounded tools and no planner constraints. "
+                f"Returning empty tool set to fail loudly."
+            )
             grounded_tools = []
         else:
             grounded_tools = tool_grounding_layer.filter_tools_for_step(description, available_tools)
