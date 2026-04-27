@@ -186,10 +186,21 @@ class ToolRegistry:
                     return await session.scroll(params.get("amount", 0))
                 elif self._action == "close":
                     return await desktop_session_manager.close_session(task_id)
+                elif self._action == "get_ui_tree":
+                    return await session.get_ui_tree()
+                elif self._action == "click_element":
+                    return await session.click_element(params.get("element_id", 0))
+                elif self._action == "type_element":
+                    return await session.type_element(params.get("element_id", 0), params.get("text", ""))
+                elif self._action == "focus_and_interact":
+                    return await session.focus_and_interact(params.get("element_id", 0), params.get("key", "enter"))
                 return ToolOutput(success=False, error=f"Unknown action: {self._action}")
 
         for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close"]:
             self.register(DesktopEnvTool(f"desktop_env__{action}", action))
+        # Register semantic element-based tools with desktop__ prefix (matching MCP naming)
+        for action in ["get_ui_tree", "click_element", "type_element", "focus_and_interact"]:
+            self.register(DesktopEnvTool(f"desktop__{action}", action))
         logger.info("Desktop environment tools registered")
 
     def register(self, tool: BaseTool):
