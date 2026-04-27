@@ -149,6 +149,13 @@ DESKTOP GUI AUTOMATION — STRICT WORKFLOW:
     d. NEVER guess x/y coordinates manually. NEVER call desktop__click(x, y).
     e. If an element appears unclickable, you may use desktop__focus_and_interact(id, key) as a fallback.
 
+SHELL SHORTCUT PROHIBITION:
+11. You MUST NEVER use shell__execute_command to open, launch, or interact with GUI applications (e.g., Notepad, Calculator, Chrome, VS Code) if the task requires further interaction within that app (typing, clicking, navigating).
+    a. Opening a GUI app via PowerShell/batch and then trying to interact with it will FAIL because the shell tool cannot see or control the UI.
+    b. Desktop apps MUST use desktop__get_ui_tree -> desktop__click_element / desktop__type_element.
+    c. Browser apps MUST use browser_env__launch -> browser_env__navigate / browser_env__type / browser_env__click.
+    d. The ONLY exception: if the task is purely to launch an app with no follow-up interaction, shell__execute_command is acceptable.
+
 If you need to use a tool, return JSON with a tool_call:
 {{"tool_call": {{"name": "tool_name", "params": {{"param1": "value1"}}}}}}
 

@@ -20,13 +20,36 @@ class WorkflowPhase:
 class WorkflowDecomposer:
     """Decomposes complex user queries into executable phases."""
 
+    # Deterministic routing: native desktop app keywords
+    # NOTE: "file explorer" / "explorer" are intentionally EXCLUDED because
+    # "open file explorer" is a filesystem task, not a desktop UI automation task.
+    DESKTOP_APP_KEYWORDS: set = {
+        "notepad", "calculator", "calc", "paint", "mspaint",
+        "vscode", "code.exe",
+        "settings", "control panel", "wordpad", "cmd", "terminal",
+        "powershell", "command prompt",
+    }
+
+    # Deterministic routing: browser/web keywords
+    BROWSER_WEB_KEYWORDS: set = {
+        "chrome", "google", "browser", "website", "web", "search",
+        "youtube", "bing", "duckduckgo", "yahoo", "amazon",
+        "url", "http", "https", "online", "internet",
+    }
+
+    # Deterministic routing: desktop UI action keywords
+    DESKTOP_UI_ACTIONS: set = {
+        "click", "type", "write text", "enter text", "fill",
+        "press button", "check box", "select menu",
+    }
+
     PHASE_PATTERNS: List[Dict[str, Any]] = [
         {
             "name": "file_search",
             "description": "Search the filesystem to locate the requested file or folder",
             "intents": ["find", "search", "locate", "look for", "where is"],
             "regexes": [r"\b(find|search|locate|look\s+for)\b.*\b(file|document|report|folder)\b"],
-            "tools_hint": ["filesystem__search_files", "filesystem__list_directory", "shell__execute_command"],
+            "tools_hint": ["filesystem__search_files", "filesystem__list_directory"],
             "verification": [{"type": "file_found", "path_extractor": True}],
         },
         {
@@ -53,7 +76,7 @@ class WorkflowDecomposer:
                 r"\b(create|generate|write)\b.*\b(html|css|js|javascript|file)\b",
                 r"\b(html|css|js)\b.*\b(file|files)\b",
             ],
-            "tools_hint": ["filesystem__write_file", "shell__execute_command"],
+            "tools_hint": ["filesystem__write_file"],
             "verification": [{"type": "file_exists"}, {"type": "file_contains", "pattern": "html|css|javascript"}],
         },
         {
@@ -64,7 +87,7 @@ class WorkflowDecomposer:
                 r"\b(open|view|show)\b.*\b(in\s+chrome|in\s+browser)\b",
                 r"\bopen\b.*\bchrome\b",
             ],
-            "tools_hint": ["shell__execute_command", "browser_env__navigate"],
+            "tools_hint": ["browser_env__navigate"],
             "verification": [{"type": "browser_opened", "url_extractor": True}],
         },
         {
@@ -82,7 +105,7 @@ class WorkflowDecomposer:
             "regexes": [
                 r"\b(click|type|screenshot|focus\s+window)\b",
             ],
-            "tools_hint": ["desktop_env__click", "desktop_env__type_text", "desktop_env__screenshot", "desktop_env__focus_window"],
+            "tools_hint": ["desktop__get_ui_tree", "desktop__click_element", "desktop__type_element", "desktop_env__screenshot", "desktop_env__focus_window"],
             "verification": [{"type": "desktop_action_completed"}],
         },
         {
@@ -103,35 +126,87 @@ class WorkflowDecomposer:
         },
     ]
 
+    def _classify_query(self, query: str) -> tuple[bool, bool]:
+        """Return (has_desktop, has_browser) based on keyword presence."""
+        q = query.lower()
+        has_desktop = any(kw in q for kw in self.DESKTOP_APP_KEYWORDS)
+        has_browser = any(kw in q for kw in self.BROWSER_WEB_KEYWORDS)
+        has_ui_action = any(kw in q for kw in self.DESKTOP_UI_ACTIONS)
+
+        # If UI actions present but no browser keyword, assume desktop
+        if has_ui_action and not has_browser:
+            has_desktop = True
+
+        return has_desktop, has_browser
+
     def decompose(self, query: str) -> List[WorkflowPhase]:
-        """Decompose a user query into ordered workflow phases."""
+        """Decompose a user query into ordered workflow phases.
+
+        Uses deterministic keyword heuristics to separate desktop UI
+        tasks from browser/web tasks. Mixed prompts are split sequentially
+        (desktop first, browser later).
+        """
         query_lower = query.lower()
         phases: List[WorkflowPhase] = []
-        matched_intents: set = set()
 
+        # Phase 1: Deterministic keyword-based classification
+        has_desktop, has_browser = self._classify_query(query)
+
+        # Phase 2: Pattern matching for additional context
+        matched_patterns: List[str] = []
         for pattern in self.PHASE_PATTERNS:
             matched = False
-            # Try regex patterns first (more powerful)
             for regex in pattern.get("regexes", []):
                 if re.search(regex, query_lower):
                     matched = True
                     break
-            # Fallback to simple substring match
             if not matched:
                 for intent_keyword in pattern["intents"]:
                     if intent_keyword in query_lower:
                         matched = True
                         break
-            if matched and pattern["name"] not in matched_intents:
-                matched_intents.add(pattern["name"])
+            if matched:
+                matched_patterns.append(pattern["name"])
+
+        # Phase 3: Build phase list with deterministic overrides
+        # If native desktop apps detected, ALWAYS add desktop_automation first
+        if has_desktop:
+            phases.append(WorkflowPhase(
+                phase_id="phase_1",
+                name="desktop_automation",
+                description="Interact with native desktop applications using UI automation",
+                intent="desktop_automation",
+                verification_criteria=[{"type": "desktop_action_completed"}],
+            ))
+
+        # If browser/web detected, add browser_navigation AFTER desktop
+        if has_browser:
+            phase_id = f"phase_{len(phases) + 1}"
+            phases.append(WorkflowPhase(
+                phase_id=phase_id,
+                name="browser_navigation",
+                description="Navigate browser and perform web UI actions",
+                intent="browser_navigation",
+                verification_criteria=[{"type": "browser_navigated"}],
+            ))
+
+        # Phase 4: Append pattern-based phases that are NOT already covered
+        # by deterministic overrides. This preserves fine-grained decomposition
+        # for multi-step workflows (e.g., file_search -> file_read -> browser_open).
+        deterministic_names = {p.name for p in phases}
+        for pattern_name in matched_patterns:
+            if pattern_name not in deterministic_names:
+                phase_id = f"phase_{len(phases) + 1}"
+                pattern = next(p for p in self.PHASE_PATTERNS if p["name"] == pattern_name)
                 phases.append(WorkflowPhase(
-                    phase_id=f"phase_{len(phases) + 1}",
-                    name=pattern["name"],
-                    description=pattern.get("description", f"Execute {pattern['name']} phase"),
-                    intent=pattern["name"],
+                    phase_id=phase_id,
+                    name=pattern_name,
+                    description=pattern.get("description", f"Execute {pattern_name}"),
+                    intent=pattern_name,
                     verification_criteria=pattern.get("verification", []),
                 ))
 
+        # Phase 5: Ultimate fallback
         if not phases:
             phases.append(WorkflowPhase(
                 phase_id="phase_1",
@@ -140,6 +215,7 @@ class WorkflowDecomposer:
                 intent="general",
             ))
 
+        # Phase 6: Set dependencies (sequential execution)
         for i, phase in enumerate(phases):
             if i > 0:
                 phase.depends_on = [phases[i - 1].phase_id]

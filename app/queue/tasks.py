@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from celery import Celery
 from celery.signals import worker_process_init
 from ..config.settings import settings
@@ -46,6 +47,12 @@ def on_worker_process_init(**kwargs):
     ensuring the runtime is available in the correct event loop.
     """
     global _worker_event_loop
+
+    # Windows: Force ProactorEventLoop to support asyncio subprocess (required by Playwright)
+    if sys.platform == "win32":
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        logger.info("Celery worker: set WindowsProactorEventLoopPolicy for subprocess support")
+
     try:
         # Use the existing loop if available (e.g. solo pool), otherwise create one
         try:
