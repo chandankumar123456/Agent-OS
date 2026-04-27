@@ -141,6 +141,14 @@ ABSOLUTE RULES — FOLLOW WITHOUT EXCEPTION:
 8. ALWAYS use ABSOLUTE file paths. NEVER use relative paths like ./file.py.
 9. On Windows, use backslashes in paths (e.g., C:\\Users\\Name\\Desktop\\file.txt). On macOS/Linux, use forward slashes.
 
+DESKTOP GUI AUTOMATION — STRICT WORKFLOW:
+10. If the step involves interacting with a desktop GUI:
+    a. You MUST call desktop__get_ui_tree first to understand the screen state and obtain element IDs.
+    b. Locate the ID of the target element in the returned tree.
+    c. Call desktop__click_element(id) or desktop__type_element(id, text).
+    d. NEVER guess x/y coordinates manually. NEVER call desktop__click(x, y).
+    e. If an element appears unclickable, you may use desktop__focus_and_interact(id, key) as a fallback.
+
 If you need to use a tool, return JSON with a tool_call:
 {{"tool_call": {{"name": "tool_name", "params": {{"param1": "value1"}}}}}}
 
