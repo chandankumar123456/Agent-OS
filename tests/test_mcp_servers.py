@@ -1,6 +1,7 @@
 """Tests for MCP system server tools."""
 import pytest
 import asyncio
+import json
 import tempfile
 import os
 
@@ -63,3 +64,87 @@ class TestCloudApiServer:
         # Should return HTML or an error
         assert isinstance(result, str)
         assert len(result) > 0 or "Error" in result
+
+
+class TestBrowserServer:
+    def test_browser_server_tools_importable(self):
+        from app.mcp.servers.browser import launch, navigate, screenshot, close
+        assert callable(launch)
+        assert callable(navigate)
+        assert callable(screenshot)
+        assert callable(close)
+
+    @pytest.mark.asyncio
+    async def test_browser_launch_navigate_screenshot_close(self):
+        from unittest.mock import AsyncMock, MagicMock, patch
+        from app.mcp.servers.browser import launch, navigate, screenshot, close
+
+        mock_session = MagicMock()
+        mock_session.launch = AsyncMock(return_value=MagicMock(success=True, result={"page": "ok"}))
+        mock_session.navigate = AsyncMock(return_value=MagicMock(success=True, result={"url": "https://example.com"}))
+        mock_session.screenshot = AsyncMock(return_value=MagicMock(success=True, result={"path": "/tmp/ss.png"}))
+        mock_session.close_context_only = AsyncMock(return_value=MagicMock(success=True, result={"message": "closed"}))
+
+        mock_mgr = MagicMock()
+        mock_mgr.get_or_create_session = AsyncMock(return_value=mock_session)
+        mock_mgr.close_session = AsyncMock(return_value=MagicMock(success=True, result={"message": "closed"}))
+
+        with patch("app.mcp.servers.browser.browser_session_manager", mock_mgr):
+            result = await launch(task_id="t1", headless=True)
+            assert '"success": true' in result
+
+            result = await navigate(task_id="t1", url="https://example.com")
+            assert '"success": true' in result
+
+            result = await screenshot(task_id="t1", path="/tmp/ss.png")
+            assert '"success": true' in result
+
+            result = await close(task_id="t1")
+            assert '"success": true' in result
+
+
+class TestDocumentServer:
+    def test_document_server_tools_importable(self):
+        from app.mcp.servers.document import parse, parse_pdf, parse_txt, chunk, summarize
+        assert callable(parse)
+        assert callable(parse_pdf)
+        assert callable(parse_txt)
+        assert callable(chunk)
+        assert callable(summarize)
+
+    @pytest.mark.asyncio
+    async def test_document_parse_txt(self):
+        from app.mcp.servers.document import parse_txt
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("Hello from MCP document server")
+            path = f.name
+        try:
+            result = await parse_txt(path=path)
+            data = json.loads(result)
+            assert data["success"] is True
+            assert "Hello from MCP document server" in data["result"]["text"]
+        finally:
+            os.unlink(path)
+
+    @pytest.mark.asyncio
+    async def test_document_chunk(self):
+        from app.mcp.servers.document import chunk
+        result = await chunk(text="Hello world. This is a test.", chunk_size=10, overlap=2)
+        data = json.loads(result)
+        assert data["success"] is True
+        assert len(data["result"]["chunks"]) > 0
+
+
+class TestCodeServer:
+    def test_code_server_tools_importable(self):
+        from app.mcp.servers.code import run_python
+        assert callable(run_python)
+
+    @pytest.mark.asyncio
+    async def test_code_run_python(self):
+        from app.mcp.servers.code import run_python
+        code = "result = 21 * 2"
+        result = await run_python(code=code, timeout=10)
+        data = json.loads(result)
+        assert data["success"] is True
+        assert data["result"] == 42

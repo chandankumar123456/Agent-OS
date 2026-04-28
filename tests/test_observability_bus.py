@@ -30,7 +30,7 @@ class TestEmit:
     async def test_logs_event(self, bus, sample_event):
         with patch("app.observability.bus.logger") as mock_logger:
             with patch(
-                "app.orchestrator.v2.event_bus.event_bus.publish", new=AsyncMock()
+                "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
             ):
                 with patch(
                     "app.memory.long_term.span_repo.create", new=AsyncMock()
@@ -46,7 +46,7 @@ class TestEmit:
     @pytest.mark.asyncio
     async def test_publishes_to_event_bus(self, bus, sample_event):
         mock_publish = AsyncMock()
-        with patch("app.orchestrator.v2.event_bus.event_bus.publish", mock_publish):
+        with patch("app.orchestrator.event_bus.event_bus.publish", mock_publish):
             with patch("app.observability.bus.logger"):
                 with patch(
                     "app.memory.long_term.span_repo.create", new=AsyncMock()
@@ -67,7 +67,7 @@ class TestEmit:
         with patch("app.memory.long_term.span_repo.create", mock_create):
             with patch("app.observability.bus.logger"):
                 with patch(
-                    "app.orchestrator.v2.event_bus.event_bus.publish", new=AsyncMock()
+                    "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
 
@@ -82,7 +82,7 @@ class TestEmit:
     @pytest.mark.asyncio
     async def test_handles_event_bus_failure(self, bus, sample_event):
         mock_publish = AsyncMock(side_effect=Exception("redis down"))
-        with patch("app.orchestrator.v2.event_bus.event_bus.publish", mock_publish):
+        with patch("app.orchestrator.event_bus.event_bus.publish", mock_publish):
             with patch("app.observability.bus.logger") as mock_logger:
                 with patch(
                     "app.memory.long_term.span_repo.create", new=AsyncMock()
@@ -98,7 +98,7 @@ class TestEmit:
         with patch("app.memory.long_term.span_repo.create", mock_create):
             with patch("app.observability.bus.logger") as mock_logger:
                 with patch(
-                    "app.orchestrator.v2.event_bus.event_bus.publish", new=AsyncMock()
+                    "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
 

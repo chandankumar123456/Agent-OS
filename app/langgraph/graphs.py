@@ -48,6 +48,13 @@ def _should_approve(state: AgentState) -> str:
     """Conditional edge: check if approval is needed."""
     config = state.get("config", {})
     if config.get("require_approval"):
+        # Check per-session approval mode
+        task_id = state.get("task_id", "")
+        from ..safety.approval_store import approval_store
+        mode = approval_store.get_mode(task_id)
+        if mode.value == "full_trust":
+            logger.info(f"[_should_approve] Full-trust mode for task {task_id}, skipping approval node")
+            return "summarize"
         return "approve"
     return "summarize"
 
@@ -230,7 +237,11 @@ def compile_collaboration_graph(
         }
 
     async def worker_node(state: AgentState) -> Dict[str, Any]:
-        """Process the query with an agent-specific role/prompt."""
+        """Process the query through AgentRuntime (no direct LLM bypass)."""
+        from uuid import UUID, uuid4
+        from ..runtime.runtime import AgentRuntime
+        from ..agents.base import AgentInput, AgentRole, AgentStatus
+
         task_id = state.get("task_id", "")
         query = state.get("query", "")
         agent_config = state.get("agent_config", {})
@@ -238,19 +249,55 @@ def compile_collaboration_graph(
         role = agent_config.get("role", "assistant")
         prompt = agent_config.get("prompt", "")
 
-        logger.info(f"[worker_node] Agent {agent_id} ({role}) executing for task {task_id}")
+        logger.info(f"[worker_node] Agent {agent_id} ({role}) executing for task {task_id} via runtime")
 
-        llm = get_llm_client()
-        messages = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": f"Role: {role}\n\nQuery: {query}"},
-        ]
+        runtime = AgentRuntime()
+        worker = runtime.get("core_executor")
+        if worker is None:
+            logger.error(f"[worker_node] No core_executor in runtime for task {task_id}")
+            return {
+                "collaboration_results": {
+                    agent_id: {
+                        "role": role,
+                        "result": "Error: AgentRuntime not initialized",
+                    }
+                },
+            }
 
         try:
-            response = await llm.complete_json(messages=messages)
-            result = response.get("answer") or response.get("summary") or json.dumps(response)
+            task_uuid = UUID(str(task_id)) if task_id else uuid4()
+        except (ValueError, TypeError):
+            task_uuid = uuid4()
+
+        input_data = AgentInput(
+            task_id=task_uuid,
+            step_id=uuid4(),
+            role=AgentRole.EXECUTOR,
+            input_data={
+                "step": query,
+                "tools": [],
+            },
+            context={
+                "collaboration_agent_id": agent_id,
+                "collaboration_role": role,
+                "collaboration_prompt": prompt,
+                "mode": "collaboration",
+            },
+        )
+
+        try:
+            output = await worker.execute(input_data)
+            if output.status == AgentStatus.SUCCESS:
+                result_data = output.output_data
+                result = (
+                    result_data.get("result")
+                    or result_data.get("answer")
+                    or json.dumps(result_data)
+                ) if isinstance(result_data, dict) else str(result_data)
+            else:
+                result = f"Error during execution: {output.error_message}"
         except Exception as e:
-            logger.error(f"[worker_node] Agent {agent_id} failed: {e}")
+            logger.error(f"[worker_node] Agent {agent_id} failed via runtime: {e}")
             result = f"Error during execution: {e}"
 
         return {

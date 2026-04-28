@@ -1,5 +1,6 @@
 """MCP Client Manager — manages connections to MCP servers and routes tool calls."""
 import asyncio
+import os
 import sys
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -63,10 +64,14 @@ class MCPClientManager:
             return self.connections[name]
 
         logger.info(f"Connecting to MCP server '{name}' via stdio: {command} {args}")
+        # Pass the full parent environment so MCP servers inherit OPENAI_API_KEY,
+        # proxy settings, and other runtime configuration.  The mcp library's
+        # default get_default_environment() strips most variables.
+        merged_env = {**os.environ, **(env or {})}
         params = StdioServerParameters(
             command=command,
             args=args or [],
-            env=env,
+            env=merged_env,
         )
 
         exit_stack = AsyncExitStack()
@@ -161,9 +166,13 @@ class MCPClientManager:
     async def connect_http(self, name: str, url: str) -> ServerConnection:
         """Connect to an MCP server via HTTP/SSE transport.
 
-        Not yet implemented — placeholder for future HTTP transport support.
+        HTTP transport is not supported in AgentOS V1.
+        Only stdio transport is available for MCP servers.
         """
-        raise NotImplementedError("HTTP transport not yet implemented")
+        raise NotImplementedError(
+            "MCP HTTP transport is not supported in AgentOS V1. "
+            "Use connect_stdio() instead."
+        )
 
     async def disconnect(self, name: str) -> None:
         """Disconnect a specific MCP server."""
@@ -242,6 +251,9 @@ class MCPClientManager:
             ("shell", sys.executable, ["-m", "app.mcp.servers.shell"]),
             ("cloud_api", sys.executable, ["-m", "app.mcp.servers.cloud_api"]),
             ("desktop", sys.executable, ["-m", "app.mcp.servers.desktop"]),
+            ("browser_env", sys.executable, ["-m", "app.mcp.servers.browser"]),
+            ("document", sys.executable, ["-m", "app.mcp.servers.document"]),
+            ("code_executor", sys.executable, ["-m", "app.mcp.servers.code"]),
         ]
 
         for name, command, args in servers:

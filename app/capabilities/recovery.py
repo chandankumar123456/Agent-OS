@@ -64,6 +64,7 @@ class RecoveryEngine:
 
     def __init__(self, max_retries: int = 3):
         self.max_retries = max_retries
+        self._memory_retry_counts: Dict[str, int] = {}
         self._tool_alternatives: Dict[str, List[str]] = {
             "filesystem__write_file": ["shell__execute_command"],
             "shell__execute_command": ["filesystem__write_file"],
@@ -83,7 +84,8 @@ class RecoveryEngine:
 
     async def _get_retry_count(self, task_id: str, step_id: Optional[str]) -> int:
         if not redis_client.client:
-            raise RuntimeError("Redis client is unavailable")
+            logger.debug(f"Redis unavailable; using in-memory retry count for {task_id}")
+            return self._memory_retry_counts.get(self._retry_key(task_id, step_id), 0)
         key = self._retry_key(task_id, step_id)
         value = await redis_client.client.get(key)
         if value is None:
@@ -94,17 +96,25 @@ class RecoveryEngine:
             return 0
 
     async def _increment_retry(self, task_id: str, step_id: Optional[str]) -> int:
-        if not redis_client.client:
-            raise RuntimeError("Redis client is unavailable")
         key = self._retry_key(task_id, step_id)
+        if not redis_client.client:
+            logger.debug(f"Redis unavailable; incrementing in-memory retry count for {task_id}")
+            self._memory_retry_counts[key] = self._memory_retry_counts.get(key, 0) + 1
+            return self._memory_retry_counts[key]
         new_count = await redis_client.client.incr(key)
         await redis_client.client.expire(key, 604800)
         return new_count
 
     async def reset_retries(self, task_id: str) -> None:
         """Clear retry counts for a task."""
+        # Clear in-memory counts
+        prefix = f"agentos:recovery:{task_id}:"
+        for k in list(self._memory_retry_counts.keys()):
+            if k.startswith(prefix):
+                del self._memory_retry_counts[k]
         if not redis_client.client:
-            raise RuntimeError("Redis client is unavailable")
+            logger.debug(f"Redis unavailable; cleared in-memory retry counts for {task_id}")
+            return
         pattern = f"agentos:recovery:{task_id}:*"
         keys = []
         async for key in redis_client.client.scan_iter(match=pattern):

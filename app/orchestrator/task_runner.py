@@ -28,7 +28,7 @@ try:
     from langgraph.types import Command
 except ImportError:
     Command = None
-from ..orchestrator.v2.event_bus import event_bus, Event
+from ..orchestrator.event_bus import event_bus, Event
 from ..capabilities import (
     capability_router,
     feasibility_engine,
@@ -202,21 +202,22 @@ class TaskRunner:
             if workflow_timeout < 10:
                 workflow_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT)
 
-            if resume_value and Command is not None:
-                logger.info(f"[LangGraph] Resuming {mode} graph for task {task_id} with resume_value")
-                final_state = await asyncio.wait_for(
-                    graph.ainvoke(Command(resume=resume_value), config=thread_config),
-                    timeout=workflow_timeout,
-                )
-            else:
-                logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
-                final_state = await asyncio.wait_for(
-                    graph.ainvoke(state, config=thread_config),
-                    timeout=workflow_timeout,
-                )
-
-            # Cleanup environment
-            execution_environment.cleanup(str(task_id))
+            try:
+                if resume_value and Command is not None:
+                    logger.info(f"[LangGraph] Resuming {mode} graph for task {task_id} with resume_value")
+                    final_state = await asyncio.wait_for(
+                        graph.ainvoke(Command(resume=resume_value), config=thread_config),
+                        timeout=workflow_timeout,
+                    )
+                else:
+                    logger.info(f"[LangGraph] Starting {mode} graph for task {task_id}")
+                    final_state = await asyncio.wait_for(
+                        graph.ainvoke(state, config=thread_config),
+                        timeout=workflow_timeout,
+                    )
+            finally:
+                # Cleanup environment regardless of success/failure
+                execution_environment.cleanup(str(task_id))
 
             result = final_state.get("result", {})
             error = final_state.get("error")

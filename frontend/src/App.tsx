@@ -13,8 +13,7 @@ import Tools from './pages/Tools';
 import Settings from './pages/Settings';
 import APIKeys from './pages/APIKeys';
 import WorkflowBuilder from './pages/WorkflowBuilder';
-import WorkflowBuilderV2 from './pages/WorkflowBuilderV2';
-import AgentBuilderV2 from './pages/AgentBuilderV2';
+
 import KnowledgeBase from './pages/KnowledgeBase';
 import Chat from './pages/Chat';
 import Deployments from './pages/Deployments';
@@ -59,11 +58,9 @@ function AppRoutes() {
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/builder" element={<AgentBuilder />} />
-        <Route path="/builder/v2" element={<AgentBuilderV2 />} />
         <Route path="/chat" element={<Chat />} />
         <Route path="/orchestrator" element={<Orchestrator />} />
         <Route path="/workflows/builder" element={<WorkflowBuilder />} />
-        <Route path="/workflows/builder/v2" element={<WorkflowBuilderV2 />} />
         <Route path="/monitor" element={<Monitor />} />
         <Route path="/tools" element={<Tools />} />
         <Route path="/settings" element={<Settings />} />

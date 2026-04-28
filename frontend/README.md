@@ -1,6 +1,6 @@
 # AgentOS Frontend
 
-> React 18 + TypeScript + Vite application for the AgentOS v2 Agent Operating System.
+> React 19 + TypeScript + Vite application for the AgentOS Agent Operating System.
 
 ## Architecture
 
@@ -62,9 +62,9 @@ graph TB
 
 | Component | Technology | Purpose |
 |-----------|-----------|---------|
-| Framework | React 18 | UI library |
+| Framework | React 19 | UI library |
 | Language | TypeScript | Type safety |
-| Build Tool | Vite | Dev server & bundling |
+| Build Tool | Vite 8 | Dev server & bundling |
 | Styling | Tailwind CSS | Utility-first CSS |
 | Routing | React Router DOM | Client-side routing |
 | Icons | Lucide React | Icon library |

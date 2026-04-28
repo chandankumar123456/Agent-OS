@@ -1,12 +1,13 @@
 from typing import List, Dict, Any
 
 from .models import ActionSeverity
+from .approval_store import approval_store
 
 
 class SafetyGate:
     """Intercepts irreversible actions before execution."""
 
-    IRREVERSIBLE_TOOLS = {
+    IRREVERSIBLE_TOOLS = frozenset({
         "filesystem__delete_file",
         "filesystem__delete_directory",
         "email__send",
@@ -34,7 +35,14 @@ class SafetyGate:
         "docker__remove_image",
         "kubernetes__delete_pod",
         "kubernetes__delete_namespace",
-    }
+    })
+
+    FORBIDDEN_PREFIXES = (
+        "filesystem__delete", "database__drop", "database__delete",
+        "user__delete", "github__delete", "github__force",
+        "aws__terminate", "aws__delete",
+        "docker__remove", "kubernetes__delete",
+    )
 
     DANGEROUS_PATTERNS = [
         "rm -rf",
@@ -48,10 +56,33 @@ class SafetyGate:
         "post message",
     ]
 
+    def _is_forbidden(self, tool_name: str) -> bool:
+        """Check if a tool name matches forbidden exact names or prefixes."""
+        if tool_name in self.IRREVERSIBLE_TOOLS:
+            return True
+        if tool_name.startswith(("payment__", "crypto__", "purchase__", "buy__")):
+            return True
+        if tool_name.startswith(("email__send", "slack__send", "slack__post", "discord__send", "sms__send")):
+            return True
+        if any(tool_name.startswith(p) for p in self.FORBIDDEN_PREFIXES):
+            return True
+        return False
+
     def check_tool_call(self, tool_name: str, params: dict, query: str) -> ActionSeverity:
         """Classify a single tool invocation by severity."""
-        if tool_name in self.IRREVERSIBLE_TOOLS:
+        # Always block forbidden tools (exact + prefix match)
+        if self._is_forbidden(tool_name):
             return ActionSeverity.IRREVERSIBLE
+
+        # Check if full-trust mode applies
+        task_id = params.get("_task_id", "")
+        if task_id and approval_store.should_auto_approve(task_id, tool_name, "warning"):
+            # Full trust mode: auto-approve safe and warning actions
+            approval_store.log_auto_approval(
+                task_id, tool_name, params,
+                reason="full_trust_mode: severity was safe/warning"
+            )
+            return ActionSeverity.SAFE
 
         combined_text = " ".join(str(v) for v in params.values()) + " " + query
         combined_text_lower = combined_text.lower()

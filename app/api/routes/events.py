@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from ...orchestrator.v2.event_bus import event_bus
+from ...orchestrator.event_bus import event_bus
 from ...logs.logger import logger
 
 router = APIRouter(prefix="/tasks", tags=["events"])

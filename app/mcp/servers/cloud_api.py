@@ -1,8 +1,15 @@
 """MCP Cloud API Server — provides HTTP and search APIs to agents."""
+# Stdout sanitization MUST be the first import to prevent any library from
+# corrupting the JSON-RPC stdio transport.
+import app.mcp.servers._stdio_sanitize  # noqa: F401, E402
+
 import json
+import os
 import urllib.request
 import urllib.parse
 from typing import Optional, Dict, Any
+
+os.environ["AGENTOS_LOG_STDERR"] = "1"
 
 from mcp.server.fastmcp import FastMCP
 

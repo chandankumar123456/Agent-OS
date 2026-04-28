@@ -28,7 +28,7 @@ class ObservabilityBus:
 
         # 2. Real-time event bus (WebSocket)
         try:
-            from ..orchestrator.v2.event_bus import event_bus, Event
+            from ..orchestrator.event_bus import event_bus, Event
 
             await event_bus.publish(
                 f"task:{event.task_id}",
@@ -52,7 +52,11 @@ class ObservabilityBus:
                 metadata=event.payload,
             )
         except Exception as e:
-            logger.warning(f"Observability DB persist failed: {e}")
+            # Downgrade to debug when DB is not initialized (common in tests/benchmarks)
+            if "session factory is unavailable" in str(e).lower() or "database" in str(e).lower():
+                logger.debug(f"Observability DB persist skipped (DB unavailable): {e}")
+            else:
+                logger.warning(f"Observability DB persist failed: {e}")
 
     async def emit_safe(
         self,

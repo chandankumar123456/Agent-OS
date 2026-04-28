@@ -1,8 +1,14 @@
 """MCP Shell Server — provides command execution tools to agents."""
+# Stdout sanitization MUST be the first import to prevent any library from
+# corrupting the JSON-RPC stdio transport.
+import app.mcp.servers._stdio_sanitize  # noqa: F401, E402
+
 import subprocess
 import shlex
 import os
 from typing import Optional
+
+os.environ["AGENTOS_LOG_STDERR"] = "1"
 
 from mcp.server.fastmcp import FastMCP
 

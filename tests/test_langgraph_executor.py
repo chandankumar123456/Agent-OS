@@ -143,10 +143,12 @@ async def test_planner_node_produces_valid_plan(mock_obs_bus):
         ]
     }
 
-    with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm:
+    with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm, \
+         patch("app.langgraph.nodes.workflow_decomposer.decompose") as mock_decompose:
         mock_llm = AsyncMock()
         mock_llm.complete_json = AsyncMock(return_value=mock_plan)
         mock_get_llm.return_value = mock_llm
+        mock_decompose.return_value = []  # force LLM fallback
 
         result = await planner_node(state)
 

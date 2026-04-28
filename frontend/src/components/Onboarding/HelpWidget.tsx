@@ -4,10 +4,10 @@ import { HelpCircle, X, Search } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 
 const HELP_ARTICLES = [
-  { title: 'How to create an agent', content: 'Go to Agent Builder, select a template, customize identity and tools, then test and save.', routes: ['/builder', '/builder/v2'] },
-  { title: 'How to build a workflow', content: 'Open Workflow Builder, drag nodes, connect edges, and click Execute.', routes: ['/workflows/builder', '/workflows/builder/v2', '/orchestrator'] },
+  { title: 'How to create an agent', content: 'Go to Agent Builder, select a template, customize identity and tools, then test and save.', routes: ['/builder'] },
+  { title: 'How to build a workflow', content: 'Open Workflow Builder, drag nodes, connect edges, and click Execute.', routes: ['/workflows/builder', '/orchestrator'] },
   { title: 'Understanding task modes', content: 'Task: single execution. Workflow: predefined steps. Autonomous: self-replanning. Collaboration: parallel.', routes: ['/dashboard'] },
-  { title: 'Tool binding', content: 'Connect Agent nodes to Tool nodes in Workflow Builder. Map parameters on the edge.', routes: ['/workflows/builder', '/workflows/builder/v2'] },
+  { title: 'Tool binding', content: 'Connect Agent nodes to Tool nodes in Workflow Builder. Map parameters on the edge.', routes: ['/workflows/builder'] },
   { title: 'Managing API Keys', content: 'Go to Settings > API Keys to create and revoke keys for programmatic access.', routes: ['/settings/api-keys'] },
   { title: 'Using the Knowledge Base', content: 'Upload documents in the Knowledge Base to ground agent responses.', routes: ['/knowledge'] },
   { title: 'Chat with agents', content: 'Open Chat to have interactive conversations with your configured agents.', routes: ['/chat'] },

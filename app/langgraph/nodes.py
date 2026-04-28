@@ -16,7 +16,7 @@ from ..capabilities import verification_engine, recovery_engine
 from ..capabilities.models import VerificationResult, RecoveryAction
 from ..observability import observability_bus, ObservabilityEventType
 from ..safety.gate import SafetyGate, ActionSeverity
-from ..orchestrator.v2.event_bus import event_bus, Event
+from ..orchestrator.event_bus import event_bus, Event
 from .state import AgentState
 
 
@@ -117,7 +117,15 @@ async def _observe_desktop_state(task_id: str) -> Dict[str, Any]:
         if tool:
             output = await tool_registry.execute("desktop__get_ui_tree", {"_task_id": task_id})
             if output.success and output.result:
-                state["ui_tree"] = str(output.result)[:2000]
+                result = output.result
+                if isinstance(result, dict) and result.get("mode") == "vision_fallback":
+                    # Vision fallback: prioritize the detected element tree
+                    tree = result.get("tree", [])
+                    state["ui_tree"] = json.dumps(tree, default=str)[:2000]
+                    state["vision_fallback"] = True
+                    state["screenshot_path"] = result.get("screenshot_path")
+                else:
+                    state["ui_tree"] = str(result)[:2000]
     except Exception as e:
         logger.debug(f"[_observe_desktop_state] ui tree failed: {e}")
 
@@ -169,6 +177,10 @@ RULES:
 5. Do NOT say the task is complete unless the goal state is actually true.
 6. If the goal is already reached, respond with a direct answer.
 7. Use ABSOLUTE file paths when needed.
+8. If the UI tree shows "vision_fallback": true, the elements were detected from the screenshot. They have the same id/type/name format as normal UI tree elements and can be used with desktop__click_element, desktop__type_element, etc. normally.
+9. If the previous action failed or required a retry, the retry count and error are shown below. Adjust your strategy accordingly.
+
+{retry_context}
 
 Respond with JSON in one of these formats:
 
@@ -208,12 +220,30 @@ async def _run_desktop_goal_loop(
         logger.info(f"[_run_desktop_goal_loop][TRACE] OBSERVED STATE: {json.dumps(desktop_state, indent=2, default=str)[:500]}")
 
         # 2. CHOOSE ACTION (LLM with state)
+        # Include retry context from last snapshot if available
+        retry_context = ""
+        try:
+            from ..environments.desktop_env import desktop_session_manager
+            session = desktop_session_manager.get_session(task_id)
+            if session and hasattr(session, "get_snapshot_history"):
+                history = session.get_snapshot_history()
+                if history:
+                    last = history[-1]
+                    if last.get("retry_count", 0) > 0:
+                        retry_context = f"\nLAST ACTION RETRY INFO: retried {last['retry_count']} time(s), error: {last.get('error', 'none')}"
+                    if last.get("verification_result"):
+                        vr = last["verification_result"]
+                        retry_context += f"\nLAST ACTION VERIFICATION: changed={vr.get('changed')}, notes={vr.get('notes')}"
+        except Exception:
+            pass
+
         tools_json = json.dumps(grounded_tools, indent=2, default=str)
         system_prompt = _DESKTOP_LOOP_SYSTEM_PROMPT.format(
             desktop_state=json.dumps(desktop_state, indent=2, default=str),
             query=query,
             description=description,
             tools_json=tools_json,
+            retry_context=retry_context,
         )
 
         messages = [
@@ -267,19 +297,10 @@ async def _run_desktop_goal_loop(
             # Inject task_id for observability and session management
             tool_params["_task_id"] = task_id
 
-            # Validate tool exists (triggers dynamic build if missing)
+            # Validate tool exists
             tool = tool_registry.get(tool_name)
             if not tool:
-                try:
-                    from ..tools.builder import dynamic_tool_factory
-                    if dynamic_tool_factory:
-                        await dynamic_tool_factory.ensure_tool(tool_name)
-                        tool = tool_registry.get(tool_name)
-                except Exception as build_err:
-                    logger.error(f"[_run_desktop_goal_loop] Dynamic build failed for {tool_name}: {build_err}")
-
-            if not tool:
-                error_msg = f"Tool '{tool_name}' not found and could not be built"
+                error_msg = f"Tool '{tool_name}' not found"
                 logger.error(f"[_run_desktop_goal_loop] {error_msg}")
                 messages.append(AIMessage(content=json.dumps(response)))
                 messages.append(HumanMessage(content=f"Error: {error_msg}. Use a valid tool or provide a direct answer."))
@@ -294,6 +315,23 @@ async def _run_desktop_goal_loop(
                     payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
                     source="safety_gate",
                 )
+                # Block irreversible actions pending human approval
+                tool_result = {
+                    "success": False,
+                    "data": None,
+                    "error": f"Action blocked: '{tool_name}' is classified as irreversible. Human approval required.",
+                }
+                tool_calls.append({
+                    "step": state.get("current_step_index", 0) + 1,
+                    "tool": tool_name,
+                    "result": tool_result,
+                })
+                step_tool_results.append(tool_result)
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(
+                    content=f"Tool '{tool_name}' was BLOCKED as irreversible. You need explicit human approval to proceed."
+                ))
+                continue
 
             logger.info(f"[_run_desktop_goal_loop][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
             logger.info(f"[_run_desktop_goal_loop][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
@@ -368,7 +406,7 @@ async def _run_desktop_goal_loop(
         "tool_results": step_tool_results,
     }
 
-    steps = state.get("steps", [])
+    steps = list(state.get("steps", []))
     steps.append(step_output)
 
     status = "step_executed" if goal_reached else "incomplete"
@@ -850,11 +888,11 @@ To provide a direct answer (only if no tool is needed):
 
     MAX_ROUNDS = state.get("max_tool_rounds", 5)
     calls_this_step: set = set()
-    tool_calls = state.get("tool_calls", [])
+    tool_calls = list(state.get("tool_calls", []))
     step_tool_results = []
     final_answer = ""
-    verification_reports = state.get("verification_reports", [])
-    recovery_decisions = state.get("recovery_decisions", [])
+    verification_reports = list(state.get("verification_reports", []))
+    recovery_decisions = list(state.get("recovery_decisions", []))
 
     for round_num in range(MAX_ROUNDS):
         try:
@@ -905,20 +943,10 @@ To provide a direct answer (only if no tool is needed):
                 continue
             calls_this_step.add(call_signature)
 
-            # Validate tool exists (triggers dynamic build if missing)
+            # Validate tool exists
             tool = tool_registry.get(tool_name)
             if not tool:
-                # Try dynamic build explicitly
-                try:
-                    from ..tools.builder import dynamic_tool_factory
-                    if dynamic_tool_factory:
-                        await dynamic_tool_factory.ensure_tool(tool_name)
-                        tool = tool_registry.get(tool_name)
-                except Exception as build_err:
-                    logger.error(f"[executor_node] Dynamic build failed for {tool_name}: {build_err}")
-
-            if not tool:
-                error_msg = f"Tool '{tool_name}' not found and could not be built"
+                error_msg = f"Tool '{tool_name}' not found"
                 logger.error(f"[executor_node] {error_msg}")
                 messages.append(AIMessage(content=json.dumps(response)))
                 messages.append(HumanMessage(content=f"Error: {error_msg}. Use a valid tool or provide a direct answer."))
@@ -933,6 +961,23 @@ To provide a direct answer (only if no tool is needed):
                     payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
                     source="safety_gate",
                 )
+                # Block irreversible actions pending human approval
+                tool_result = {
+                    "success": False,
+                    "data": None,
+                    "error": f"Action blocked: '{tool_name}' is classified as irreversible. Human approval required.",
+                }
+                tool_calls.append({
+                    "step": step_number,
+                    "tool": tool_name,
+                    "result": tool_result,
+                })
+                step_tool_results.append(tool_result)
+                messages.append(AIMessage(content=json.dumps(response)))
+                messages.append(HumanMessage(
+                    content=f"Tool '{tool_name}' was BLOCKED as irreversible. You need explicit human approval to proceed."
+                ))
+                continue
 
             logger.info(f"[executor_node][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
             logger.info(f"[executor_node][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
@@ -1038,7 +1083,7 @@ To provide a direct answer (only if no tool is needed):
         "tool_results": step_tool_results,
     }
 
-    steps = state.get("steps", [])
+    steps = list(state.get("steps", []))
     steps.append(step_output)
 
     await observability_bus.emit_safe(
@@ -1075,31 +1120,22 @@ async def _execute_tool_call(
     # Inject task_id for observability and session management
     tool_params["_task_id"] = task_id
 
-    tool_calls = state.get("tool_calls", [])
+    tool_calls = list(state.get("tool_calls", []))
     step_tool_results = []
-    verification_reports = state.get("verification_reports", [])
-    recovery_decisions = state.get("recovery_decisions", [])
+    verification_reports = list(state.get("verification_reports", []))
+    recovery_decisions = list(state.get("recovery_decisions", []))
 
-    # Validate tool exists (triggers dynamic build if missing)
+    # Validate tool exists
     tool = tool_registry.get(tool_name)
     if not tool:
-        try:
-            from ..tools.builder import dynamic_tool_factory
-            if dynamic_tool_factory:
-                await dynamic_tool_factory.ensure_tool(tool_name)
-                tool = tool_registry.get(tool_name)
-        except Exception as build_err:
-            logger.error(f"[_execute_tool_call] Dynamic build failed for {tool_name}: {build_err}")
-
-    if not tool:
-        final_answer = f"Tool '{tool_name}' not found and could not be built"
+        final_answer = f"Tool '{tool_name}' not found"
         step_output = {
             "step_number": step_number,
             "description": description,
             "output": final_answer,
             "tool_results": [{"success": False, "error": final_answer}],
         }
-        steps = state.get("steps", [])
+        steps = list(state.get("steps", []))
         steps.append(step_output)
         return {
             "steps": steps,
@@ -1120,6 +1156,32 @@ async def _execute_tool_call(
             payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
             source="safety_gate",
         )
+        # Block irreversible actions — return blocked result immediately
+        blocked_error = f"Action blocked: '{tool_name}' is classified as irreversible. Human approval required."
+        tool_result = {"success": False, "data": None, "error": blocked_error}
+        tool_calls.append({
+            "step": step_number,
+            "tool": tool_name,
+            "result": tool_result,
+        })
+        step_tool_results.append(tool_result)
+        step_output = {
+            "step_number": step_number,
+            "description": description,
+            "output": blocked_error,
+            "tool_results": step_tool_results,
+        }
+        steps = state.get("steps", [])
+        steps.append(step_output)
+        return {
+            "steps": steps,
+            "current_step_index": idx + 1,
+            "tool_calls": tool_calls,
+            "messages": [AIMessage(content=f"Step {step_number} BLOCKED: {blocked_error}")],
+            "verification_reports": verification_reports,
+            "recovery_decisions": recovery_decisions,
+            "status": "blocked",
+        }
 
     logger.info(f"[_execute_tool_call][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
     logger.info(f"[_execute_tool_call][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
@@ -1172,7 +1234,7 @@ async def _execute_tool_call(
         "tool_results": step_tool_results,
     }
 
-    steps = state.get("steps", [])
+    steps = list(state.get("steps", []))
     steps.append(step_output)
 
     await observability_bus.emit_safe(
@@ -1323,6 +1385,19 @@ async def approval_node(state: AgentState) -> Dict[str, Any]:
     task_id = state.get("task_id", "")
     step = state.get("steps", [{}])[-1]
     logger.info(f"[approval_node] Requesting approval for task {task_id}")
+
+    # ── Per-session approval mode check ───────────────────────────────
+    from ..safety.approval_store import approval_store
+    mode = approval_store.get_mode(task_id)
+    if mode.value == "full_trust":
+        logger.info(f"[approval_node] Full-trust mode active for task {task_id}. Auto-approving.")
+        approval_store.log_auto_approval(task_id, "final_verification", {}, "full_trust_verification")
+        return {
+            "approved": True,
+            "approval_reason": "Auto-approved: full-trust session mode",
+            "messages": [AIMessage(content="Auto-approved: full-trust session mode")],
+            "status": "approved",
+        }
 
     # LangGraph interrupt pauses the graph and stores the checkpoint
     # The value returned here is what gets passed when the graph is resumed

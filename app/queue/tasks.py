@@ -128,7 +128,7 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
     logger.info(f"Executing task {task_id}: {query}")
 
     from ..orchestrator.core import orchestrator
-    from ..orchestrator.v2.event_bus import event_bus, Event
+    from ..orchestrator.event_bus import event_bus, Event
     from uuid import UUID
     from ..memory.long_term import task_repo, db
     from ..memory.short_term import redis_client

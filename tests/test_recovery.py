@@ -106,7 +106,10 @@ async def test_checkpoint_recovery_service_resume_found():
         mock_cp.aget_tuple = AsyncMock(return_value=mock_tuple)
         mock_get_cp.return_value = mock_cp
         result = await service.resume_task("task-7", "task", {})
-        assert result == {"steps": ["step1"]}
+        assert result["steps"] == ["step1"]
+        assert result["current_step_index"] == 0
+        assert result["verified"] is False
+        assert result["approved"] is None
 
 
 @pytest.mark.asyncio

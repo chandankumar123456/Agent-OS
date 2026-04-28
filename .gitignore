@@ -229,4 +229,6 @@ prime_check.py
 # tests/ intentionally removed — test suites must be tracked.worktrees/
 
 .worktrees/
-
+weights/
+node_modules/
+/node_modules/*

@@ -9,7 +9,7 @@ from ...logs.logger import logger
 from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo
 from ...config.settings import settings
 from ...orchestrator.errors import ErrorCode
-from ...orchestrator.v2.event_bus import event_bus, Event
+from ...orchestrator.event_bus import event_bus, Event
 from ..deps import OrchestratorDep, get_current_user
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])

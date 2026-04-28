@@ -110,3 +110,21 @@ def test_browser_env_tools_have_parameter_schemas():
         if action == "navigate":
             props = params.get("properties", {})
             assert "url" in props, f"browser_env__navigate missing 'url' property"
+
+def test_document_tools_have_parameter_schemas():
+    from app.tools.registry import tool_registry
+    for name in ["document__parse", "document__parse_pdf", "document__parse_docx", "document__parse_txt", "document__parse_markdown"]:
+        schema = tool_registry.get(name).get_schema()
+        params = schema.get("parameters", {})
+        assert isinstance(params, dict), f"{name} parameters is not a dict"
+        assert "properties" in params, f"{name} missing properties"
+        assert "path" in params["properties"], f"{name} missing 'path' property"
+
+def test_code_tools_have_parameter_schemas():
+    from app.tools.registry import tool_registry
+    name = "code_executor__run_python"
+    schema = tool_registry.get(name).get_schema()
+    params = schema.get("parameters", {})
+    assert isinstance(params, dict), f"{name} parameters is not a dict"
+    assert "properties" in params, f"{name} missing properties"
+    assert "code" in params["properties"], f"{name} missing 'code' property"

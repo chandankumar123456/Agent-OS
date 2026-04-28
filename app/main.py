@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from .config.settings import settings
 from .api import api_router
 from .api.routes.health import router as health_router
-from .api.routes.public import router as public_router
+
 from .logs.logger import logger
 from .memory.long_term import db
 from .memory.short_term import redis_client
@@ -187,8 +187,6 @@ if api_keys:
 
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(health_router)
-app.include_router(public_router)
-
 from .api.ws import websocket_endpoint
 app.add_api_websocket_route("/ws/tasks/{task_id}", websocket_endpoint)
 

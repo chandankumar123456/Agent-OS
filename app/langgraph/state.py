@@ -66,3 +66,6 @@ class AgentState(TypedDict, total=False):
 
     # Desktop goal-driven loop tracking
     desktop_iterations: int
+
+    # Approval mode
+    approval_mode: Optional[str]

@@ -501,19 +501,19 @@ Path remapping rules:
 
 | Component | Technology | Version | Purpose |
 |-----------|-----------|---------|---------|
-| Frontend Framework | React | 18.x | UI components |
-| Build Tool | Vite | 5.x+ | Dev server & bundling |
-| CSS | Tailwind CSS | 3.x+ | Utility-first styling |
+| Frontend Framework | React | 19.x | UI components |
+| Build Tool | Vite | 8.x+ | Dev server & bundling |
+| CSS | Tailwind CSS | 3.4+ | Utility-first styling |
 | State Management | React Context | Built-in | Auth, global state |
 | Tour Library | Shepherd.js | 12.x+ | User onboarding |
-| Backend Framework | FastAPI | 0.104+ | REST API server |
-| ASGI Server | Uvicorn | 0.24+ | Production server |
-| Validation | Pydantic | 2.5+ | Request/response schemas |
+| Backend Framework | FastAPI | 0.121+ | REST API server |
+| ASGI Server | Uvicorn | 0.34+ | Production server |
+| Validation | Pydantic | 2.12+ | Request/response schemas |
 | Auth | python-jose | 3.3+ | JWT token handling |
 | Password Hashing | passlib | 1.7+ | Bcrypt with SHA-256 fallback |
 | LLM Client | OpenAI SDK | 1.0+ | Async completions |
-| Orchestration | LangGraph | 0.0.50+ | StateGraph execution |
-| LangChain | langchain-core | 0.1+ | Message types |
+| Orchestration | LangGraph | 1.1+ | StateGraph execution |
+| LangChain | langchain-core | 1.3+ | Message types |
 | MCP SDK | mcp | 1.0+ | Model Context Protocol |
 | PDF Processing | PyMuPDF (fitz) | 1.23+ | Text extraction |
 | Pipeline | Celery | 5.3+ | Background task queue |

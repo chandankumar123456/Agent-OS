@@ -262,7 +262,7 @@ print("\n" + "="*70)
 print("SYSTEM 5: REDIS EVENT SYSTEM")
 print("="*70)
 
-from app.orchestrator.v2.event_bus import RedisEventBus, Event
+from app.orchestrator.event_bus import RedisEventBus, Event
 
 # 5.1 Event serialization/deserialization
 evt = Event("test_event", {"key": "value"}, source="test")

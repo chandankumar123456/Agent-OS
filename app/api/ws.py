@@ -4,7 +4,7 @@ import urllib.parse
 from datetime import datetime
 from typing import Dict, List, Optional
 from fastapi import WebSocket, WebSocketDisconnect, Query
-from ..orchestrator.v2.event_bus import event_bus, Event
+from ..orchestrator.event_bus import event_bus, Event
 from ..logs.logger import logger
 from ..auth.utils import verify_access_token
 

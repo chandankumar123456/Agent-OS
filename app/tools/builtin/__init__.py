@@ -4,7 +4,6 @@ from .github import GitHubSearchReposTool, GitHubGetRepoTool
 from .slack import SlackSendMessageTool
 from .notion import NotionSearchPagesTool
 from .web_scraper import WebScraperExtractTextTool
-from .code_executor import CodeExecutorRunPythonTool
 
 
 BUILTIN_TOOLS: List[BaseTool] = [
@@ -13,7 +12,7 @@ BUILTIN_TOOLS: List[BaseTool] = [
     SlackSendMessageTool(),
     NotionSearchPagesTool(),
     WebScraperExtractTextTool(),
-    CodeExecutorRunPythonTool(),
+    # CodeExecutorRunPythonTool is now provided by the code_executor MCP server.
 ]
 
 

@@ -2,7 +2,6 @@ import asyncio
 import os
 from typing import Dict, Any, List, Optional
 from ..logs.logger import logger
-from ..mcp.protocol import mcp_protocol
 from .worker import AgentWorker
 from .factory import AgentFactory
 from .pool import AgentPool
@@ -111,15 +110,6 @@ class AgentRuntime:
         for worker in list(self._workers.values()):
             if worker._task and not worker._task.done():
                 worker._task.cancel()
-        for agent_id in list(self._workers.keys()):
-            try:
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(mcp_protocol.router.unregister(agent_id))
-                except RuntimeError:
-                    pass
-            except Exception as e:
-                logger.warning(f"Failed to unregister {agent_id} during reset: {e}")
         self._workers.clear()
         self._register_locks.clear()
         self._initialized = False
@@ -154,9 +144,6 @@ class AgentRuntime:
                 await worker.start()
                 self._workers[agent_id] = worker
 
-                # Register worker with MCP protocol so it can receive messages
-                await mcp_protocol.router.register(agent_id, worker.on_message)
-
                 logger.info(f"Registered agent {agent_id} of type {agent_type}")
                 return worker
             except Exception:
@@ -184,10 +171,6 @@ class AgentRuntime:
         """Stop all workers."""
         errors = []
         for agent_id, worker in list(self._workers.items()):
-            try:
-                await mcp_protocol.router.unregister(agent_id)
-            except Exception as e:
-                errors.append((agent_id, f"unregister: {e}"))
             try:
                 await worker.stop()
             except Exception as e:

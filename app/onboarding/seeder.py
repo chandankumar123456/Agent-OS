@@ -2,7 +2,6 @@ from uuid import uuid4
 from datetime import datetime
 from ..memory.long_term import db
 from ..memory.models import (
-    AgentConfigV2Model,
     WorkflowModel,
     TaskModel,
     StepModel,
@@ -12,39 +11,6 @@ from ..memory.models import (
 )
 from sqlalchemy import select
 from ..logs.logger import logger
-
-EXAMPLE_AGENTS = [
-    {
-        "agent_id": "example_researcher_v2",
-        "name": "Research Analyst",
-        "role": "researcher",
-        "goal": "Find and synthesize information on any topic",
-        "backstory": "You are a research analyst with expertise in web search and text processing.",
-        "model": "gpt-4o",
-        "temperature": 0.3,
-        "tools": ["web_search", "text_processor"],
-    },
-    {
-        "agent_id": "example_coder_v2",
-        "name": "Code Assistant",
-        "role": "coder",
-        "goal": "Write clean, well-documented code",
-        "backstory": "You are a senior software engineer specializing in multiple languages.",
-        "model": "gpt-4o",
-        "temperature": 0.1,
-        "tools": ["shell"],
-    },
-    {
-        "agent_id": "example_analyst_v2",
-        "name": "Data Analyst",
-        "role": "analyst",
-        "goal": "Calculate metrics, process text, and present findings clearly",
-        "backstory": "You are a data analyst with strong statistical skills.",
-        "model": "gpt-4o-mini",
-        "temperature": 0.2,
-        "tools": ["calculator", "text_processor"],
-    },
-]
 
 EXAMPLE_WORKFLOWS = [
     {
@@ -74,36 +40,6 @@ async def seed_example_data(user_id: str):
     logger.info(f"Seeding example data for user {user_id}")
 
     async with db.get_session() as session:
-        # Seed v2 agents idempotently
-        for agent_data in EXAMPLE_AGENTS:
-            try:
-                result = await session.execute(
-                    select(AgentConfigV2Model).where(AgentConfigV2Model.agent_id == agent_data["agent_id"])
-                )
-                existing = result.scalar_one_or_none()
-                if existing:
-                    logger.info(f"Agent {agent_data['agent_id']} already exists, skipping")
-                    continue
-
-                agent = AgentConfigV2Model(
-                    id=uuid4(),
-                    agent_id=agent_data["agent_id"],
-                    name=agent_data["name"],
-                    role=agent_data["role"],
-                    goal=agent_data["goal"],
-                    backstory=agent_data["backstory"],
-                    model=agent_data["model"],
-                    temperature=agent_data["temperature"],
-                    tools=agent_data["tools"],
-                    status="active",
-                )
-                session.add(agent)
-                await session.commit()
-                logger.info(f"Seeded agent {agent_data['name']}")
-            except Exception as e:
-                logger.warning(f"Failed to seed agent {agent_data['name']}: {e}")
-                await session.rollback()
-
         # Seed workflows idempotently
         for wf_data in EXAMPLE_WORKFLOWS:
             try:

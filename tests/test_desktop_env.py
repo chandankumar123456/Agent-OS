@@ -1,8 +1,9 @@
 import sys
 import pytest
-from unittest.mock import MagicMock, PropertyMock, patch
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
 from app.environments.desktop_env import DesktopSession, DesktopSessionManager
+from app.environments.execution_stabilizer import ActionStabilizer
 
 
 @pytest.fixture
@@ -48,6 +49,29 @@ def mock_sync_wait():
 
     with patch.object(DesktopSession, "_sync_wait", _noop):
         yield
+
+
+@pytest.fixture(autouse=True)
+def mock_stabilizer_extras():
+    """Make stabilizer fast and deterministic in unit tests."""
+    with patch.object(
+        ActionStabilizer, "detect_popup_window", new=AsyncMock(return_value=None)
+    ):
+        with patch.object(
+            ActionStabilizer,
+            "verify_state_change",
+            new=AsyncMock(
+                return_value={
+                    "changed": True,
+                    "screenshot_changed": True,
+                    "tree_changed": False,
+                    "after_screenshot_path": None,
+                    "after_tree_hash": None,
+                    "notes": "mocked change",
+                }
+            ),
+        ):
+            yield
 
 
 class TestDesktopSession:
@@ -267,3 +291,27 @@ class TestDesktopSession:
                     await session.get_ui_tree()
                     assert session._ui_element_map == {}
                     assert session._next_element_id == 1
+
+    @pytest.mark.asyncio
+    async def test_click_element_creates_snapshot(self, mock_pyautogui):
+        session = DesktopSession("task-snap")
+        session._ui_element_map[1] = {
+            "center": (100, 200),
+            "name": "Submit",
+            "type": "Button",
+        }
+        result = await session.click_element(1)
+        assert result.success is True
+        history = session.get_snapshot_history()
+        assert len(history) == 1
+        assert history[0]["action_name"] == "click_element"
+        assert history[0]["params"]["element_id"] == 1
+
+    @pytest.mark.asyncio
+    async def test_snapshot_history_cleared_on_close(self, mock_pyautogui):
+        session = DesktopSession("task-snap-close")
+        session._ui_element_map[1] = {"center": (10, 20), "name": "A", "type": "Button"}
+        await session.click_element(1)
+        assert len(session.get_snapshot_history()) == 1
+        await session.close()
+        assert len(session.get_snapshot_history()) == 0

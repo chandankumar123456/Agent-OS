@@ -98,3 +98,16 @@ pyautogui
 pyperclip 
 pygetwindow 
 mss
+numpy
+opencv-python-headless
+
+# OmniParser v2 dependencies (vision escalation layer)
+# Install torch CPU separately: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+transformers
+ultralytics
+easyocr
+huggingface-hub
+timm
+einops
+supervision==0.18.0
+pillow

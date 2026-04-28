@@ -168,22 +168,43 @@ class CapabilityRouter:
         return "task"
 
     def _suggest_tools(self, cap: Capability, query: str) -> List[str]:
-        """Suggest likely tools for a capability."""
-        suggestions: Dict[Capability, List[str]] = {
-            Capability.FILE: ["filesystem__write_file", "filesystem__read_file", "filesystem__list_directory"],
-            Capability.CODE: ["shell__execute_command", "filesystem__write_file"],
-            Capability.WEB: ["cloud_api__http_request", "cloud_api__scrape_page", "cloud_api__search_web"],
-            Capability.SHELL: ["shell__execute_command", "shell__run_script"],
+        """Suggest likely tools for a capability by querying the live registry.
+
+        Falls back to capability-based heuristics only when the registry
+        is unavailable, and filters to tools that actually exist.
+        """
+        from ..tools.registry import tool_registry
+
+        cap_prefixes = {
+            Capability.FILE: ["filesystem__"],
+            Capability.CODE: ["shell__", "code_executor__"],
+            Capability.WEB: ["cloud_api__", "browser_env__"],
+            Capability.SHELL: ["shell__"],
             Capability.WORKFLOW: [],
-            Capability.DEPLOYMENT: ["shell__execute_command"],
-            Capability.KNOWLEDGE: [],
+            Capability.DEPLOYMENT: ["shell__"],
+            Capability.KNOWLEDGE: ["document__"],
             Capability.CHAT: [],
-            Capability.RESEARCH: ["cloud_api__search_web", "cloud_api__http_request"],
-            Capability.COMMUNICATION: ["cloud_api__send_email", "cloud_api__send_message"],
-            Capability.DATA_PROCESSING: ["local__process_data", "local__compute_statistics"],
-            Capability.DESKTOP: ["desktop_env__screenshot", "desktop_env__click", "desktop_env__type_text", "desktop_env__press_key", "desktop_env__get_window_list", "desktop_env__focus_window"],
+            Capability.RESEARCH: ["cloud_api__", "browser_env__"],
+            Capability.COMMUNICATION: ["cloud_api__"],
+            Capability.DATA_PROCESSING: ["shell__", "code_executor__"],
+            Capability.DESKTOP: ["desktop__", "desktop_env__"],
         }
-        return suggestions.get(cap, [])
+
+        prefixes = cap_prefixes.get(cap, [])
+        if not prefixes:
+            return []
+
+        try:
+            registered = tool_registry.list_tools()
+            registered_names = {t["name"] for t in registered}
+            matched = [
+                name for name in registered_names
+                if any(name.startswith(p) for p in prefixes)
+            ]
+            return matched[:5]  # limit suggestions
+        except Exception as e:
+            logger.warning(f"Tool registry lookup failed for capability {cap.value}: {e}")
+            return []
 
 
 class IntentRouter:

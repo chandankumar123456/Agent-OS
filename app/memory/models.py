@@ -292,6 +292,23 @@ class CheckpointModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class CheckpointWriteModel(Base):
+    __tablename__ = "checkpoint_writes"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    thread_id = Column(String(100), nullable=False, index=True)
+    checkpoint_ns = Column(String(100), nullable=False, index=True)
+    checkpoint_id = Column(String(100), nullable=False, index=True)
+    task_id = Column(String(100), nullable=False, index=True)
+    task_path = Column(String(255), nullable=True)
+    write_data = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("thread_id", "checkpoint_ns", "checkpoint_id", "task_id", name="uq_checkpoint_write"),
+    )
+
+
 class UserModel(Base):
     __tablename__ = "users"
     

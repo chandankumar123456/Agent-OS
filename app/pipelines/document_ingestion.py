@@ -5,7 +5,6 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 
 from ..logs.logger import logger
-from ..tools.base import BaseTool, ToolInput, ToolOutput
 
 
 @dataclass
@@ -109,7 +108,7 @@ class TextChunker:
         chunks = []
         start = 0
         while start < len(text):
-            end = start + self.chunk_size
+            end = min(start + self.chunk_size, len(text))
             if end < len(text):
                 paragraph_break = text.rfind("\n\n", start, end)
                 if paragraph_break > start + self.chunk_size // 2:
@@ -119,7 +118,9 @@ class TextChunker:
                     if sentence_break > start + self.chunk_size // 2:
                         end = sentence_break + 2
             chunks.append(text[start:end].strip())
-            start = end - self.overlap
+            # Advance start by at least 1 character to guarantee termination
+            # even when overlap >= chunk_size.
+            start = max(end - self.overlap, start + 1)
         return chunks
 
 
@@ -182,47 +183,6 @@ class DocumentIngestionPipeline:
         text = re.sub(r"\n[ \t]+", "\n", text)
         text = "".join(ch for ch in text if ch == "\n" or (ord(ch) >= 32 and ord(ch) < 127) or ord(ch) > 127)
         return text.strip()
-
-
-class DocumentParseTool(BaseTool):
-    name = "document__parse"
-    description = "Parse a document (PDF, DOCX, TXT, Markdown) and return extracted text and summary."
-
-    def get_schema(self):
-        return {
-            "name": self.name,
-            "description": self.description,
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Absolute path to the document"},
-                    "skip_summary": {"type": "boolean", "default": False},
-                },
-                "required": ["path"],
-            },
-        }
-
-    async def execute(self, tool_input: ToolInput) -> ToolOutput:
-        path = tool_input.parameters.get("path")
-        skip_summary = tool_input.parameters.get("skip_summary", False)
-        if not path or not os.path.exists(path):
-            return ToolOutput(success=False, error=f"File not found: {path}")
-        try:
-            pipeline = DocumentIngestionPipeline()
-            doc = await pipeline.process(path, skip_summary=skip_summary)
-            return ToolOutput(
-                success=True,
-                result={
-                    "path": path,
-                    "text": doc.text,
-                    "summary": doc.summary,
-                    "chunks": doc.chunks,
-                    "metadata": doc.metadata,
-                },
-                visibility={"type": "document_parsed", "path": path, "format": doc.metadata.get("format")},
-            )
-        except Exception as e:
-            return ToolOutput(success=False, error=str(e))
 
 
 # Singleton

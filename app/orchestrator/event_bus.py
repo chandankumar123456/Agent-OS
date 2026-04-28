@@ -3,8 +3,8 @@ import json
 from typing import AsyncIterator, Dict, Any, Optional
 from datetime import datetime
 
-from ...memory.redis_pubsub import redis_pubsub_client
-from ...logs.logger import logger
+from ..memory.redis_pubsub import redis_pubsub_client
+from ..logs.logger import logger
 
 
 class Event:

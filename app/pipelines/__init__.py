@@ -1,6 +1,5 @@
 from .document_ingestion import (
     DocumentIngestionPipeline,
-    DocumentParseTool,
     DocumentContent,
     DocumentParser,
     pipeline,
@@ -8,7 +7,6 @@ from .document_ingestion import (
 
 __all__ = [
     "DocumentIngestionPipeline",
-    "DocumentParseTool",
     "DocumentContent",
     "DocumentParser",
     "pipeline",

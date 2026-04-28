@@ -18,7 +18,7 @@ from .pipeline import PipelineExecutor
 from .context import TaskContext
 from .router import AgentRouter
 from .task_runner import TaskRunner
-from ..orchestrator.v2.event_bus import event_bus, Event
+from ..orchestrator.event_bus import event_bus, Event
 
 
 class Orchestrator:

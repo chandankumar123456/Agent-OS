@@ -42,8 +42,13 @@ class MCPWrappedTool:
         from ..mcp.client_manager import mcp_client_manager
         logger.info(f"[registry][TRACE] MCP INVOKE: name='{self.name}' args={ {k:v for k,v in tool_input.parameters.items() if not k.startswith('_')} }")
         try:
-            # Strip internal params (e.g., _task_id) before sending to MCP server
+            # Strip internal params (e.g., _task_id) before sending to MCP server,
+            # but remap _task_id -> task_id so per-task session isolation works
+            # across environment MCP servers (browser_env, desktop).
+            # ALWAYS overwrite task_id to prevent task hijacking via _task_id injection.
             arguments = {k: v for k, v in tool_input.parameters.items() if not k.startswith("_")}
+            if "_task_id" in tool_input.parameters:
+                arguments["task_id"] = tool_input.parameters["_task_id"]
             result = await mcp_client_manager.call_tool(self.name, arguments)
             content = ""
             if hasattr(result, "content"):
@@ -82,96 +87,203 @@ class ToolRegistry:
         if self._initialized:
             return
         self.tools: Dict[str, RegisteredTool] = {}
-        self._mcp_tools_registered = False
         self._discovery_lock = asyncio.Lock()
         self._register_default_tools()
         self._register_browser_env_tools()
         self._register_desktop_env_tools()
+        self._register_document_tools()
+        self._register_code_tools()
         self._initialized = True
-        # Initialize dynamic tool builder
-        try:
-            from .builder import init_dynamic_tool_factory
-            init_dynamic_tool_factory(self)
-        except Exception as e:
-            logger.warning(f"Dynamic tool factory init failed: {e}")
 
     def _register_default_tools(self):
         self.register(SearchTool())
         self.register(CalculatorTool())
         self.register(TextProcessorTool())
-        try:
-            from ..pipelines.document_ingestion import DocumentParseTool
-            self.register(DocumentParseTool())
-        except Exception as e:
-            logger.warning(f"Could not register DocumentParseTool at startup: {e}")
+        # Document tools are now provided by the document MCP server.
+        # Placeholders with schemas are registered in _register_document_tools()
+        # so the grounding layer sees them before MCP discovery completes.
         logger.info("Default tools registered")
 
     def _register_browser_env_tools(self):
-        from ..environments.browser_env import browser_session_manager
+        """Register browser tools as MCP wrappers.
 
-        class BrowserEnvTool:
-            def __init__(self, name, action):
-                self.name = name
-                self.description = f"Browser environment: {action}"
-                self.tool_type = "browser_env"
-                self._action = action
+        The actual Playwright logic lives in the ``browser_env`` MCP stdio server
+        (``app/mcp/servers/browser.py``).  These placeholders ensure the tools are
+        visible to the grounding layer and executor even before MCP discovery runs.
+        When ``discover_mcp_tools()`` connects to the real server, the schemas are
+        refreshed automatically.
+        """
+        schemas = {
+            "browser_env__launch": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "headless": {"type": "boolean", "description": "Run in headless mode"},
+                },
+            },
+            "browser_env__navigate": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "url": {"type": "string", "description": "URL to navigate to"},
+                },
+                "required": ["url"],
+            },
+            "browser_env__search": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "query": {"type": "string", "description": "Search query"},
+                },
+                "required": ["query"],
+            },
+            "browser_env__click": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "selector": {"type": "string", "description": "CSS selector or xpath"},
+                },
+                "required": ["selector"],
+            },
+            "browser_env__type": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "selector": {"type": "string", "description": "CSS selector or xpath"},
+                    "text": {"type": "string", "description": "Text to type"},
+                },
+                "required": ["selector", "text"],
+            },
+            "browser_env__screenshot": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "path": {"type": "string", "description": "Optional file path to save screenshot"},
+                },
+            },
+            "browser_env__get_text": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                    "selector": {"type": "string", "description": "CSS selector or xpath"},
+                },
+                "required": ["selector"],
+            },
+            "browser_env__close": {
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "Task-scoped session identifier"},
+                },
+            },
+        }
+        for name, schema in schemas.items():
+            action = name.split("__")[-1]
+            self.tools[name] = RegisteredTool(
+                name=name,
+                description=f"Browser environment: {action}",
+                type="mcp",
+                tool=MCPWrappedTool(name=name, description=f"Browser environment: {action}", schema=schema),
+                mcp_tool=True,
+            )
+        logger.info("Browser environment tools registered (MCP placeholders)")
 
-            def get_schema(self):
-                schema = {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": {}}}
-                action = self._action
-                if action == "navigate":
-                    schema["parameters"]["properties"] = {"url": {"type": "string", "description": "URL to navigate to"}}
-                    schema["parameters"]["required"] = ["url"]
-                elif action == "search":
-                    schema["parameters"]["properties"] = {"query": {"type": "string", "description": "Search query"}}
-                    schema["parameters"]["required"] = ["query"]
-                elif action == "click":
-                    schema["parameters"]["properties"] = {"selector": {"type": "string", "description": "CSS selector or xpath"}}
-                    schema["parameters"]["required"] = ["selector"]
-                elif action == "type":
-                    schema["parameters"]["properties"] = {
-                        "selector": {"type": "string", "description": "CSS selector or xpath"},
-                        "text": {"type": "string", "description": "Text to type"}
-                    }
-                    schema["parameters"]["required"] = ["selector", "text"]
-                elif action == "screenshot":
-                    schema["parameters"]["properties"] = {"path": {"type": "string", "description": "Optional file path to save screenshot"}}
-                elif action == "get_text":
-                    schema["parameters"]["properties"] = {"selector": {"type": "string", "description": "CSS selector or xpath"}}
-                    schema["parameters"]["required"] = ["selector"]
-                elif action == "launch":
-                    schema["parameters"]["properties"] = {"headless": {"type": "boolean", "description": "Run in headless mode"}}
-                return schema
+    def _register_document_tools(self):
+        """Register document tools as MCP wrappers.
 
-            async def execute(self, tool_input: ToolInput):
-                params = tool_input.parameters
-                task_id = params.get("_task_id", "default")
-                session = await browser_session_manager.get_or_create_session(task_id)
+        The actual parsing logic lives in the ``document`` MCP stdio server
+        (``app/mcp/servers/document.py``).  These placeholders ensure the tools
+        are visible to the grounding layer and executor even before MCP discovery.
+        """
+        schemas = {
+            "document__parse": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the document"},
+                    "skip_summary": {"type": "boolean", "default": False},
+                },
+                "required": ["path"],
+            },
+            "document__parse_pdf": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the PDF"},
+                },
+                "required": ["path"],
+            },
+            "document__parse_docx": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the DOCX"},
+                },
+                "required": ["path"],
+            },
+            "document__parse_txt": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the text file"},
+                },
+                "required": ["path"],
+            },
+            "document__parse_markdown": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the Markdown file"},
+                },
+                "required": ["path"],
+            },
+            "document__chunk": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The text to chunk"},
+                    "chunk_size": {"type": "integer", "default": 2000},
+                    "overlap": {"type": "integer", "default": 200},
+                },
+                "required": ["text"],
+            },
+            "document__summarize": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the document"},
+                },
+                "required": ["path"],
+            },
+        }
+        for name, schema in schemas.items():
+            self.tools[name] = RegisteredTool(
+                name=name,
+                description=f"Document parsing: {name.split('__')[-1]}",
+                type="mcp",
+                tool=MCPWrappedTool(name=name, description=f"Document parsing: {name.split('__')[-1]}", schema=schema),
+                mcp_tool=True,
+            )
+        logger.info("Document tools registered (MCP placeholders)")
 
-                if self._action == "launch":
-                    return await session.launch(params.get("headless", False))
-                elif self._action == "navigate":
-                    url = params.get("url")
-                    if not url:
-                        return ToolOutput(success=False, error="Missing required parameter 'url' for browser_env__navigate")
-                    return await session.navigate(url)
-                elif self._action == "search":
-                    return await session.search(params.get("query"))
-                elif self._action == "click":
-                    return await session.click(params.get("selector"))
-                elif self._action == "type":
-                    return await session.type_text(params.get("selector"), params.get("text"))
-                elif self._action == "screenshot":
-                    return await session.screenshot(params.get("path"))
-                elif self._action == "get_text":
-                    return await session.get_text(params.get("selector"))
-                elif self._action == "close":
-                    return await browser_session_manager.close_session(task_id)
-                return ToolOutput(success=False, error=f"Unknown action: {self._action}")
+    def _register_code_tools(self):
+        """Register code execution tools as MCP wrappers.
 
-        for action in ["launch", "navigate", "search", "click", "type", "screenshot", "get_text", "close"]:
-            self.register(BrowserEnvTool(f"browser_env__{action}", action))
-        logger.info("Browser environment tools registered")
+        The actual sandboxed execution lives in the ``code_executor`` MCP stdio
+        server (``app/mcp/servers/code.py``).
+        """
+        schema = {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python code to execute. Assign result to a variable named 'result'."},
+                "timeout": {"type": "integer", "default": 30},
+            },
+            "required": ["code"],
+        }
+        self.tools["code_executor__run_python"] = RegisteredTool(
+            name="code_executor__run_python",
+            description="Execute Python code in a sandboxed environment",
+            type="mcp",
+            tool=MCPWrappedTool(
+                name="code_executor__run_python",
+                description="Execute Python code in a sandboxed environment",
+                schema=schema,
+            ),
+            mcp_tool=True,
+        )
+        logger.info("Code execution tools registered (MCP placeholders)")
 
     def _register_desktop_env_tools(self):
         from ..environments.desktop_env import desktop_session_manager
@@ -237,6 +349,30 @@ class ToolRegistry:
                         "key": {"type": "string", "description": "Key to press", "default": "enter"}
                     }
                     schema["parameters"]["required"] = ["element_id"]
+                elif action == "ensure_focus":
+                    schema["parameters"]["properties"] = {
+                        "window_ref_id": {"type": "string", "description": "Window reference ID to focus"},
+                        "title": {"type": "string", "description": "Window title substring to focus"}
+                    }
+                    # At least one of window_ref_id or title is required (enforced at runtime)
+                elif action == "launch_app_and_open_file":
+                    schema["parameters"]["properties"] = {
+                        "file_path": {"type": "string", "description": "Absolute path to the file to open"},
+                        "app_name": {"type": "string", "description": "Application name to use for opening"}
+                    }
+                    schema["parameters"]["required"] = ["file_path"]
+                elif action == "get_window_registry":
+                    schema["parameters"]["properties"] = {}
+                elif action == "save_checkpoint":
+                    schema["parameters"]["properties"] = {"step": {"type": "string", "description": "Checkpoint step identifier"}}
+                    schema["parameters"]["required"] = ["step"]
+                elif action == "get_workflow_state":
+                    schema["parameters"]["properties"] = {}
+                elif action == "set_approval_mode":
+                    schema["parameters"]["properties"] = {
+                        "mode": {"type": "string", "enum": ["standard", "full_trust"], "description": "Approval mode for this session"}
+                    }
+                    schema["parameters"]["required"] = ["mode"]
                 return schema
 
             async def execute(self, tool_input: ToolInput):
@@ -275,10 +411,29 @@ class ToolRegistry:
                     return await session.type_element(params.get("element_id", 0), params.get("text", ""))
                 elif self._action == "focus_and_interact":
                     return await session.focus_and_interact(params.get("element_id", 0), params.get("key", "enter"))
+                elif self._action == "ensure_focus":
+                    return await session.ensure_focus(window_ref_id=params.get("window_ref_id"), title=params.get("title"))
+                elif self._action == "launch_app_and_open_file":
+                    return await session.launch_app_and_open_file(file_path=params["file_path"], app_name=params.get("app_name"))
+                elif self._action == "get_window_registry":
+                    registry = session.get_window_registry()
+                    return ToolOutput(success=True, result=registry.to_dict() if registry else {"refs": [], "count": 0})
+                elif self._action == "save_checkpoint":
+                    orchestrator = await session.get_orchestrator()
+                    await orchestrator.save_checkpoint(step=params["step"])
+                    return ToolOutput(success=True, result=orchestrator.get_state())
+                elif self._action == "get_workflow_state":
+                    orchestrator = await session.get_orchestrator()
+                    return ToolOutput(success=True, result=orchestrator.get_state())
+                elif self._action == "set_approval_mode":
+                    from ..safety.approval_store import approval_store
+                    mode = params.get("mode", "standard")
+                    approval_store.set_mode(task_id, mode)
+                    return ToolOutput(success=True, result={"message": f"Approval mode set to {mode}", "task_id": task_id})
                 logger.error(f"[registry][TRACE] DESKTOP TOOL WRAPPER: unknown action '{self._action}'")
                 return ToolOutput(success=False, error=f"Unknown action: {self._action}")
 
-        for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close"]:
+        for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close", "ensure_focus", "launch_app_and_open_file", "get_window_registry", "save_checkpoint", "get_workflow_state", "set_approval_mode"]:
             self.register(DesktopEnvTool(f"desktop_env__{action}", action))
         # Register semantic element-based tools with desktop__ prefix (matching MCP naming)
         for action in ["get_ui_tree", "click_element", "type_element", "focus_and_interact"]:
@@ -314,13 +469,10 @@ class ToolRegistry:
                 mcp_tool=True,
             )
             logger.info(f"Registered MCP tool: {name}")
-        self._mcp_tools_registered = True
 
     async def discover_mcp_tools(self) -> None:
         """Discover and register tools from connected MCP servers."""
         async with self._discovery_lock:
-            if self._mcp_tools_registered:
-                return
             try:
                 from ..mcp.client_manager import mcp_client_manager
                 mcp_tools = await mcp_client_manager.list_tools()
@@ -332,23 +484,6 @@ class ToolRegistry:
         registered = self.tools.get(name)
         if registered:
             return registered.tool
-        # Try dynamic build
-        try:
-            from .builder import dynamic_tool_factory
-            if dynamic_tool_factory:
-                # Fire-and-forget async build (sync wrapper)
-                import asyncio
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(dynamic_tool_factory.ensure_tool(name))
-                except RuntimeError:
-                    pass
-                # Re-check after giving async a moment
-                registered = self.tools.get(name)
-                if registered:
-                    return registered.tool
-        except Exception as e:
-            logger.debug(f"Dynamic tool build attempt failed for {name}: {e}")
         return None
 
     def get_by_prefix(self, prefix: str) -> List[Dict[str, Any]]:
@@ -422,6 +557,17 @@ class ToolRegistry:
         if not registered.tool:
             logger.error(f"[registry][TRACE] EXECUTE FAIL: tool '{tool_name}' has no implementation")
             return ToolOutput(success=False, error=f"Tool '{tool_name}' has no implementation")
+
+        # Validate parameters against schema
+        schema = registered.tool.get_schema()
+        required = schema.get("parameters", {}).get("required", [])
+        for param in required:
+            if param not in parameters:
+                logger.error(f"[registry][TRACE] EXECUTE FAIL: tool '{tool_name}' missing required param '{param}'")
+                return ToolOutput(
+                    success=False,
+                    error=f"Missing required parameter '{param}' for tool '{tool_name}'",
+                )
 
         logger.info(f"[registry][TRACE] EXECUTE DISPATCH: tool_name='{tool_name}' type={getattr(registered.tool, 'tool_type', 'unknown')} mcp={registered.mcp_tool}")
         try:

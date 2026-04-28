@@ -17,7 +17,7 @@ except ImportError:
             return data
 from sqlalchemy import select, delete
 
-from ..memory.models import CheckpointModel
+from ..memory.models import CheckpointModel, CheckpointWriteModel
 from ..memory.long_term import db
 from ..logs.logger import logger
 
@@ -106,6 +106,19 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
             }
         }
 
+    async def _load_pending_writes(self, session, thread_id: str, checkpoint_ns: str, checkpoint_id: str):
+        """Load pending writes for a checkpoint."""
+        from sqlalchemy import select as sa_select
+        result = await session.execute(
+            sa_select(CheckpointWriteModel).where(
+                CheckpointWriteModel.thread_id == thread_id,
+                CheckpointWriteModel.checkpoint_ns == checkpoint_ns,
+                CheckpointWriteModel.checkpoint_id == checkpoint_id,
+            )
+        )
+        rows = result.scalars().all()
+        return [_decode(r.write_data) for r in rows]
+
     async def aget_tuple(self, config: Dict[str, Any]) -> Optional[CheckpointTuple]:
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -147,6 +160,10 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     }
                 }
 
+            pending_writes = await self._load_pending_writes(
+                session, thread_id, checkpoint_ns, row.checkpoint_id
+            )
+
             return CheckpointTuple(
                 config={
                     "configurable": {
@@ -158,7 +175,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                 checkpoint=checkpoint,
                 metadata=metadata,
                 parent_config=parent_config,
-                pending_writes=None,
+                pending_writes=pending_writes or None,
             )
 
     async def alist(
@@ -199,6 +216,9 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                             "checkpoint_id": row.parent_checkpoint_id,
                         }
                     }
+                pending_writes = await self._load_pending_writes(
+                    session, row.thread_id, row.checkpoint_ns, row.checkpoint_id
+                )
                 yield CheckpointTuple(
                     config={
                         "configurable": {
@@ -210,7 +230,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     checkpoint=checkpoint,
                     metadata=metadata,
                     parent_config=parent_config,
-                    pending_writes=None,
+                    pending_writes=pending_writes or None,
                 )
 
     async def aput_writes(
@@ -220,15 +240,26 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
         task_id: str,
         task_path: str = "",
     ) -> None:
-        """Store intermediate writes linked to a checkpoint.
-
-        Minimal implementation: writes are logged but not persisted to a
-        separate table. For full resume/interrupt support, implement a
-        checkpoint_writes table in the future.
-        """
+        """Persist intermediate writes for resume/interrupt support."""
+        import uuid as _uuid
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"].get("checkpoint_id", "")
+
+        async with db.get_session() as session:
+            for write in writes:
+                row = CheckpointWriteModel(
+                    id=str(_uuid.uuid4()),
+                    thread_id=thread_id,
+                    checkpoint_ns=checkpoint_ns,
+                    checkpoint_id=checkpoint_id,
+                    task_id=task_id,
+                    task_path=task_path,
+                    write_data=_encode(write),
+                )
+                session.add(row)
+            await session.commit()
+
         logger.debug(
             f"aput_writes: thread={thread_id} ns={checkpoint_ns} "
             f"checkpoint={checkpoint_id} task={task_id} writes={len(writes)}"

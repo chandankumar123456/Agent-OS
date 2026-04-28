@@ -5,12 +5,21 @@ from ..logs.logger import logger
 
 
 class AgentWorker:
-    """Async coroutine worker that owns an agent config and processes AgentInput from an internal queue."""
+    """Async coroutine worker that owns an agent config.
+
+    NOTE (2026-04-27): The inbox queue and _run_loop are FUTURE INFRASTRUCTURE
+    for multi-agent message routing. They are currently inactive because:
+    - LangGraph bypasses workers and calls tool_registry.execute() directly.
+    - Legacy fallback modes call worker.agent_instance.execute() synchronously.
+    The loop is started but never receives messages. Do not remove; it will be
+    wired back when true multi-agent message passing is implemented.
+    """
 
     def __init__(self, agent_id: str, config: Dict[str, Any], agent_instance):
         self.agent_id = agent_id
         self.config = config
         self.agent_instance = agent_instance
+        # FUTURE: inbox queue for multi-agent message routing (currently inactive)
         self.inbox: asyncio.Queue = asyncio.Queue()
         self._task: Optional[asyncio.Task] = None
         self._running = False

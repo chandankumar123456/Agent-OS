@@ -94,7 +94,7 @@ const OnboardingModal: React.FC<OnboardingModalProps> = ({ onClose }) => {
               </div>
             </motion.button>
             <motion.button
-              onClick={() => handleSelection('/builder/v2')}
+              onClick={() => handleSelection('/builder')}
               whileTap={{ scale: 0.96 }}
               className="flex items-center gap-3 p-4 bg-surface-highest rounded-xl border border-outline/10 hover:border-primary/30 transition-all group text-left"
             >
@@ -107,7 +107,7 @@ const OnboardingModal: React.FC<OnboardingModalProps> = ({ onClose }) => {
               </div>
             </motion.button>
             <motion.button
-              onClick={() => handleSelection('/workflows/builder/v2')}
+              onClick={() => handleSelection('/workflows/builder')}
               whileTap={{ scale: 0.96 }}
               className="flex items-center gap-3 p-4 bg-surface-highest rounded-xl border border-outline/10 hover:border-primary/30 transition-all group text-left"
             >
