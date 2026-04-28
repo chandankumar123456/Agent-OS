@@ -15,6 +15,14 @@ class AgentOSLogger:
             stream = sys.stderr if os.environ.get("AGENTOS_LOG_STDERR") else sys.stdout
             handler = logging.StreamHandler(stream)
             handler.setLevel(logging.INFO)
+            # Force UTF-8 to prevent Windows cp1252 UnicodeEncodeError crashes
+            if hasattr(handler.stream, "reconfigure"):
+                handler.stream.reconfigure(encoding="utf-8", errors="replace")
+            elif hasattr(handler.stream, "buffer"):
+                import io
+                handler.stream = io.TextIOWrapper(
+                    handler.stream.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                )
             formatter = logging.Formatter(
                 '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
             )

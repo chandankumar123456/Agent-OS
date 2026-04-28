@@ -18,6 +18,7 @@ from ..observability import observability_bus, ObservabilityEventType
 from ..safety.gate import SafetyGate, ActionSeverity
 from ..orchestrator.event_bus import event_bus, Event
 from .state import AgentState
+from ..execution_state import ExecutionState, ToolExecutionRecord, ExecutionVerdict
 
 
 def _to_openai_messages(messages):
@@ -142,11 +143,86 @@ async def _observe_desktop_state(task_id: str) -> Dict[str, Any]:
     return state
 
 
+def _required_desktop_actions(description: str) -> set:
+    """Parse step description to determine which actions must succeed."""
+    desc = description.lower()
+    required = set()
+    if any(k in desc for k in ("type", "write", "enter text", "input text")):
+        required.add("type")
+    if any(k in desc for k in ("paste", "ctrl+v", "clipboard")):
+        required.add("paste")
+    if any(k in desc for k in ("save", "ctrl+s")):
+        required.add("save")
+    if any(k in desc for k in ("focus", "switch to", "bring to front")):
+        required.add("focus")
+    if any(k in desc for k in ("open", "launch", "start")):
+        required.add("open")
+    # If description implies only opening, require open; otherwise leave empty
+    # and fall through to legacy terminal checks
+    return required
+
+
 async def _check_desktop_goal(
     task_id: str,
     step_description: str,
+    tool_calls: List[Dict[str, Any]],
+    execution_state: Optional[ExecutionState] = None,
+    step_number: int = 0,
 ) -> tuple:
-    """Check if the desktop goal is reached using deterministic verification."""
+    """Check if the desktop goal is reached using canonical execution state first.
+
+    Priority:
+    1. Intent-based action completion (type/paste/save/focus/open required)
+    2. ExecutionState terminal success (canonical, no re-verification)
+    3. Recent successful tool_call evidence (backwards compat)
+    4. verification_engine.verify_plan (UI-based fallback)
+    """
+    # 1. Intent-based requirement checking
+    required = _required_desktop_actions(step_description)
+    if required:
+        successful = set()
+        for call in tool_calls:
+            if call.get("step") != step_number:
+                continue
+            result = call.get("result", {})
+            if not result.get("success"):
+                continue
+            tool = call.get("tool", "")
+            if "type_text" in tool or "type_element" in tool:
+                successful.add("type")
+            elif "press_key" in tool:
+                keys = str(call.get("params", {}).get("keys", "")).lower()
+                if "ctrl" in keys and "v" in keys:
+                    successful.add("paste")
+            elif "focus_window" in tool or "ensure_focus" in tool:
+                successful.add("focus")
+            elif "open_application" in tool or "launch_app" in tool:
+                successful.add("open")
+            elif "save" in tool:
+                successful.add("save")
+        missing = required - successful
+        if missing:
+            return False, f"Missing required actions: {missing}"
+        # All required actions satisfied — goal reached
+        return True, f"Goal reached: all required actions completed ({successful})"
+
+    # 2. Canonical execution state (unified truth)
+    if execution_state and execution_state.has_terminal_success(step_number):
+        step_rec = execution_state.get_step(step_number)
+        if step_rec:
+            return True, f"Goal reached (terminal): {step_rec.notes}"
+
+    # 3. Backwards-compat: check recent successful tool_call
+    for call in reversed(tool_calls):
+        if call.get("tool") == "desktop_env__open_application":
+            result = call.get("result", {})
+            if result.get("success"):
+                data = result.get("data", {})
+                if isinstance(data, dict) and (data.get("pid") or data.get("window")):
+                    return True, "Goal reached: open_application succeeded with PID/window"
+            break  # Only check the most recent open_application call
+
+    # 4. Fallback: re-verify from UI state
     reports = await verification_engine.verify_plan(task_id, [
         {"step": step_description, "id": "desktop_goal"}
     ])
@@ -211,6 +287,12 @@ async def _run_desktop_goal_loop(
     goal_reached = False
     messages: List = []
 
+    # Initialize canonical execution state
+    exec_state_data = state.get("execution_state")
+    execution_state = ExecutionState.from_dict(exec_state_data) if exec_state_data else ExecutionState(task_id=task_id)
+    execution_state.current_step = state.get("current_step_index", 0) + 1
+    step_number = execution_state.current_step
+
     while iteration < max_iterations:
         iteration += 1
         logger.info(f"[_run_desktop_goal_loop] Iteration {iteration}/{max_iterations} for task {task_id}")
@@ -268,8 +350,12 @@ async def _run_desktop_goal_loop(
             if not tool_name:
                 final_answer = response.get("answer") or response.get("details") or json.dumps(response)
                 # Check goal even on answer, then continue if not reached
-                goal_reached, goal_notes = await _check_desktop_goal(task_id, description)
-                logger.info(f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} notes={goal_notes}")
+                goal_reached, goal_notes = await _check_desktop_goal(
+                    task_id, description, tool_calls, execution_state, step_number
+                )
+                logger.info(
+                    f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} "
+                    f"notes={goal_notes} canonical={execution_state.get_step(step_number)}")
                 if goal_reached:
                     final_answer = f"Goal achieved after {iteration} iterations. {goal_notes}"
                     break
@@ -364,9 +450,17 @@ async def _run_desktop_goal_loop(
             })
             step_tool_results.append(tool_result)
 
-            # 3. CHECK GOAL after action
-            goal_reached, goal_notes = await _check_desktop_goal(task_id, description)
-            logger.info(f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} notes={goal_notes}")
+            # Record in canonical execution state
+            tool_record = ToolExecutionRecord.from_tool_result(tool_name, tool_result)
+            execution_state.record_tool(step_number, description, tool_record)
+
+            # 3. CHECK GOAL after action — use canonical state first
+            goal_reached, goal_notes = await _check_desktop_goal(
+                task_id, description, tool_calls, execution_state, step_number
+            )
+            logger.info(
+                f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} "
+                f"notes={goal_notes} canonical={execution_state.get_step(step_number)}")
 
             if goal_reached:
                 final_answer = f"Goal achieved after {iteration} iterations. {goal_notes}"
@@ -381,8 +475,12 @@ async def _run_desktop_goal_loop(
         else:
             final_answer = response.get("answer") or response.get("details") or json.dumps(response)
             # Check goal even on answer
-            goal_reached, goal_notes = await _check_desktop_goal(task_id, description)
-            logger.info(f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} notes={goal_notes}")
+            goal_reached, goal_notes = await _check_desktop_goal(
+                task_id, description, tool_calls, execution_state, step_number
+            )
+            logger.info(
+                f"[_run_desktop_goal_loop][TRACE] GOAL CHECK: reached={goal_reached} "
+                f"notes={goal_notes} canonical={execution_state.get_step(step_number)}")
             if goal_reached:
                 final_answer = f"Goal achieved after {iteration} iterations. {goal_notes}"
                 break
@@ -429,6 +527,7 @@ async def _run_desktop_goal_loop(
         "recovery_decisions": recovery_decisions,
         "status": status,
         "desktop_iterations": iteration,
+        "execution_state": execution_state.to_dict(),
     }
 
 
@@ -517,7 +616,7 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
 
     # ── Deterministic Workflow Decomposition ──────────────────────────
     phases = workflow_decomposer.decompose(query)
-    if len(phases) >= 1:
+    if phases:
         logger.info(f"[planner_node] Using deterministic decomposition: {len(phases)} phases")
         plan = []
         for i, phase in enumerate(phases):
@@ -540,29 +639,13 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
             if paths and phase.name in ("file_search", "file_read", "document_processing", "content_generation"):
                 path_hint = f" Paths mentioned: {', '.join(paths[:2])}."
 
-            # Build a contextual description that includes the original query
-            desc = phase.description
-            if phase.name == "file_search":
-                desc = f"Search the filesystem to locate the file or folder requested by the user. Original task: {query}"
-            elif phase.name == "file_read":
-                desc = f"Read and extract the full contents of the file found in the previous step. Original task: {query}"
-            elif phase.name == "document_processing":
-                desc = f"Process, parse, or summarize the document content extracted in the previous step. Original task: {query}"
-            elif phase.name == "content_generation":
-                desc = f"Create or generate the requested files (HTML, CSS, JS, etc.) based on the processed content. Original task: {query}"
-            elif phase.name == "browser_open":
-                desc = f"Open the created file or result in Chrome / the default browser. Original task: {query}"
-            elif phase.name == "browser_navigation":
-                desc = f"Navigate the browser to perform web-based actions. Original task: {query}"
-            elif phase.name == "desktop_automation":
-                desc = f"Use desktop UI automation if needed to complete GUI interactions. Original task: {query}"
-            elif phase.name == "shell_execution":
-                desc = f"Run the necessary system commands. Original task: {query}"
-            elif phase.name == "web_search":
-                desc = f"Search the web for information. Original task: {query}"
+            # Preserve decomposer-specific atomic descriptions to avoid vague desktop steps.
+            desc = phase.description.strip() if phase.description else phase.name
+            if "original task:" not in desc.lower():
+                desc = f"{desc} Original task: {query}"
 
-            # Hard dependency gate: file processing chain steps are REQUIRED
-            required = phase.name in ("file_search", "file_read", "document_processing", "content_generation", "browser_open")
+            # Sequential dependency gate: every non-final step is required for downstream work.
+            required = i < (len(phases) - 1)
 
             plan.append({
                 "step_number": i + 1,
@@ -571,7 +654,7 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
                 "tool": suggested_tool,
                 "allowed_tools": allowed_tool_names,
                 "fallback_tools": fallback_tool_names,
-                "depends_on": [j + 1 for j in range(i)],  # all prior step numbers
+                "depends_on": [i] if i > 0 else [],
                 "expected_output": f"Completed {phase.name} for: {query}",
                 "required": required,
             })
@@ -706,6 +789,11 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     suggested_tool = step.get("tool")
 
     logger.info(f"[executor_node] Executing step {step_number} for task {task_id}: {description}")
+
+    # Initialize canonical execution state
+    exec_state_data = state.get("execution_state")
+    execution_state = ExecutionState.from_dict(exec_state_data) if exec_state_data else ExecutionState(task_id=task_id)
+    execution_state.current_step = step_number
 
     await observability_bus.emit_safe(
         ObservabilityEventType.STEP_STARTED,
@@ -1020,6 +1108,10 @@ To provide a direct answer (only if no tool is needed):
             })
             step_tool_results.append(tool_result)
 
+            # Record in canonical execution state
+            tool_record = ToolExecutionRecord.from_tool_result(tool_name, tool_result)
+            execution_state.record_tool(step_number, description, tool_record)
+
             # ── Deterministic Verification ─────────────────────────────
             if tool_result["success"]:
                 if "filesystem" in tool_name and tool_params.get("path"):
@@ -1034,6 +1126,7 @@ To provide a direct answer (only if no tool is needed):
                             error=v_report.failure_reason,
                             verification_report=v_report,
                             current_tool=tool_name,
+                            execution_state=execution_state.to_dict(),
                         )
                         recovery_decisions.append(decision.model_dump())
                         await observability_bus.emit_safe(
@@ -1103,6 +1196,7 @@ To provide a direct answer (only if no tool is needed):
         "verification_reports": verification_reports,
         "recovery_decisions": recovery_decisions,
         "status": "step_executed",
+        "execution_state": execution_state.to_dict(),
     }
 
 
@@ -1125,6 +1219,11 @@ async def _execute_tool_call(
     verification_reports = list(state.get("verification_reports", []))
     recovery_decisions = list(state.get("recovery_decisions", []))
 
+    # Initialize canonical execution state
+    exec_state_data = state.get("execution_state")
+    execution_state = ExecutionState.from_dict(exec_state_data) if exec_state_data else ExecutionState(task_id=task_id)
+    execution_state.current_step = step_number
+
     # Validate tool exists
     tool = tool_registry.get(tool_name)
     if not tool:
@@ -1145,6 +1244,7 @@ async def _execute_tool_call(
             "verification_reports": verification_reports,
             "recovery_decisions": recovery_decisions,
             "status": "step_executed",
+            "execution_state": execution_state.to_dict(),
         }
 
     severity = SafetyGate().check_tool_call(tool_name, tool_params, state.get("query", ""))
@@ -1165,6 +1265,9 @@ async def _execute_tool_call(
             "result": tool_result,
         })
         step_tool_results.append(tool_result)
+        # Record blocked action in canonical state
+        tool_record = ToolExecutionRecord.from_tool_result(tool_name, tool_result)
+        execution_state.record_tool(step_number, description, tool_record)
         step_output = {
             "step_number": step_number,
             "description": description,
@@ -1181,6 +1284,7 @@ async def _execute_tool_call(
             "verification_reports": verification_reports,
             "recovery_decisions": recovery_decisions,
             "status": "blocked",
+            "execution_state": execution_state.to_dict(),
         }
 
     logger.info(f"[_execute_tool_call][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
@@ -1212,6 +1316,10 @@ async def _execute_tool_call(
         "result": tool_result,
     })
     step_tool_results.append(tool_result)
+
+    # Record in canonical execution state
+    tool_record = ToolExecutionRecord.from_tool_result(tool_name, tool_result)
+    execution_state.record_tool(step_number, description, tool_record)
 
     # Deterministic verification
     if tool_result["success"]:
@@ -1254,6 +1362,7 @@ async def _execute_tool_call(
         "verification_reports": verification_reports,
         "recovery_decisions": recovery_decisions,
         "status": "step_executed",
+        "execution_state": execution_state.to_dict(),
     }
 
 
@@ -1275,15 +1384,39 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
     env_config = state.get("environment_config", {})
     env_type = env_config.get("environment", "local") if isinstance(env_config, dict) else getattr(env_config, "environment", "local")
 
+    # ── Canonical Execution State (unified truth) ────────────────────
+    exec_state_data = state.get("execution_state")
+    execution_state = ExecutionState.from_dict(exec_state_data) if exec_state_data else None
+
     # ── Deterministic Verification ───────────────────────────────────
     det_reports = []
     det_pass = True
     try:
-        det_reports = await verification_engine.verify_plan(task_id, plan)
-        for r in det_reports:
-            if r.result == VerificationResult.FAIL:
-                det_pass = False
-                break
+        # 1. Check canonical execution state first (terminal success = skip re-verification)
+        if execution_state and execution_state.has_any_terminal_success():
+            det_pass = True
+            det_reports = []
+            logger.info(f"[verifier_node] Terminal success detected in execution_state; skipping re-verification")
+        else:
+            # 2. Fallback: check raw tool_calls for backwards compat
+            tool_calls = state.get("tool_calls", []) or []
+            open_app_calls = [
+                t for t in tool_calls
+                if t.get("tool") == "desktop_env__open_application"
+                and t.get("result", {}).get("success")
+                and isinstance(t.get("result", {}).get("data"), dict)
+                and (t["result"]["data"].get("pid") or t["result"]["data"].get("window"))
+            ]
+            if open_app_calls:
+                det_pass = True
+                det_reports = []
+                logger.info(f"[verifier_node] Successful open_application detected in tool_calls; skipping re-verification")
+            else:
+                det_reports = await verification_engine.verify_plan(task_id, plan)
+                for r in det_reports:
+                    if r.result == VerificationResult.FAIL:
+                        det_pass = False
+                        break
     except Exception as e:
         logger.warning(f"[verifier_node] Deterministic verification error: {e}")
 
@@ -1292,59 +1425,88 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
     for r in det_reports:
         existing_reports.append(r.model_dump())
 
-    # If deterministic checks all pass, we still run LLM for semantic validation
-    # If they fail, we can short-circuit unless recovery already handled it
+    # ── LLM Semantic Verification (skip for deterministic terminal success) ─
+    llm_verified = False
+    notes = ""
+    if det_pass and execution_state and execution_state.has_any_terminal_success():
+        # Deterministic terminal success is trusted; skip expensive LLM verification
+        llm_verified = True
+        notes = "Deterministic terminal success verified. Skipping LLM semantic check."
+        logger.info(f"[verifier_node] Deterministic terminal success — skipping LLM verification")
+    else:
+        llm = get_llm_client()
+        context = json.dumps({"query": query, "steps": steps}, indent=2, default=str)
 
-    # ── LLM Semantic Verification ────────────────────────────────────
-    llm = get_llm_client()
-    context = json.dumps({"query": query, "steps": steps}, indent=2, default=str)
+        messages = [
+            SystemMessage(content=VERIFIER_SYSTEM_PROMPT),
+            HumanMessage(content=f"Context:\n{context}"),
+        ]
 
-    messages = [
-        SystemMessage(content=VERIFIER_SYSTEM_PROMPT),
-        HumanMessage(content=f"Context:\n{context}"),
-    ]
-
-    try:
-        raw = await llm.complete_json(
-            messages=_to_openai_messages(messages),
-            response_schema={
-                "type": "object",
-                "properties": {
-                    "verified": {"type": "boolean"},
-                    "notes": {"type": "string"},
+        try:
+            raw = await llm.complete_json(
+                messages=_to_openai_messages(messages),
+                response_schema={
+                    "type": "object",
+                    "properties": {
+                        "verified": {"type": "boolean"},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["verified", "notes"],
                 },
-                "required": ["verified", "notes"],
-            },
-        )
-        llm_verified = raw.get("verified", False)
-        notes = raw.get("notes", "")
-    except Exception as e:
-        logger.error(f"[verifier_node] LLM verification failed: {e}")
-        llm_verified = False
-        notes = f"LLM verification error: {e}"
+            )
+            llm_verified = raw.get("verified", False)
+            notes = raw.get("notes", "")
+        except Exception as e:
+            logger.error(f"[verifier_node] LLM verification failed: {e}")
+            llm_verified = False
+            notes = f"LLM verification error: {e}"
 
     # Environment-specific verification
     env_verified = True
     env_notes = ""
     if env_type == "browser_ui":
-        tool_calls = state.get("tool_calls", [])
-        browser_calls = [t for t in tool_calls if t.get("tool", "").startswith("browser_env__")]
+        # Check canonical execution state first, then fall back to tool_calls
+        browser_calls = []
+        if execution_state:
+            for step_rec in execution_state.steps.values():
+                for tool_rec in step_rec.tools:
+                    if tool_rec.tool_name.startswith("browser_env__"):
+                        browser_calls.append(tool_rec.to_dict())
+        if not browser_calls:
+            tool_calls = state.get("tool_calls", [])
+            browser_calls = [t for t in tool_calls if t.get("tool", "").startswith("browser_env__")]
         if not browser_calls:
             env_verified = False
             env_notes = "Browser environment selected but no browser_env tools were invoked."
         else:
             env_notes = f"Browser automation verified: {len(browser_calls)} browser actions performed."
     elif env_type == "cloud_api":
-        tool_calls = state.get("tool_calls", [])
-        cloud_calls = [t for t in tool_calls if t.get("tool", "").startswith("cloud__")]
+        # Check canonical execution state first, then fall back to tool_calls
+        cloud_calls = []
+        if execution_state:
+            for step_rec in execution_state.steps.values():
+                for tool_rec in step_rec.tools:
+                    if tool_rec.tool_name.startswith("cloud__"):
+                        cloud_calls.append(tool_rec.to_dict())
+        if not cloud_calls:
+            tool_calls = state.get("tool_calls", [])
+            cloud_calls = [t for t in tool_calls if t.get("tool", "").startswith("cloud__")]
         if not cloud_calls:
             env_verified = False
             env_notes = "Cloud API environment selected but no cloud tools were invoked."
         else:
             env_notes = f"Cloud API verified: {len(cloud_calls)} API calls made."
     elif env_type == "desktop":
-        tool_calls = state.get("tool_calls", [])
-        desktop_calls = [t for t in tool_calls if t.get("tool", "").startswith(("desktop_env__", "desktop__"))]
+        # Check canonical execution state first, then fall back to tool_calls
+        desktop_calls = []
+        if execution_state:
+            for step_rec in execution_state.steps.values():
+                for tool_rec in step_rec.tools:
+                    if tool_rec.tool_name.startswith(("desktop_env__", "desktop__")):
+                        desktop_calls.append(tool_rec.to_dict())
+        if not desktop_calls:
+            tool_calls = state.get("tool_calls", [])
+            desktop_calls = [t for t in tool_calls if t.get("tool", "").startswith(("desktop_env__", "desktop__"))]
         if not desktop_calls:
             env_verified = False
             env_notes = "Desktop environment selected but no desktop tools were invoked."

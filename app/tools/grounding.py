@@ -63,6 +63,8 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
         "shell__get_process_status",
     ],
     "desktop_automation": [
+        "desktop_env__open_application",
+        "desktop_env__launch_app_and_open_file",
         "desktop_env__screenshot",
         "desktop_env__click",
         "desktop_env__type_text",
@@ -70,7 +72,6 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
         "desktop_env__get_window_list",
         "desktop_env__focus_window",
         "desktop_env__ensure_focus",
-        "desktop_env__launch_app_and_open_file",
         "desktop_env__get_window_registry",
         "desktop_env__save_checkpoint",
         "desktop_env__get_workflow_state",
@@ -96,6 +97,7 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
         "desktop__desktop__type_element",
         "desktop__desktop__focus_and_interact",
         "desktop__desktop__ensure_focus",
+        "desktop__desktop__open_application",
         "desktop__desktop__launch_app_and_open_file",
         "desktop__desktop__get_window_registry",
         "desktop__desktop__save_checkpoint",
@@ -261,6 +263,14 @@ STEP_INTENT_MAP: Dict[str, str] = {
 class ToolGroundingLayer:
     """Deterministically maps task intent to allowed tool sets."""
 
+    DESKTOP_OPEN_VERBS = ("open", "launch", "start")
+    DESKTOP_LAUNCH_TOOL_NAMES = (
+        "desktop_env__open_application",
+        "desktop_env__launch_app_and_open_file",
+        "desktop__desktop__open_application",
+        "desktop__desktop__launch_app_and_open_file",
+    )
+
     def classify_intent(self, step_description: str) -> str:
         """Classify a step description into a capability intent."""
         desc_lower = step_description.lower()
@@ -383,7 +393,17 @@ class ToolGroundingLayer:
     def filter_tools_for_step(self, step_description: str, all_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Main entry point: given a step description, return grounded tools."""
         intent = self.classify_intent(step_description)
-        return self.get_allowed_tools(intent, all_tools)
+        allowed = self.get_allowed_tools(intent, all_tools)
+
+        # Hard constraint: desktop open/launch/start requests must keep app-launch tools.
+        desc_lower = step_description.lower()
+        if intent == "desktop_automation" and any(v in desc_lower for v in self.DESKTOP_OPEN_VERBS):
+            allowed_by_name = {t.get("name"): t for t in allowed}
+            for tool in all_tools:
+                name = tool.get("name", "")
+                if name in self.DESKTOP_LAUNCH_TOOL_NAMES and name not in allowed_by_name:
+                    allowed.append(tool)
+        return allowed
 
     def get_intent_for_tool(self, tool_name: str) -> Optional[str]:
         """Reverse lookup: what intent is a tool valid for?"""
@@ -428,6 +448,11 @@ class ToolGroundingLayer:
     def get_primary_tools(self, intent: str, tools: List[Dict[str, Any]], exclude_desktop_for_non_desktop: bool = True) -> List[Dict[str, Any]]:
         """Get primary (non-fallback) tools for an intent, excluding desktop unless intent is desktop."""
         ranked = self.rank_tools_for_intent(intent, tools)
+        # Launch/open tools must never be dropped for desktop automation plans.
+        if intent == "desktop_automation":
+            launch_tools = [t for t in ranked if t.get("name") in self.DESKTOP_LAUNCH_TOOL_NAMES]
+            remainder = [t for t in ranked if t.get("name") not in self.DESKTOP_LAUNCH_TOOL_NAMES]
+            ranked = launch_tools + remainder
         if exclude_desktop_for_non_desktop and intent != "desktop_automation":
             ranked = [t for t in ranked if not t.get("name", "").startswith(("desktop_env__", "desktop__desktop__"))]
         return ranked

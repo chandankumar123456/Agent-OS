@@ -12,6 +12,7 @@ from ..logs.logger import logger
 from ..tools.base import ToolOutput
 from .vision_fallback import get_vision_parser, VisionFallbackParser
 from .execution_stabilizer import ActionStabilizer, StabilizerConfig
+from .app_launcher import launch_application, is_process_running, resolve_app_path
 
 # Optional dependencies (graceful degradation if missing)
 try:
@@ -30,7 +31,7 @@ except Exception:  # pragma: no cover
     gw = None  # type: ignore
 
 try:
-    from mss import mss
+    import mss
     from mss.exception import ScreenShotError
 except Exception:  # pragma: no cover
     mss = None  # type: ignore
@@ -44,6 +45,16 @@ except Exception:  # pragma: no cover
 
 class DesktopSession:
     """A single desktop automation session scoped to one task."""
+    _DETERMINISTIC_TYPING_KEYWORDS = (
+        "notepad",
+        "wordpad",
+        "notepad++",
+        "visual studio code",
+        "vscode",
+        "sublime text",
+        "gedit",
+        "text editor",
+    )
 
     def __init__(self, task_id: str):
         self.task_id = task_id
@@ -51,6 +62,7 @@ class DesktopSession:
         self._ui_element_map: Dict[int, Dict[str, Any]] = {}
         self._next_element_id: int = 1
         self._last_tree_hash: Optional[str] = None
+        self._last_opened_app_name: Optional[str] = None
         self._stabilizer = ActionStabilizer(StabilizerConfig())
         self._window_registry: Optional[Any] = None
         self._orchestrator: Optional[Any] = None
@@ -138,15 +150,51 @@ class DesktopSession:
             return f"Coordinates ({x}, {y}) out of screen bounds ({width}, {height})"
         return None
 
-    async def _sync_wait(self, timeout: float = 2.0, poll_interval: float = 0.3) -> None:
-        """Wait for UI to stabilize using screenshot comparison."""
+    async def _sync_wait(
+        self,
+        action_name: str = "generic",
+        timeout: Optional[float] = None,
+        poll_interval: Optional[float] = None,
+    ) -> None:
+        """Wait for UI to stabilize using multiple stabilization strategies.
+
+        Strategies used based on action type:
+        - Screenshot comparison (all actions)
+        - Window list stabilization (app launches, focus changes)
+        - Accessibility tree hash stabilization (element interactions)
+        """
+        config = self._stabilizer.config.get_for_action(action_name)
+        max_wait = timeout or config.stabilization_max_wait
+        poll_interval = poll_interval or config.stabilization_poll_interval
+
+        # 1. Screenshot stabilization
         stable, _ = await self._stabilizer.wait_for_ui_stability(
             screenshot_fn=self.screenshot,
-            max_wait=timeout,
+            max_wait=max_wait,
             poll_interval=poll_interval,
         )
         if not stable:
-            logger.warning(f"DesktopSession[{self.task_id}]: UI did not stabilize within {timeout}s")
+            logger.warning(f"DesktopSession[{self.task_id}]: Screenshot did not stabilize within {max_wait}s for {action_name}")
+
+        # 2. Window stabilization for app/focus actions
+        if action_name in {"open_application", "launch_app_and_open_file", "focus_window", "ensure_focus"}:
+            win_stable, _ = await self._stabilizer.wait_for_window_stability(
+                window_list_fn=self._get_window_list_for_stabilizer,
+                max_wait=max_wait,
+                poll_interval=poll_interval,
+            )
+            if not win_stable:
+                logger.warning(f"DesktopSession[{self.task_id}]: Window list did not stabilize within {max_wait}s for {action_name}")
+
+        # 3. Tree stabilization for element interactions
+        if action_name in {"click_element", "type_element", "focus_and_interact", "click", "type_text", "press_key", "scroll"}:
+            tree_stable, _ = await self._stabilizer.wait_for_tree_stability(
+                tree_hash_fn=self._get_current_tree_hash,
+                max_wait=max_wait,
+                poll_interval=poll_interval,
+            )
+            if not tree_stable:
+                logger.warning(f"DesktopSession[{self.task_id}]: Tree hash did not stabilize within {max_wait}s for {action_name}")
 
     async def _get_current_tree_hash(self) -> str:
         """Get tree hash without rebuilding the whole tree if possible."""
@@ -364,11 +412,19 @@ class DesktopSession:
         canonical = json.dumps(tree, sort_keys=True, ensure_ascii=True)
         return hashlib.md5(canonical.encode("utf-8")).hexdigest()
 
+    # Configurable threshold for triggering vision fallback
+    VISION_FALLBACK_THRESHOLD: int = 2
+
     async def _vision_fallback(self) -> ToolOutput:
         """Real vision fallback: screenshot → vision parser → structured elements.
 
         Populates ``_ui_element_map`` so ``click_element``, ``type_element``,
         etc. work transparently whether elements came from UIA or vision.
+
+        Hardened with:
+        - Element bounds validation
+        - Minimum actionable element verification
+        - Confidence-based filtering
         """
         screenshot_result = await self.screenshot()
         if not screenshot_result.success:
@@ -418,6 +474,13 @@ class DesktopSession:
             1 for node in tree
             if self._is_interactive_type(node.get("type", ""))
         )
+
+        # Validate: if we have elements but none are actionable, warn but still return them
+        if actionable_count == 0 and len(tree) > 0:
+            logger.warning(
+                f"DesktopSession[{self.task_id}]: vision fallback found {len(tree)} elements "
+                f"but 0 are interactive. Agent may struggle with this screen."
+            )
 
         logger.info(
             f"DesktopSession[{self.task_id}]: vision fallback detected {len(detected)} elements "
@@ -483,10 +546,10 @@ class DesktopSession:
                 "actionable_count": actionable_count,
             }
 
-            if actionable_count < 3:
+            if actionable_count < self.VISION_FALLBACK_THRESHOLD:
                 logger.warning(
-                    f"DesktopSession[{self.task_id}]: sparse tree ({actionable_count} actionable nodes). "
-                    "Triggering vision fallback."
+                    f"DesktopSession[{self.task_id}]: sparse tree ({actionable_count} actionable nodes, "
+                    f"threshold={self.VISION_FALLBACK_THRESHOLD}). Triggering vision fallback."
                 )
                 return await self._vision_fallback()
 
@@ -814,7 +877,13 @@ class DesktopSession:
             visibility={"type": "desktop_type", "text_length": len(text)},
         )
         logger.info(f"[desktop_env][TRACE] type_text RESULT: success={result.success} result={result.result} error={result.error}")
-        await self._sync_wait()
+        if result.success and self._should_skip_type_text_sync_wait():
+            logger.info(
+                f"DesktopSession[{self.task_id}]: skipping post-type stabilization for deterministic text app"
+            )
+            self._last_tree_hash = None
+            return result
+        await self._sync_wait(action_name="type_text")
         self._last_tree_hash = None
         return result
 
@@ -848,7 +917,7 @@ class DesktopSession:
                 visibility={"type": "desktop_key", "keys": keys},
             )
         logger.info(f"[desktop_env][TRACE] press_key RESULT: success={result.success} result={result.result} error={result.error}")
-        await self._sync_wait()
+        await self._sync_wait(action_name="press_key")
         self._last_tree_hash = None
         return result
 
@@ -976,6 +1045,32 @@ class DesktopSession:
         if result.success and isinstance(result.result, dict):
             return result.result.get("windows", [])
         return []
+
+    def _get_active_window_title(self) -> Optional[str]:
+        if gw is None or not hasattr(gw, "getActiveWindow"):
+            return None
+        try:
+            active = gw.getActiveWindow()
+            if active and getattr(active, "title", None):
+                return str(active.title)
+        except Exception:
+            return None
+        return None
+
+    def _is_deterministic_text_app(self, app_or_title: str) -> bool:
+        value = app_or_title.strip().lower()
+        if not value:
+            return False
+        return any(keyword in value for keyword in self._DETERMINISTIC_TYPING_KEYWORDS)
+
+    def _should_skip_type_text_sync_wait(self) -> bool:
+        candidates: List[str] = []
+        if self._last_opened_app_name:
+            candidates.append(self._last_opened_app_name)
+        active_title = self._get_active_window_title()
+        if active_title:
+            candidates.append(active_title)
+        return any(self._is_deterministic_text_app(candidate) for candidate in candidates)
 
     async def ensure_focus(
         self,
@@ -1230,6 +1325,87 @@ class DesktopSession:
             logger.debug(f"DesktopSession[{self.task_id}]: verify foreground failed: {e}")
             return False
 
+    async def open_application(
+        self,
+        app_name: str,
+        verify: bool = True,
+    ) -> ToolOutput:
+        """Open an application by name with deterministic verification.
+
+        Resolution order:
+            1. Common name map (notepad → notepad.exe, etc.)
+            2. Windows Registry App Paths
+            3. Windows Registry Uninstall (InstallLocation)
+            4. Start Menu shortcuts
+            5. Common installation directories
+            6. PATH search
+
+        After launch:
+            - Verify process exists
+            - Verify window appears
+            - Fallback to UI automation if direct launch fails
+            - Fail cleanly if all methods fail
+        """
+        logger.info(f"[desktop_env][TRACE] open_application CALLED: app_name='{app_name}'")
+        if self._is_headless():
+            return ToolOutput(
+                success=False,
+                error="Desktop automation unavailable: running headless (no display detected)",
+            )
+
+        try:
+            launch_result = await launch_application(app_name, timeout=10.0, verify_window=verify)
+            if launch_result.success:
+                self._last_opened_app_name = app_name.strip().lower()
+                window_info = launch_result.window_info or {}
+                # Register in WindowRegistry
+                if self._window_registry is not None and window_info:
+                    try:
+                        register_fn = getattr(self._window_registry, "register", None)
+                        if register_fn:
+                            ref_id = register_fn(
+                                window_info.get("title", app_name),
+                                hwnd=window_info.get("hwnd"),
+                            )
+                            window_info["ref_id"] = ref_id
+                    except Exception as e:
+                        logger.debug(
+                            f"DesktopSession[{self.task_id}]: registry register failed: {e}"
+                        )
+
+                logger.info(
+                    f"[desktop_env][TRACE] open_application SUCCESS: app='{app_name}' "
+                    f"method='{launch_result.method}' window='{window_info.get('title')}'"
+                )
+                return ToolOutput(
+                    success=True,
+                    result={
+                        "message": f"Opened {app_name}",
+                        "app_name": app_name,
+                        "process_path": launch_result.process_path,
+                        "pid": launch_result.pid,
+                        "window": window_info,
+                        "method": launch_result.method,
+                    },
+                    visibility={
+                        "type": "desktop_open_app",
+                        "app_name": app_name,
+                        "window_title": window_info.get("title"),
+                    },
+                )
+            else:
+                logger.error(
+                    f"[desktop_env][TRACE] open_application FAILED: app='{app_name}' "
+                    f"error='{launch_result.error}'"
+                )
+                return ToolOutput(
+                    success=False,
+                    error=launch_result.error or f"Failed to open {app_name}",
+                )
+        except Exception as e:
+            logger.error(f"[desktop_env][TRACE] open_application EXCEPTION: app='{app_name}' error={e}")
+            return ToolOutput(success=False, error=str(e))
+
     async def launch_app_and_open_file(
         self,
         file_path: str,
@@ -1477,7 +1653,7 @@ class DesktopSession:
             default_result={"message": f"Scrolled {amount}"},
             visibility={"type": "desktop_scroll", "amount": amount},
         )
-        await self._sync_wait()
+        await self._sync_wait(action_name="scroll")
         self._last_tree_hash = None
         return result
 

@@ -155,7 +155,7 @@ async def test_click_waits_for_visibility(mock_session):
 
     assert result.success is True
     page.wait_for_selector.assert_awaited_once_with("#btn", state="visible", timeout=10000)
-    page.click.assert_awaited_once_with("#btn")
+    page.click.assert_awaited_once_with("#btn", timeout=10000)
 
 
 @pytest.mark.asyncio

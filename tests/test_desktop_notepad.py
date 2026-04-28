@@ -14,6 +14,8 @@ def runtime_tools_mock():
     """Return a mixed tool list containing desktop and generic tools."""
     return [
         # Registered desktop_env tools
+        {"name": "desktop_env__open_application"},
+        {"name": "desktop_env__launch_app_and_open_file"},
         {"name": "desktop_env__click"},
         {"name": "desktop_env__type_text"},
         {"name": "desktop_env__press_key"},
@@ -46,6 +48,7 @@ class TestDesktopGroundingRegression:
         grounded_names = {t["name"] for t in grounded}
 
         # Must contain desktop tools
+        assert "desktop_env__open_application" in grounded_names
         assert "desktop_env__click" in grounded_names
         assert "desktop_env__type_text" in grounded_names
         assert "desktop__desktop__click" in grounded_names
@@ -54,6 +57,21 @@ class TestDesktopGroundingRegression:
         assert "web_search" not in grounded_names
         assert "calculator" not in grounded_names
         assert "text_processor" not in grounded_names
+
+    def test_open_verbs_force_launch_tools_in_grounded_set(self, runtime_tools_mock):
+        """open/launch/start phrases must retain desktop launch tools."""
+        step = "Start notepad and type hello world."
+        grounded = tool_grounding_layer.filter_tools_for_step(step, runtime_tools_mock)
+        grounded_names = {t["name"] for t in grounded}
+
+        assert "desktop_env__open_application" in grounded_names
+        assert "desktop_env__launch_app_and_open_file" in grounded_names
+
+    def test_primary_desktop_tools_keep_open_application_in_top_slice(self, runtime_tools_mock):
+        """Planner truncation must not remove open_application from primary desktop tools."""
+        ranked = tool_grounding_layer.get_primary_tools("desktop_automation", runtime_tools_mock)
+        top_names = [t["name"] for t in ranked[:8]]
+        assert "desktop_env__open_application" in top_names
 
     def test_type_in_notepad_intent_classified_as_desktop(self, runtime_tools_mock):
         """Typing in Notepad must ground typing-related desktop tools."""

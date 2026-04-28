@@ -241,7 +241,7 @@ class PlannerAgent:
         logger.info(f"Planner executing for query: {query}")
 
         phases = workflow_decomposer.decompose(query)
-        if len(phases) > 1:
+        if phases:
             all_tools = tool_registry.list_tools()
             steps = []
             for i, phase in enumerate(phases):
@@ -250,16 +250,19 @@ class PlannerAgent:
                 allowed_names = [t["name"] for t in primary[:8]]
                 fallback_names = [t["name"] for t in fallback[:4]]
                 suggested = allowed_names[0] if allowed_names else (fallback_names[0] if fallback_names else None)
+                step_text = phase.description.strip() if phase.description else phase.name
+                if "original task:" not in step_text.lower():
+                    step_text = f"{step_text} Original task: {query}"
                 steps.append({
                     "id": f"step_{i+1}",
-                    "step": phase.description,
+                    "step": step_text,
                     "step_type": phase.name,
                     "allowed_tools": allowed_names,
                     "fallback_tools": fallback_names,
                     "expected_output": f"Completed {phase.name}",
-                    "required": phase.name in ("file_search", "file_read", "document_processing", "content_generation", "browser_open"),
+                    "required": i < (len(phases) - 1),
                     "agent_type": "executor",
-                    "depends_on": [f"step_{j+1}" for j in range(i)],
+                    "depends_on": [f"step_{i}"] if i > 0 else [],
                 })
             return AgentOutput(
                 task_id=input_data.task_id,

@@ -43,6 +43,34 @@ class WorkflowDecomposer:
         "press button", "check box", "select menu",
     }
 
+    OPEN_ACTIONS: tuple[str, ...] = ("open", "launch", "start")
+    CONTENT_GENERATION_KEYWORDS: tuple[str, ...] = (
+        "opinion", "summary", "summarize", "draft", "compose", "compare", "comparison",
+        "thoughts", "explain",
+    )
+    TEXT_ENTRY_ACTIONS: tuple[str, ...] = ("type", "write", "enter", "paste")
+    BROWSER_APPS: tuple[str, ...] = ("chrome", "browser", "edge", "firefox")
+
+    # Cross-app workflow extension keywords (browser → reasoning → desktop → file)
+    TRANSFORM_KEYWORDS: tuple[str, ...] = (
+        "summarize", "summary", "rewrite", "analyze", "translate", "paraphrase",
+    )
+    EXTRACT_KEYWORDS: tuple[str, ...] = (
+        "top result", "first result", "article", "extract", "open result", "open the top",
+        "comments",
+    )
+    PASTE_KEYWORDS: tuple[str, ...] = (
+        "paste", "type into", "type in", "write into", "write in", "paste into",
+    )
+    SAVE_KEYWORDS: tuple[str, ...] = (
+        "save file", "save it", "save as", "save to", "save the file", "save summary",
+        "and save", "save the summary",
+    )
+    DESKTOP_PASTE_TARGETS: set = {"notepad", "wordpad"}
+    KNOWN_SITES: set = {
+        "youtube", "gmail", "twitter", "x.com", "github", "reddit", "amazon",
+    }
+
     PHASE_PATTERNS: List[Dict[str, Any]] = [
         {
             "name": "file_search",
@@ -139,6 +167,323 @@ class WorkflowDecomposer:
 
         return has_desktop, has_browser
 
+    def _extract_opened_app(self, query_lower: str) -> Optional[str]:
+        """Return the app name if query contains open/launch/start <app>."""
+        for verb in self.OPEN_ACTIONS:
+            match = re.search(rf"\b{verb}\b\s+(?:the\s+)?([a-z0-9\.\-\s]+)", query_lower)
+            if not match:
+                continue
+            segment = match.group(1).strip()
+            # Take up to 3 words to avoid capturing the whole sentence.
+            words = segment.split()
+            candidates = [" ".join(words[:i]) for i in range(min(3, len(words)), 0, -1)]
+            for cand in candidates:
+                if cand in self.DESKTOP_APP_KEYWORDS or cand in self.BROWSER_APPS:
+                    return cand
+        return None
+
+    def _decompose_open_and_type_desktop(self, query: str, query_lower: str) -> List[WorkflowPhase]:
+        """Special-case: open desktop app and type/write content."""
+        app = self._extract_opened_app(query_lower)
+        if not app or app in self.BROWSER_APPS:
+            return []
+
+        has_open = any(v in query_lower for v in self.OPEN_ACTIONS)
+        has_text_entry = any(v in query_lower for v in self.TEXT_ENTRY_ACTIONS)
+        if not (has_open and has_text_entry):
+            return []
+
+        needs_generation = any(k in query_lower for k in self.CONTENT_GENERATION_KEYWORDS)
+        app_label = "Notepad" if app == "notepad" else app.title()
+
+        phases: List[WorkflowPhase] = [
+            WorkflowPhase(
+                phase_id="phase_1",
+                name="desktop_automation",
+                description=f"Open {app_label} using desktop_env__open_application.",
+                intent="desktop_automation",
+                verification_criteria=[{"type": "desktop_app_opened", "app": app_label}],
+            ),
+            WorkflowPhase(
+                phase_id="phase_2",
+                name="desktop_automation",
+                description=f"Verify {app_label} is open using desktop_env__get_window_list.",
+                intent="desktop_automation",
+                verification_criteria=[{"type": "window_visible", "app": app_label}],
+            ),
+        ]
+
+        if needs_generation:
+            phases.append(
+                WorkflowPhase(
+                    phase_id=f"phase_{len(phases) + 1}",
+                    name="content_generation",
+                    description=f"Generate the text content requested by the user before typing it into {app_label}. Original task: {query}",
+                    intent="content_generation",
+                    verification_criteria=[{"type": "text_generated"}],
+                )
+            )
+
+        phases.extend([
+            WorkflowPhase(
+                phase_id=f"phase_{len(phases) + 1}",
+                name="desktop_automation",
+                description=f"Focus the {app_label} window using desktop_env__focus_window or desktop_env__ensure_focus.",
+                intent="desktop_automation",
+                verification_criteria=[{"type": "window_focused", "app": app_label}],
+            ),
+            WorkflowPhase(
+                phase_id=f"phase_{len(phases) + 1}",
+                name="desktop_automation",
+                description=f"Type the requested text into {app_label} using desktop_env__type_text.",
+                intent="desktop_automation",
+                verification_criteria=[{"type": "desktop_action_completed"}],
+            ),
+            WorkflowPhase(
+                phase_id=f"phase_{len(phases) + 1}",
+                name="desktop_automation",
+                description=f"Verify the text was entered in {app_label} using desktop_env__screenshot or desktop__get_ui_tree.",
+                intent="desktop_automation",
+                verification_criteria=[{"type": "text_entry_verified"}],
+            ),
+        ])
+        return phases
+
+    def _extract_search_query(self, query_lower: str) -> str:
+        """Extract the actual search target between `search` and the next connector verb.
+
+        Falls back to empty string when no clean phrase is found; caller should
+        handle that case by emitting a generic search-step description.
+        """
+        connector = (
+            r"summariz|rewrite|analyz|translat|paraphras|paste|"
+            r"open\s+\w|save\b|then\b|after\s+that\b|next\b|finally\b|and\s+save\b"
+        )
+        m = re.search(
+            rf"\bsearch\b\s+(?:for\s+)?(.+?)(?=\s+(?:and\s+)?(?:{connector})|$)",
+            query_lower,
+        )
+        if not m:
+            return ""
+        phrase = m.group(1).strip(" .,;:'\"")
+        # Strip leading filler words.
+        for filler in ("for ", "the ", "about "):
+            if phrase.startswith(filler):
+                phrase = phrase[len(filler):]
+        return phrase
+
+    def _detect_browser_trigger(self, query_lower: str) -> Optional[str]:
+        """Return browser/site label when query opens a browser or known web site.
+
+        Scans every `open|launch|start|go to <target>` occurrence so that prompts
+        like "open notepad ... then open chrome ..." still surface the browser.
+        """
+        for m in re.finditer(
+            r"\b(open|launch|start|go\s+to)\b\s+(?:the\s+)?([a-z0-9\.\-]+)",
+            query_lower,
+        ):
+            target = m.group(2)
+            if target in self.BROWSER_APPS or target in self.KNOWN_SITES:
+                return target
+        return None
+
+    def _decompose_open_browser_and_search(self, query_lower: str) -> List[WorkflowPhase]:
+        """Special-case: open browser (or known site) then search query."""
+        target = self._detect_browser_trigger(query_lower)
+        if not target:
+            return []
+
+        has_open = any(v in query_lower for v in self.OPEN_ACTIONS) or "go to" in query_lower
+        has_search = any(k in query_lower for k in ("search", "look up", "find", "google"))
+        if not (has_open and has_search):
+            return []
+
+        search_query = self._extract_search_query(query_lower)
+        if search_query:
+            search_desc = (
+                f'Search for "{search_query}" in the browser using browser_env__search '
+                f'(query="{search_query}"). Do NOT pass the entire user prompt as the query.'
+            )
+        else:
+            search_desc = "Search for the requested query in the browser using browser_env__search."
+
+        # Site-specific navigation: route through the known site first when applicable.
+        if target in self.KNOWN_SITES:
+            site_domain = "x.com" if target == "x.com" else f"{target}.com"
+            launch_desc = (
+                f"Open the browser using browser_env__launch and navigate to https://{site_domain} "
+                f"using browser_env__navigate."
+            )
+        else:
+            launch_desc = "Open the browser using browser_env__launch."
+
+        phases = [
+            WorkflowPhase(
+                phase_id="phase_1",
+                name="browser_navigation",
+                description=launch_desc,
+                intent="browser_navigation",
+                verification_criteria=[{"type": "browser_opened"}],
+            ),
+            WorkflowPhase(
+                phase_id="phase_2",
+                name="browser_navigation",
+                description="Verify the browser window is open and ready using browser_env__screenshot.",
+                intent="browser_navigation",
+                verification_criteria=[{"type": "browser_opened"}],
+            ),
+            WorkflowPhase(
+                phase_id="phase_3",
+                name="browser_navigation",
+                description=search_desc,
+                intent="browser_navigation",
+                verification_criteria=[{"type": "browser_navigated"}],
+            ),
+            WorkflowPhase(
+                phase_id="phase_4",
+                name="browser_navigation",
+                description="Verify search results loaded using browser_env__get_text or browser_env__screenshot.",
+                intent="browser_navigation",
+                verification_criteria=[{"type": "web_content"}],
+            ),
+        ]
+        return phases
+
+    def _extend_browser_workflow(
+        self,
+        query: str,
+        query_lower: str,
+        base_phases: List[WorkflowPhase],
+    ) -> List[WorkflowPhase]:
+        """Append cross-app follow-up phases (extract / summarize / desktop / save)."""
+        has_extract = any(k in query_lower for k in self.EXTRACT_KEYWORDS)
+        has_transform = any(k in query_lower for k in self.TRANSFORM_KEYWORDS)
+        has_paste = any(k in query_lower for k in self.PASTE_KEYWORDS)
+        has_save = any(k in query_lower for k in self.SAVE_KEYWORDS) or bool(
+            re.search(r"\bsave\b", query_lower)
+        )
+        desktop_target: Optional[str] = None
+        for app in self.DESKTOP_PASTE_TARGETS:
+            if app in query_lower:
+                desktop_target = app
+                break
+
+        # If none of the cross-app verbs are present, leave the base 4-phase plan untouched.
+        if not (has_extract or has_transform or has_paste or has_save or desktop_target):
+            return base_phases
+
+        phases = list(base_phases)
+        next_id = lambda: f"phase_{len(phases) + 1}"
+
+        # Step: open top result and extract its content. Comments wins over the
+        # generic top-result branch so YouTube-style prompts capture the comment thread.
+        if "comments" in query_lower:
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="browser_navigation",
+                description=(
+                    "Open the top result and scroll to the comments section, then extract the "
+                    "comments text using browser_env__get_text."
+                ),
+                intent="browser_navigation",
+                verification_criteria=[{"type": "web_content"}],
+            ))
+        elif has_extract or has_transform:
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="browser_navigation",
+                description=(
+                    "Open the top search result and extract its main article text "
+                    "using browser_env__click on the first result link, then browser_env__get_text "
+                    "to capture the article body."
+                ),
+                intent="browser_navigation",
+                verification_criteria=[{"type": "web_content"}],
+            ))
+
+        # Step: reasoning transformation (summarize/rewrite/analyze/translate).
+        if has_transform:
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="document_processing",
+                description=(
+                    "Summarize / transform the extracted content into a concise summary "
+                    "using document__summarize or text_processor. Store the resulting summary "
+                    "text for downstream paste/save steps."
+                ),
+                intent="document_processing",
+                verification_criteria=[{"type": "summary_generated"}],
+            ))
+
+        # Step: desktop paste target (open + focus + type).
+        notepad_branch = bool(desktop_target and (has_paste or has_transform))
+        app_label = "Notepad" if desktop_target == "notepad" else (
+            desktop_target.title() if desktop_target else "Notepad"
+        )
+        if notepad_branch:
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="desktop_automation",
+                description=(
+                    f"Open {app_label} using desktop_env__open_application. This switches focus "
+                    f"away from the browser to the {app_label} window."
+                ),
+                intent="desktop_automation",
+                verification_criteria=[{"type": "desktop_app_opened", "app": app_label}],
+            ))
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="desktop_automation",
+                description=(
+                    f"Focus the {app_label} window using desktop_env__focus_window or "
+                    f"desktop_env__ensure_focus before typing, to guarantee correct app focus "
+                    f"after the browser→{app_label} transition."
+                ),
+                intent="desktop_automation",
+                verification_criteria=[{"type": "window_focused", "app": app_label}],
+            ))
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="desktop_automation",
+                description=(
+                    f"Type / paste the produced summary text into {app_label} using "
+                    f"desktop_env__type_text (or desktop_env__set_clipboard followed by Ctrl+V via "
+                    f"desktop_env__press_key)."
+                ),
+                intent="desktop_automation",
+                verification_criteria=[{"type": "desktop_action_completed"}],
+            ))
+
+        # Step: persist to filesystem (default summary.txt on Desktop).
+        if has_save:
+            phases.append(WorkflowPhase(
+                phase_id=next_id(),
+                name="file_write",
+                description=(
+                    "Save the produced text to the user's Desktop as 'summary.txt' using "
+                    "filesystem__write_file. If the user did not specify a filename, default to "
+                    "'summary.txt'. If the user did not specify a folder, default to the Desktop "
+                    "(fallback to Downloads). This filesystem write is the authoritative save."
+                ),
+                intent="file_write",
+                verification_criteria=[{"type": "file_exists"}],
+            ))
+            # Mirror the save in the open Notepad window so the user sees a saved document.
+            if notepad_branch:
+                phases.append(WorkflowPhase(
+                    phase_id=next_id(),
+                    name="desktop_automation",
+                    description=(
+                        f"Press Ctrl+S in {app_label} using desktop_env__press_key, then type "
+                        f"'summary.txt' into the save dialog with desktop_env__type_text and "
+                        f"confirm with Enter so the open {app_label} window also persists the file."
+                    ),
+                    intent="desktop_automation",
+                    verification_criteria=[{"type": "desktop_action_completed"}],
+                ))
+
+        return phases
+
     def decompose(self, query: str) -> List[WorkflowPhase]:
         """Decompose a user query into ordered workflow phases.
 
@@ -148,6 +493,34 @@ class WorkflowDecomposer:
         """
         query_lower = query.lower()
         phases: List[WorkflowPhase] = []
+
+        # Special deterministic decompositions for common "open X then act" workflows.
+        special_desktop = self._decompose_open_and_type_desktop(query, query_lower)
+        if special_desktop:
+            # Mixed workflow support: desktop action followed by browser search.
+            browser_follow_up = self._decompose_open_browser_and_search(query_lower)
+            if browser_follow_up:
+                offset = len(special_desktop)
+                for idx, phase in enumerate(browser_follow_up, start=1):
+                    phase.phase_id = f"phase_{offset + idx}"
+                special_desktop.extend(browser_follow_up)
+
+            for i in range(1, len(special_desktop)):
+                special_desktop[i].depends_on = [special_desktop[i - 1].phase_id]
+            logger.info(
+                f"[WorkflowDecomposer] Special decomposition (desktop open/type) into {len(special_desktop)} phases"
+            )
+            return special_desktop
+
+        special_browser = self._decompose_open_browser_and_search(query_lower)
+        if special_browser:
+            extended = self._extend_browser_workflow(query, query_lower, special_browser)
+            for i in range(1, len(extended)):
+                extended[i].depends_on = [extended[i - 1].phase_id]
+            logger.info(
+                f"[WorkflowDecomposer] Special decomposition (browser cross-app) into {len(extended)} phases"
+            )
+            return extended
 
         # Phase 1: Deterministic keyword-based classification
         has_desktop, has_browser = self._classify_query(query)

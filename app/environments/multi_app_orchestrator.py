@@ -831,10 +831,35 @@ class MultiAppOrchestrator:
 
     @staticmethod
     def _launch_app(app_name: str) -> bool:
-        """Attempt to launch an application by name. Returns True on success."""
+        """Attempt to launch an application by name. Returns True on success.
+
+        Uses deterministic path resolution first, then falls back to platform defaults.
+        This is a lightweight launcher for internal orchestrator use.
+        For full verification, use DesktopSession.open_application().
+        """
+        try:
+            from .app_launcher import resolve_app_path
+            resolved = resolve_app_path(app_name)
+            if resolved:
+                if sys.platform == "win32":
+                    if resolved.lower().endswith(".lnk"):
+                        os.startfile(resolved)
+                    else:
+                        subprocess.Popen(
+                            resolved,
+                            shell=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                else:
+                    subprocess.Popen([resolved])
+                return True
+        except Exception:
+            pass
+
+        # Fallback to original platform-specific launch
         try:
             if sys.platform == "win32":
-                # Try ``start`` command first (handles file associations)
                 subprocess.Popen(f"start {app_name}", shell=True)
                 return True
             elif sys.platform.startswith("linux"):

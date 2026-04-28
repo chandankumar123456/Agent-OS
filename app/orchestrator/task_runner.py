@@ -37,13 +37,22 @@ from ..capabilities import (
 from ..capabilities.models import FeasibilityResult
 from ..memory.long_term import workflow_repo
 from ..config import settings
+from .adaptive_routing import (
+    TaskComplexityRouter,
+    DirectExecutor,
+    LightweightSequentialExecutor,
+    ExecutionTier,
+    summarize_intents,
+)
 
 
 class TaskRunner:
     """Compiles and invokes LangGraph state graphs for task execution."""
 
     def __init__(self):
-        pass
+        self.task_complexity_router = TaskComplexityRouter()
+        self.direct_executor = DirectExecutor()
+        self.sequential_executor = LightweightSequentialExecutor()
 
     @staticmethod
     def _new_trace_id() -> str:
@@ -111,6 +120,164 @@ class TaskRunner:
                           (e.g., human approval) by passing Command(resume=resume_value).
         """
         try:
+            # ── Adaptive Execution Router (Tier 0 / 1 / 2) ──────────────
+            should_route = (
+                mode == "task"
+                and resume_state is None
+                and resume_value is None
+            )
+            if should_route:
+                decision = self.task_complexity_router.classify(query)
+                logger.info(
+                    f"[AdaptiveRouter] task={task_id} tier={int(decision.tier)} "
+                    f"reason='{decision.reason}' intents=[{summarize_intents(decision.intents)}]"
+                )
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event(
+                        "adaptive.routing.selected",
+                        {
+                            "tier": int(decision.tier),
+                            "reason": decision.reason,
+                            "intents": [intent.kind for intent in decision.intents],
+                            "intent_details": [
+                                {"kind": intent.kind, "argument": intent.argument}
+                                for intent in decision.intents
+                            ],
+                            "has_multi_step": decision.has_multi_step,
+                            "reasoning_depth": decision.reasoning_depth,
+                            "external_dependencies": decision.uses_external_dependencies,
+                        },
+                        source="orchestrator",
+                    ),
+                )
+
+                if decision.tier == ExecutionTier.DIRECT and decision.intents:
+                    tier0_report = await self.direct_executor.execute(task_id, query, decision.intents[0])
+                    if tier0_report.success:
+                        await event_bus.publish(
+                            f"task:{task_id}",
+                            Event(
+                                "adaptive.routing.executed",
+                                {
+                                    "tier": 0,
+                                    "execution_path": tier0_report.execution_path,
+                                    "actions": len(tier0_report.actions),
+                                },
+                                source="orchestrator",
+                            ),
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.SUCCESS,
+                            output_data=tier0_report.to_output(query, task_id),
+                        )
+
+                    logger.warning(
+                        f"[AdaptiveRouter] task={task_id} Tier 0 failed, escalating to Tier 1: {tier0_report.error}"
+                    )
+                    await event_bus.publish(
+                        f"task:{task_id}",
+                        Event(
+                            "adaptive.routing.escalated",
+                            {
+                                "from_tier": 0,
+                                "to_tier": 1,
+                                "reason": tier0_report.error or "tier_0_failed",
+                            },
+                            source="orchestrator",
+                        ),
+                    )
+                    tier1_report = await self.sequential_executor.execute(task_id, query, decision.intents)
+                    if tier1_report.success:
+                        await event_bus.publish(
+                            f"task:{task_id}",
+                            Event(
+                                "adaptive.routing.executed",
+                                {
+                                    "tier": 1,
+                                    "execution_path": tier1_report.execution_path,
+                                    "actions": len(tier1_report.actions),
+                                    "escalated_from": 0,
+                                },
+                                source="orchestrator",
+                            ),
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.SUCCESS,
+                            output_data=tier1_report.to_output(query, task_id),
+                        )
+
+                    logger.warning(
+                        f"[AdaptiveRouter] task={task_id} Tier 1 failed after escalation, escalating to Tier 2: {tier1_report.error}"
+                    )
+                    await event_bus.publish(
+                        f"task:{task_id}",
+                        Event(
+                            "adaptive.routing.escalated",
+                            {
+                                "from_tier": 1,
+                                "to_tier": 2,
+                                "reason": tier1_report.error or "tier_1_failed",
+                            },
+                            source="orchestrator",
+                        ),
+                    )
+
+                elif decision.tier == ExecutionTier.SEQUENTIAL and decision.intents:
+                    tier1_report = await self.sequential_executor.execute(task_id, query, decision.intents)
+                    if tier1_report.success:
+                        await event_bus.publish(
+                            f"task:{task_id}",
+                            Event(
+                                "adaptive.routing.executed",
+                                {
+                                    "tier": 1,
+                                    "execution_path": tier1_report.execution_path,
+                                    "actions": len(tier1_report.actions),
+                                },
+                                source="orchestrator",
+                            ),
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.SUCCESS,
+                            output_data=tier1_report.to_output(query, task_id),
+                        )
+
+                    logger.warning(
+                        f"[AdaptiveRouter] task={task_id} Tier 1 failed, escalating to Tier 2: {tier1_report.error}"
+                    )
+                    await event_bus.publish(
+                        f"task:{task_id}",
+                        Event(
+                            "adaptive.routing.escalated",
+                            {
+                                "from_tier": 1,
+                                "to_tier": 2,
+                                "reason": tier1_report.error or "tier_1_failed",
+                            },
+                            source="orchestrator",
+                        ),
+                    )
+
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event(
+                        "adaptive.routing.executed",
+                        {
+                            "tier": 2,
+                            "execution_path": "tier_2_full_runtime",
+                            "reason": "langgraph_runtime",
+                        },
+                        source="orchestrator",
+                    ),
+                )
+
             # ── Capability Classification ────────────────────────────────
             assessment = capability_router.classify(query, str(task_id))
             logger.info(

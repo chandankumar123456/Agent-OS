@@ -87,6 +87,14 @@ const Dashboard = () => {
     }
   }, [messages, showToast]);
 
+  // Abort HTTP polling when WebSocket is connected for the active task
+  useEffect(() => {
+    if (wsStatus === 'open' && wsTaskId && pollAbortRef.current) {
+      pollAbortRef.current.abort();
+      pollAbortRef.current = null;
+    }
+  }, [wsStatus, wsTaskId]);
+
   useEffect(() => {
     clearResults();
   }, [wsTaskId, clearResults]);

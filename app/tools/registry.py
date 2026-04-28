@@ -361,6 +361,11 @@ class ToolRegistry:
                         "app_name": {"type": "string", "description": "Application name to use for opening"}
                     }
                     schema["parameters"]["required"] = ["file_path"]
+                elif action == "open_application":
+                    schema["parameters"]["properties"] = {
+                        "app_name": {"type": "string", "description": "Name of the application to open (e.g., notepad, chrome, vscode)"}
+                    }
+                    schema["parameters"]["required"] = ["app_name"]
                 elif action == "get_window_registry":
                     schema["parameters"]["properties"] = {}
                 elif action == "save_checkpoint":
@@ -415,6 +420,8 @@ class ToolRegistry:
                     return await session.ensure_focus(window_ref_id=params.get("window_ref_id"), title=params.get("title"))
                 elif self._action == "launch_app_and_open_file":
                     return await session.launch_app_and_open_file(file_path=params["file_path"], app_name=params.get("app_name"))
+                elif self._action == "open_application":
+                    return await session.open_application(app_name=params["app_name"])
                 elif self._action == "get_window_registry":
                     registry = session.get_window_registry()
                     return ToolOutput(success=True, result=registry.to_dict() if registry else {"refs": [], "count": 0})
@@ -433,7 +440,7 @@ class ToolRegistry:
                 logger.error(f"[registry][TRACE] DESKTOP TOOL WRAPPER: unknown action '{self._action}'")
                 return ToolOutput(success=False, error=f"Unknown action: {self._action}")
 
-        for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close", "ensure_focus", "launch_app_and_open_file", "get_window_registry", "save_checkpoint", "get_workflow_state", "set_approval_mode"]:
+        for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close", "ensure_focus", "launch_app_and_open_file", "open_application", "get_window_registry", "save_checkpoint", "get_workflow_state", "set_approval_mode"]:
             self.register(DesktopEnvTool(f"desktop_env__{action}", action))
         # Register semantic element-based tools with desktop__ prefix (matching MCP naming)
         for action in ["get_ui_tree", "click_element", "type_element", "focus_and_interact"]:

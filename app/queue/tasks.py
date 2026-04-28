@@ -192,7 +192,7 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
                 )
                 await event_bus.publish(
                     f"task:{task_id}",
-                    Event("task.completed", {"task_id": task_id, "status": "completed"}, source="celery"),
+                    Event("task.status_changed", {"task_id": task_id, "status": "completed"}, source="celery"),
                 )
             else:
                 await task_repo.update(
@@ -200,7 +200,7 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
                 )
                 await event_bus.publish(
                     f"task:{task_id}",
-                    Event("task.failed", {"task_id": task_id, "error": result.error_message}, source="celery"),
+                    Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": result.error_message}, source="celery"),
                 )
             return result
         except asyncio.TimeoutError:
@@ -209,14 +209,14 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
             await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=error_msg)
             await event_bus.publish(
                 f"task:{task_id}",
-                Event("task.failed", {"task_id": task_id, "error": error_msg, "reason": "timeout"}, source="celery"),
+                Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": error_msg, "reason": "timeout"}, source="celery"),
             )
             raise RuntimeError(error_msg)
         except Exception as exc:
             await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
             await event_bus.publish(
                 f"task:{task_id}",
-                Event("task.failed", {"task_id": task_id, "error": str(exc)}, source="celery"),
+                Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": str(exc)}, source="celery"),
             )
             raise
         finally:

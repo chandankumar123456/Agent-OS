@@ -69,3 +69,6 @@ class AgentState(TypedDict, total=False):
 
     # Approval mode
     approval_mode: Optional[str]
+
+    # Canonical execution state (unified truth for tool/executor/verifier/recovery)
+    execution_state: Optional[Dict[str, Any]]

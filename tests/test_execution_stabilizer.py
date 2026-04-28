@@ -237,3 +237,229 @@ def test_snapshot_history_capped(stabilizer):
         )
         stabilizer.add_snapshot(s)
     assert len(stabilizer.get_snapshot_history()) == 50
+
+
+# ── New tests for enhanced stabilization ──────────────────────────────
+
+class TestActionSpecificConfig:
+    def test_get_for_action_override(self):
+        config = StabilizerConfig()
+        click_config = config.get_for_action("click")
+        assert click_config.stabilization_max_wait == 2.0
+        assert click_config.verification_timeout == 2.0
+
+    def test_get_for_action_default(self):
+        config = StabilizerConfig()
+        generic_config = config.get_for_action("unknown_action")
+        assert generic_config.stabilization_max_wait == 3.0
+        assert generic_config.verification_timeout == 3.0
+
+    def test_open_application_config(self):
+        config = StabilizerConfig()
+        app_config = config.get_for_action("open_application")
+        assert app_config.stabilization_max_wait == 5.0
+        assert app_config.verification_timeout == 8.0
+
+
+class TestWindowStabilization:
+    @pytest.mark.asyncio
+    async def test_wait_for_window_stability_stable(self):
+        stabilizer = ActionStabilizer(StabilizerConfig())
+        call_count = 0
+
+        async def window_list_fn():
+            nonlocal call_count
+            call_count += 1
+            return [{"title": "Window1"}, {"title": "Window2"}]
+
+        stable, windows = await stabilizer.wait_for_window_stability(
+            window_list_fn, max_wait=1.0, poll_interval=0.05
+        )
+        assert stable is True
+        assert len(windows) == 2
+
+    @pytest.mark.asyncio
+    async def test_wait_for_window_stability_unstable(self):
+        stabilizer = ActionStabilizer(StabilizerConfig())
+        call_count = 0
+
+        async def window_list_fn():
+            nonlocal call_count
+            call_count += 1
+            # Return different windows each time
+            return [{"title": f"Window{call_count}"}]
+
+        stable, windows = await stabilizer.wait_for_window_stability(
+            window_list_fn, max_wait=0.3, poll_interval=0.1
+        )
+        assert stable is False
+
+
+class TestTreeStabilization:
+    @pytest.mark.asyncio
+    async def test_wait_for_tree_stability_stable(self):
+        stabilizer = ActionStabilizer(StabilizerConfig())
+
+        async def tree_hash_fn():
+            return "stable_hash"
+
+        stable, hash_val = await stabilizer.wait_for_tree_stability(
+            tree_hash_fn, max_wait=1.0, poll_interval=0.05
+        )
+        assert stable is True
+        assert hash_val == "stable_hash"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_tree_stability_unstable(self):
+        stabilizer = ActionStabilizer(StabilizerConfig())
+        call_count = 0
+
+        async def tree_hash_fn():
+            nonlocal call_count
+            call_count += 1
+            return f"hash_{call_count}"
+
+        stable, hash_val = await stabilizer.wait_for_tree_stability(
+            tree_hash_fn, max_wait=0.3, poll_interval=0.1
+        )
+        assert stable is False
+
+
+class TestSemanticVerification:
+    @pytest.mark.asyncio
+    async def test_verify_expected_state_passes(self):
+        stabilizer = ActionStabilizer(StabilizerConfig())
+
+        async def expected_state_fn():
+            return True, "Window found"
+
+        result = await stabilizer.verify_expected_state(
+            expected_state_fn, timeout=0.5, poll_interval=0.1
+        )
+        assert result["passed"] is True
+        assert result["notes"] == "Window found"
+
+    @pytest.mark.asyncio
+    async def test_verify_expected_state_fails(self):
+        stabilizer = ActionStabilizer(StabilizerConfig())
+
+        async def expected_state_fn():
+            return False, "Window not found"
+
+        result = await stabilizer.verify_expected_state(
+            expected_state_fn, timeout=0.3, poll_interval=0.1
+        )
+        assert result["passed"] is False
+
+
+class TestActionTruthLogging:
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_expected_state_fn(self, stabilizer):
+        action_fn = AsyncMock(return_value=MagicMock(success=True, result="ok"))
+        screenshot_fn = AsyncMock(return_value=MagicMock(success=True))
+        tree_hash_fn = AsyncMock(return_value="hash")
+        window_list_fn = AsyncMock(return_value=[])
+        element_map_fn = lambda: {}
+
+        async def expected_state_fn():
+            return True, "Notepad window visible"
+
+        result, snapshot = await stabilizer.execute_with_retry(
+            action_name="open_application",
+            action_fn=action_fn,
+            params={"app_name": "notepad"},
+            screenshot_fn=screenshot_fn,
+            tree_hash_fn=tree_hash_fn,
+            window_list_fn=window_list_fn,
+            element_map_fn=element_map_fn,
+            stabilize=False,
+            verify=False,
+            expected_state_fn=expected_state_fn,
+        )
+        assert result.success is True
+        assert snapshot.semantic_verified is True
+        assert snapshot.semantic_notes == "Notepad window visible"
+        assert snapshot.expected_outcome == "expected_state_fn"
+
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_semantic_fail_retries(self, stabilizer):
+        action_fn = AsyncMock(return_value=MagicMock(success=True, result="ok"))
+        screenshot_fn = AsyncMock(return_value=MagicMock(success=True))
+        tree_hash_fn = AsyncMock(return_value="hash")
+        window_list_fn = AsyncMock(return_value=[])
+        element_map_fn = lambda: {}
+
+        call_count = 0
+
+        async def expected_state_fn():
+            nonlocal call_count
+            call_count += 1
+            return call_count > 1, "Window appeared"
+
+        result, snapshot = await stabilizer.execute_with_retry(
+            action_name="open_application",
+            action_fn=action_fn,
+            params={"app_name": "notepad"},
+            screenshot_fn=screenshot_fn,
+            tree_hash_fn=tree_hash_fn,
+            window_list_fn=window_list_fn,
+            element_map_fn=element_map_fn,
+            stabilize=False,
+            verify=False,
+            expected_state_fn=expected_state_fn,
+        )
+        assert result.success is True
+        assert snapshot.semantic_verified is True
+        assert call_count == 2  # First failed, second passed
+
+    @pytest.mark.asyncio
+    async def test_execute_with_retry_semantic_exhausted(self, stabilizer):
+        action_fn = AsyncMock(return_value=MagicMock(success=True, result="ok"))
+        screenshot_fn = AsyncMock(return_value=MagicMock(success=True))
+        tree_hash_fn = AsyncMock(return_value="hash")
+        window_list_fn = AsyncMock(return_value=[])
+        element_map_fn = lambda: {}
+
+        async def expected_state_fn():
+            return False, "Window never appeared"
+
+        result, snapshot = await stabilizer.execute_with_retry(
+            action_name="open_application",
+            action_fn=action_fn,
+            params={"app_name": "notepad"},
+            screenshot_fn=screenshot_fn,
+            tree_hash_fn=tree_hash_fn,
+            window_list_fn=window_list_fn,
+            element_map_fn=element_map_fn,
+            stabilize=False,
+            verify=False,
+            expected_state_fn=expected_state_fn,
+        )
+        # Should exhaust retries and return with semantic_verified=False
+        assert snapshot.semantic_verified is False
+        assert snapshot.semantic_notes is not None
+
+    def test_log_action_truth(self, stabilizer, caplog):
+        import logging
+
+        snapshot = ActionSnapshot(
+            timestamp="2024-01-01T00:00:00",
+            action_name="click",
+            params={"x": 10, "y": 20},
+            before_screenshot_path=None,
+            after_screenshot_path=None,
+            before_tree_hash=None,
+            after_tree_hash=None,
+            before_element_map={},
+            selected_target=None,
+            verification_result={"changed": True},
+            semantic_verified=True,
+            semantic_notes="Button clicked",
+            retry_count=0,
+        )
+        with caplog.at_level(logging.INFO):
+            stabilizer._log_action_truth(snapshot, MagicMock(success=True), "SUCCESS")
+
+        assert "ACTION=click" in caplog.text
+        assert "STATUS=SUCCESS" in caplog.text
+        assert "RETRY=0" in caplog.text

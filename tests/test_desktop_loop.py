@@ -17,6 +17,7 @@ from uuid import uuid4
 from app.langgraph.nodes import executor_node, verifier_node
 from app.langgraph.state import AgentState
 from app.orchestrator.task_runner import TaskRunner
+from app.orchestrator.adaptive_routing import ExecutionTier, TaskRoutingDecision
 from app.agents.base import AgentStatus
 
 
@@ -329,6 +330,11 @@ async def test_task_runner_returns_failure_when_not_verified(
             mock_get_graph.return_value = mock_graph
 
             runner = TaskRunner()
+            runner.task_complexity_router.classify = MagicMock(return_value=TaskRoutingDecision(
+                tier=ExecutionTier.FULL_RUNTIME,
+                reason="forced_tier2_for_test",
+                intents=(),
+            ))
             result = await runner.run("open notepad", {}, uuid4(), "user-1", "task")
 
             assert result.status == AgentStatus.FAILURE, (
@@ -445,6 +451,11 @@ async def test_single_tool_success_does_not_equal_task_success(
             mock_get_graph.return_value = mock_graph
 
             runner = TaskRunner()
+            runner.task_complexity_router.classify = MagicMock(return_value=TaskRoutingDecision(
+                tier=ExecutionTier.FULL_RUNTIME,
+                reason="forced_tier2_for_test",
+                intents=(),
+            ))
             result = await runner.run("open notepad", {}, uuid4(), "user-1", "task")
 
             assert result.status != AgentStatus.SUCCESS, (

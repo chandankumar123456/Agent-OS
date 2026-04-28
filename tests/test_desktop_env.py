@@ -26,8 +26,11 @@ def mock_pyperclip():
 def mock_mss():
     with patch("app.environments.desktop_env.mss") as m:
         sct_instance = MagicMock()
-        m.return_value.__enter__ = MagicMock(return_value=sct_instance)
-        m.return_value.__exit__ = MagicMock(return_value=False)
+        # mss.MSS() is called in the code, so mock MSS attribute's return value
+        mss_mock = MagicMock()
+        mss_mock.__enter__ = MagicMock(return_value=sct_instance)
+        mss_mock.__exit__ = MagicMock(return_value=False)
+        m.MSS = MagicMock(return_value=mss_mock)
         yield m, sct_instance
 
 
@@ -44,7 +47,7 @@ def manager():
 
 @pytest.fixture(autouse=True)
 def mock_sync_wait():
-    async def _noop(self, timeout=2.0, poll_interval=0.3):
+    async def _noop(self, action_name="generic", timeout=None, poll_interval=None):
         pass
 
     with patch.object(DesktopSession, "_sync_wait", _noop):
@@ -117,6 +120,26 @@ class TestDesktopSession:
         result = await session.type_text("hello", interval=0.05)
         assert result.success is True
         mock_pyautogui.typewrite.assert_called_once_with("hello", interval=0.05)
+
+    @pytest.mark.asyncio
+    async def test_type_text_skips_sync_wait_for_deterministic_text_apps(self, mock_pyautogui):
+        session = DesktopSession("task-type-fast")
+        session._last_opened_app_name = "notepad"
+        session._sync_wait = AsyncMock()
+        with patch.object(session, "_get_active_window_title", return_value=None):
+            result = await session.type_text("hello", interval=0.05)
+        assert result.success is True
+        session._sync_wait.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_type_text_runs_sync_wait_for_non_deterministic_apps(self, mock_pyautogui):
+        session = DesktopSession("task-type-slow")
+        session._last_opened_app_name = "excel"
+        session._sync_wait = AsyncMock()
+        with patch.object(session, "_get_active_window_title", return_value=None):
+            result = await session.type_text("hello", interval=0.05)
+        assert result.success is True
+        session._sync_wait.assert_awaited_once_with(action_name="type_text")
 
     @pytest.mark.asyncio
     async def test_press_key_single(self, mock_pyautogui):

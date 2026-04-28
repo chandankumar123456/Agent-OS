@@ -12,6 +12,20 @@ import httpx
 from .models import VerificationResult, VerificationReport
 from ..logs.logger import logger
 
+_PROCESS_ALIASES: Dict[str, List[str]] = {
+    "notepad": ["notepad.exe", "notepad"],
+    "calc": ["calc.exe", "calculator.exe", "calc", "calculator"],
+    "calculator": ["calc.exe", "calculator.exe", "calc", "calculator"],
+    "chrome": ["chrome.exe", "google chrome"],
+    "google chrome": ["chrome.exe", "google chrome"],
+    "edge": ["msedge.exe", "microsoft edge"],
+    "microsoft edge": ["msedge.exe", "microsoft edge"],
+    "vscode": ["code.exe", "visual studio code"],
+    "visual studio code": ["code.exe", "visual studio code"],
+    "whatsapp": ["whatsapp.exe", "whatsapp"],
+    "teams": ["teams.exe", "microsoft teams"],
+    "microsoft teams": ["teams.exe", "microsoft teams"],
+}
 
 class DeterministicVerificationEngine:
     """Provides concrete, deterministic verification for task outputs.
@@ -40,6 +54,7 @@ class DeterministicVerificationEngine:
         self._verifiers["content_extracted"] = self._verify_content_extracted
         self._verifiers["desktop_app_opened"] = self._verify_desktop_app_opened
         self._verifiers["desktop_text_typed"] = self._verify_desktop_text_typed
+        self._verifiers["window_focused"] = self._verify_window_focused
 
     async def verify(
         self,
@@ -137,11 +152,12 @@ class DeterministicVerificationEngine:
                     task_id, step_id, "summary_generated", {}
                 ))
 
-            if any(k in desc for k in ("open notepad", "open calculator", "open app", "launch app", "start app", "open ")):
+            if any(k in desc for k in ("open notepad", "open calculator", "open app", "launch app", "start app", "open ", "open_application")):
                 app_name = self._extract_app_name(desc)
                 if app_name:
+                    aliases = _PROCESS_ALIASES.get(app_name.lower(), [app_name])
                     reports.append(await self.verify(
-                        task_id, step_id, "desktop_app_opened", {"process_name": app_name, "window_title": app_name}
+                        task_id, step_id, "desktop_app_opened", {"app_name": app_name, "process_name": app_name, "window_title": aliases}
                     ))
 
             if any(k in desc for k in ("type", "enter text", "input text", "write text")):
@@ -311,36 +327,104 @@ class DeterministicVerificationEngine:
         return VerificationResult.FAIL, {"error": "No content extracted", "retryable": True}
 
     async def _verify_desktop_app_opened(self, criteria: Dict[str, Any]) -> tuple:
-        """Verify that a desktop application process is running or window exists."""
+        """Verify that a desktop application process is running or window exists.
+
+        Uses deterministic checks in order:
+        1. Process list (tasklist / pgrep) for all aliases
+        2. app_launcher.is_process_running utility for all aliases
+        3. Window existence (pygetwindow) for all aliases
+        """
         process_name = criteria.get("process_name", "")
         window_title = criteria.get("window_title", "")
-        if not process_name and not window_title:
-            return VerificationResult.FAIL, {"error": "No process_name or window_title provided"}
+        app_name = criteria.get("app_name", "")
+        if not process_name and not window_title and not app_name:
+            return VerificationResult.FAIL, {"error": "No process_name, window_title, or app_name provided"}
+
         try:
-            import subprocess
+            from ..environments.app_launcher import is_process_running, _normalize_app_name
+
+            # Build alias list from all provided criteria
+            aliases = []
+            if isinstance(window_title, list):
+                aliases.extend(window_title)
+            elif window_title:
+                aliases.append(window_title)
+            if app_name:
+                aliases.extend(_PROCESS_ALIASES.get(app_name.lower(), [app_name]))
+            if process_name:
+                aliases.extend(_PROCESS_ALIASES.get(process_name.lower(), [process_name]))
+            # Deduplicate while preserving order
+            seen = set()
+            unique_aliases = []
+            for a in aliases:
+                a_lower = a.lower()
+                if a_lower not in seen:
+                    seen.add(a_lower)
+                    unique_aliases.append(a)
+            aliases = unique_aliases
+
+            # Derive a primary process name if not provided
+            if not process_name and app_name:
+                from ..environments.app_launcher import _APP_NAME_MAP
+                normalized = _normalize_app_name(app_name)
+                process_name = _APP_NAME_MAP.get(normalized, app_name)
+                if not process_name.lower().endswith(".exe"):
+                    process_name += ".exe"
+                if process_name.lower() not in seen:
+                    aliases.append(process_name)
+
+            # Check 1: Process list for any alias
+            process_found = False
             if sys.platform == "win32":
-                if process_name:
-                    result = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {process_name}"], capture_output=True, text=True)
-                    if process_name.lower() in result.stdout.lower():
-                        return VerificationResult.PASS, {"process": process_name, "method": "tasklist"}
-                if window_title:
-                    result = subprocess.run(["tasklist", "/V", "/FI", f"WINDOWTITLE eq {window_title}"], capture_output=True, text=True)
-                    if window_title.lower() in result.stdout.lower():
-                        return VerificationResult.PASS, {"window_title": window_title, "method": "tasklist"}
+                import subprocess
+                for alias in aliases:
+                    result = subprocess.run(
+                        ["tasklist", "/FI", f"IMAGENAME eq {alias}"],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if alias.lower() in result.stdout.lower():
+                        process_found = True
+                        break
+                    # Also try with .exe suffix if missing
+                    if not alias.lower().endswith(".exe"):
+                        result2 = subprocess.run(
+                            ["tasklist", "/FI", f"IMAGENAME eq {alias}.exe"],
+                            capture_output=True, text=True, timeout=5
+                        )
+                        if f"{alias}.exe".lower() in result2.stdout.lower():
+                            process_found = True
+                            break
             else:
-                if process_name:
-                    result = subprocess.run(["pgrep", "-f", process_name], capture_output=True)
+                import subprocess
+                for alias in aliases:
+                    result = subprocess.run(["pgrep", "-f", alias], capture_output=True, timeout=5)
                     if result.returncode == 0:
-                        return VerificationResult.PASS, {"process": process_name, "method": "pgrep"}
+                        process_found = True
+                        break
+
+            if process_found:
+                return VerificationResult.PASS, {"process": process_name or aliases[0], "method": "tasklist" if sys.platform == "win32" else "pgrep"}
+
+            # Check 2: app_launcher utility for any alias
+            for alias in aliases:
+                if is_process_running(alias):
+                    return VerificationResult.PASS, {"process": alias, "method": "app_launcher"}
+
+            # Check 3: Window existence for any alias
             try:
                 import pygetwindow as gw
-                if window_title:
-                    windows = gw.getWindowsWithTitle(window_title)
+                all_windows = gw.getAllWindows()
+                for alias in aliases:
+                    windows = gw.getWindowsWithTitle(alias)
                     if windows:
-                        return VerificationResult.PASS, {"window_title": window_title, "method": "pygetwindow"}
+                        return VerificationResult.PASS, {"window_title": alias, "method": "pygetwindow"}
+                    for w in all_windows:
+                        if alias.lower() in w.title.lower():
+                            return VerificationResult.PASS, {"window_title": w.title, "method": "pygetwindow_partial"}
             except Exception:
                 pass
-            return VerificationResult.FAIL, {"error": f"App not found: process={process_name}, window={window_title}", "retryable": True}
+
+            return VerificationResult.FAIL, {"error": f"App not found: process={process_name}, window={window_title}, app={app_name}", "retryable": True}
         except Exception as e:
             return VerificationResult.FAIL, {"error": str(e)}
 
@@ -374,11 +458,50 @@ class DeterministicVerificationEngine:
         except Exception as e:
             return VerificationResult.FAIL, {"error": str(e)}
 
+    async def _verify_window_focused(self, criteria: Dict[str, Any]) -> tuple:
+        """Verify that a specific window is the foreground window."""
+        window_title = criteria.get("window_title", "")
+        hwnd = criteria.get("hwnd")
+        if not window_title and not hwnd:
+            return VerificationResult.FAIL, {"error": "No window_title or hwnd provided"}
+        try:
+            if sys.platform == "win32":
+                import ctypes
+                user32 = ctypes.WinDLL("user32", use_last_error=True)
+                fg_hwnd = user32.GetForegroundWindow()
+
+                if hwnd and fg_hwnd == hwnd:
+                    return VerificationResult.PASS, {"hwnd": hwnd, "method": "ctypes"}
+
+                if window_title:
+                    try:
+                        import pygetwindow as gw
+                        matches = gw.getWindowsWithTitle(window_title)
+                        if matches:
+                            target_hwnd = getattr(matches[0], "_hWnd", None)
+                            if target_hwnd and target_hwnd == fg_hwnd:
+                                return VerificationResult.PASS, {"window_title": window_title, "method": "ctypes_pygetwindow"}
+                    except Exception:
+                        pass
+
+                return VerificationResult.FAIL, {"error": f"Window '{window_title or hwnd}' is not focused", "retryable": True}
+            else:
+                # Non-Windows: just check if window exists
+                try:
+                    import pygetwindow as gw
+                    if window_title and gw.getWindowsWithTitle(window_title):
+                        return VerificationResult.PASS, {"window_title": window_title, "method": "pygetwindow"}
+                except Exception:
+                    pass
+                return VerificationResult.FAIL, {"error": "Window focus verification not fully supported on this platform", "retryable": True}
+        except Exception as e:
+            return VerificationResult.FAIL, {"error": str(e)}
+
     def _extract_app_name(self, desc: str) -> Optional[str]:
         """Heuristic to extract app name from 'open X' descriptions."""
-        match = re.search(r"open\s+(?:the\s+)?([a-zA-Z0-9_\-]+)", desc.lower())
+        match = re.search(r"open\s+(?:the\s+)?([a-zA-Z0-9_\-\s]+?)(?:\s+(?:and|to|from|in|on|with|for)|$)", desc.lower())
         if match:
-            return match.group(1)
+            return match.group(1).strip().strip(".,;:!?")
         return None
 
     def _extract_typed_text(self, desc: str) -> Optional[str]:

@@ -136,6 +136,25 @@ class OpenCVFallbackParser(VisionFallbackParser):
     # Public API
     # ------------------------------------------------------------------
 
+    def _validate_element_bounds(
+        self, elements: List[DetectedElement], full_w: int, full_h: int
+    ) -> List[DetectedElement]:
+        """Remove elements that are outside screen bounds or unreasonably sized."""
+        valid = []
+        for elem in elements:
+            x, y, w, h = elem.bbox
+            if x < 0 or y < 0 or x >= full_w or y >= full_h:
+                continue
+            if w <= 0 or h <= 0 or w > full_w or h > full_h:
+                continue
+            if w < 3 or h < 3:
+                continue
+            if w > full_w * 0.9 and h > full_h * 0.9:
+                # Probably false positive covering the whole screen
+                continue
+            valid.append(elem)
+        return valid
+
     def parse_screenshot(self, screenshot_path: str) -> List[DetectedElement]:
         if not self.is_available():
             logger.warning("OpenCV fallback not available: cv2 or numpy missing")
@@ -183,26 +202,44 @@ class OpenCVFallbackParser(VisionFallbackParser):
             x, y, w, h = elem.bbox
             elem.bbox = (x + window_offset[0], y + window_offset[1], w, h)
 
-        # 4. Filter text spam: keep text only if near an actionable control
-        filtered = self._filter_text_spam(raw_elements)
+        # 4. Validate bounds
+        bounded = self._validate_element_bounds(raw_elements, full_w, full_h)
+        removed_bounds = len(raw_elements) - len(bounded)
+        if removed_bounds:
+            logger.debug(f"OpenCV fallback: removed {removed_bounds} elements out of bounds")
 
-        # 5. Apply confidence floor
+        # 5. Filter text spam: keep text only if near an actionable control
+        filtered = self._filter_text_spam(bounded)
+
+        # 6. Apply confidence floor
         filtered = [
             e for e in filtered
             if e.confidence >= self.MIN_CONFIDENCE.get(e.type, 0.5)
         ]
 
-        # 6. Rank and cap
+        # 7. Rank and cap
         ranked = self._rank_elements(filtered, full_w, full_h)
         final = ranked[: self.MAX_ELEMENTS]
 
-        # 7. Re-assign sequential IDs
+        # 8. Re-assign sequential IDs
         for new_id, elem in enumerate(final, start=1):
             elem.id = new_id
 
+        # 9. Verify at least one actionable element
+        actionable_count = sum(
+            1 for e in final
+            if e.type in {"button", "edit", "checkbox", "combobox", "hyperlink",
+                          "listitem", "menuitem", "radiobutton", "slider",
+                          "spinner", "splitbutton", "tabitem", "treeitem"}
+        )
+        if not final:
+            logger.warning("OpenCV fallback: no valid elements after all filtering")
+        elif actionable_count == 0:
+            logger.warning(f"OpenCV fallback: {len(final)} elements but 0 actionable")
+
         logger.info(
-            f"OpenCV fallback: returned {len(final)} elements after hardening "
-            f"(from {len(raw_elements)} raw detections)"
+            f"OpenCV fallback: returned {len(final)} elements ({actionable_count} actionable) "
+            f"after hardening (from {len(raw_elements)} raw detections)"
         )
         return final
 

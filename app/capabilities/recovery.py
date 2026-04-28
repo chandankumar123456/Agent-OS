@@ -131,8 +131,27 @@ class RecoveryEngine:
         verification_report: Optional[VerificationReport] = None,
         current_tool: Optional[str] = None,
         current_environment: Optional[ExecutionEnvironment] = None,
+        execution_state: Optional[Dict[str, Any]] = None,
     ) -> RecoveryDecision:
         """Decide the recovery action for a failure."""
+        # If canonical execution state shows terminal success, do NOT recover
+        if execution_state:
+            from ..execution_state import ExecutionState, ExecutionVerdict
+            state = ExecutionState.from_dict(execution_state)
+            # Find the current step from step_id or check any terminal success
+            for step_rec in state.steps.values():
+                if step_rec.has_terminal_success:
+                    logger.info(
+                        f"[RecoveryEngine] Terminal success exists for step {step_rec.step_number}; "
+                        f"skipping recovery."
+                    )
+                    return RecoveryDecision(
+                        task_id=task_id,
+                        step_id=step_id,
+                        action=RecoveryAction.SKIP,
+                        reason="Terminal success already recorded in canonical execution state",
+                    )
+
         current_retries = await self._get_retry_count(task_id, step_id)
 
         # Check if max retries reached

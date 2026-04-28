@@ -25,7 +25,7 @@ except Exception:
 
 @dataclass
 class ActionSnapshot:
-    """Immutable record of an action attempt."""
+    """Immutable record of an action attempt with truth logging."""
     timestamp: str
     action_name: str
     params: Dict[str, Any]
@@ -38,6 +38,11 @@ class ActionSnapshot:
     verification_result: Optional[Dict[str, Any]] = None
     retry_count: int = 0
     error: Optional[str] = None
+    # Truth logging fields
+    expected_outcome: Optional[str] = None
+    actual_outcome: Optional[str] = None
+    semantic_verified: bool = False
+    semantic_notes: Optional[str] = None
 
 
 @dataclass
@@ -70,6 +75,31 @@ class StabilizerConfig:
     max_retries: int = 2
     retry_backoff_base: float = 1.0
     retry_redetect_before_retry: bool = True
+
+    # Per-action-type stabilization overrides (action_type -> config dict)
+    action_configs: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "click": {"stabilization_max_wait": 2.0, "verification_timeout": 2.0},
+        "click_element": {"stabilization_max_wait": 2.0, "verification_timeout": 2.0},
+        "type_text": {"stabilization_max_wait": 3.0, "verification_timeout": 3.0},
+        "type_element": {"stabilization_max_wait": 3.0, "verification_timeout": 3.0},
+        "press_key": {"stabilization_max_wait": 2.5, "verification_timeout": 2.5},
+        "open_application": {"stabilization_max_wait": 5.0, "verification_timeout": 8.0},
+        "launch_app_and_open_file": {"stabilization_max_wait": 5.0, "verification_timeout": 8.0},
+        "focus_window": {"stabilization_max_wait": 3.0, "verification_timeout": 4.0},
+        "scroll": {"stabilization_max_wait": 2.0, "verification_timeout": 2.0},
+    })
+
+    def get_for_action(self, action_name: str) -> "StabilizerConfig":
+        """Return a config with action-specific overrides applied."""
+        overrides = self.action_configs.get(action_name, {})
+        if not overrides:
+            return self
+        # Create a shallow copy with overrides
+        from copy import copy
+        new_config = copy(self)
+        for key, value in overrides.items():
+            setattr(new_config, key, value)
+        return new_config
 
 
 @dataclass
@@ -257,6 +287,116 @@ class ActionStabilizer:
             "notes": "No state change detected within timeout",
         }
 
+    # ── Window stabilization ──
+
+    async def wait_for_window_stability(
+        self,
+        window_list_fn: Callable[[], Awaitable[List[Dict[str, Any]]]],
+        max_wait: Optional[float] = None,
+        poll_interval: Optional[float] = None,
+    ) -> Tuple[bool, List[Dict[str, Any]]]:
+        """Poll window list until it stabilizes (no new/closed windows).
+
+        Returns (stable, last_window_list).
+        """
+        max_wait = max_wait or self.config.stabilization_max_wait
+        poll_interval = poll_interval or self.config.stabilization_poll_interval
+        min_stable = self.config.stabilization_min_stable_frames
+
+        stable_count = 0
+        prev_windows: List[str] = []
+        start = asyncio.get_event_loop().time()
+
+        while (asyncio.get_event_loop().time() - start) < max_wait:
+            try:
+                windows = await window_list_fn()
+                if not isinstance(windows, list):
+                    windows = windows.result.get("windows", []) if hasattr(windows, "result") else []
+                current_titles = sorted([w.get("title", "") for w in windows if w.get("title")])
+                if current_titles == prev_windows:
+                    stable_count += 1
+                    if stable_count >= min_stable:
+                        return True, windows
+                else:
+                    stable_count = 0
+                    prev_windows = current_titles
+            except Exception as e:
+                logger.debug(f"[ActionStabilizer] Window stability check failed: {e}")
+            await asyncio.sleep(poll_interval)
+
+        logger.warning(f"[ActionStabilizer] Window list did not stabilize within {max_wait}s")
+        try:
+            last_windows = await window_list_fn()
+            if not isinstance(last_windows, list):
+                last_windows = last_windows.result.get("windows", []) if hasattr(last_windows, "result") else []
+        except Exception:
+            last_windows = []
+        return False, last_windows
+
+    # ── Tree hash stabilization ──
+
+    async def wait_for_tree_stability(
+        self,
+        tree_hash_fn: Callable[[], Awaitable[str]],
+        max_wait: Optional[float] = None,
+        poll_interval: Optional[float] = None,
+    ) -> Tuple[bool, Optional[str]]:
+        """Poll accessibility tree hash until it stabilizes.
+
+        Returns (stable, last_tree_hash).
+        """
+        max_wait = max_wait or self.config.stabilization_max_wait
+        poll_interval = poll_interval or self.config.stabilization_poll_interval
+        min_stable = self.config.stabilization_min_stable_frames
+
+        stable_count = 0
+        prev_hash: Optional[str] = None
+        start = asyncio.get_event_loop().time()
+
+        while (asyncio.get_event_loop().time() - start) < max_wait:
+            try:
+                current_hash = await tree_hash_fn()
+                if current_hash == prev_hash and current_hash is not None:
+                    stable_count += 1
+                    if stable_count >= min_stable:
+                        return True, current_hash
+                else:
+                    stable_count = 0
+                    prev_hash = current_hash
+            except Exception as e:
+                logger.debug(f"[ActionStabilizer] Tree stability check failed: {e}")
+            await asyncio.sleep(poll_interval)
+
+        logger.warning(f"[ActionStabilizer] Tree hash did not stabilize within {max_wait}s")
+        return False, prev_hash
+
+    # ── Semantic verification ──
+
+    async def verify_expected_state(
+        self,
+        expected_state_fn: Callable[[], Awaitable[Tuple[bool, str]]],
+        timeout: Optional[float] = None,
+        poll_interval: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Verify that the UI is in the expected semantic state.
+
+        expected_state_fn should return (passed, notes).
+        """
+        timeout = timeout or self.config.verification_timeout
+        poll_interval = poll_interval or self.config.verification_poll_interval
+        start = asyncio.get_event_loop().time()
+
+        while (asyncio.get_event_loop().time() - start) < timeout:
+            try:
+                passed, notes = await expected_state_fn()
+                if passed:
+                    return {"passed": True, "notes": notes}
+            except Exception as e:
+                logger.debug(f"[ActionStabilizer] Expected state check failed: {e}")
+            await asyncio.sleep(poll_interval)
+
+        return {"passed": False, "notes": "Expected state not achieved within timeout"}
+
     # ── Popup/modal detection ──
 
     async def detect_popup_window(self, window_list_fn: Callable[[], Awaitable[List[Dict[str, Any]]]]) -> Optional[Dict[str, Any]]:
@@ -357,12 +497,19 @@ class ActionStabilizer:
         selected_target: Optional[Dict[str, Any]] = None,
         verify: bool = True,
         stabilize: bool = True,
+        expected_state_fn: Optional[Callable[[], Awaitable[Tuple[bool, str]]]] = None,
     ) -> Tuple[Any, ActionSnapshot]:
         """Execute an action with full stabilization, verification, retry chain.
 
+        Args:
+            expected_state_fn: Optional async callable that returns (passed, notes)
+                               for semantic verification of the expected outcome.
+
         Returns (action_result, snapshot).
         """
-        max_retries = self.config.max_retries
+        # Use action-specific config overrides
+        action_config = self.config.get_for_action(action_name)
+        max_retries = action_config.max_retries
         last_error: Optional[str] = None
         last_result: Any = None
 
@@ -379,6 +526,10 @@ class ActionStabilizer:
                 selected_target=selected_target,
                 retry_count=attempt,
                 error=None,
+                expected_outcome=expected_state_fn.__name__ if expected_state_fn else None,
+                actual_outcome=None,
+                semantic_verified=False,
+                semantic_notes=None,
             )
 
             # ── Pre-action: capture state ──
@@ -400,24 +551,48 @@ class ActionStabilizer:
 
             # ── Pre-action: stabilization ──
             if stabilize:
-                stable, stable_path = await self.wait_for_ui_stability(screenshot_fn)
+                # Screenshot stabilization
+                stable, stable_path = await self.wait_for_ui_stability(
+                    screenshot_fn,
+                    max_wait=action_config.stabilization_max_wait,
+                    poll_interval=action_config.stabilization_poll_interval,
+                )
                 if stable_path:
                     snapshot.before_screenshot_path = stable_path
                 if not stable:
                     logger.warning(f"[ActionStabilizer] Proceeding with unstable UI for {action_name}")
+
+                # Window list stabilization (for app launch / focus actions)
+                if action_name in {"open_application", "launch_app_and_open_file", "focus_window", "ensure_focus"}:
+                    win_stable, _ = await self.wait_for_window_stability(
+                        window_list_fn,
+                        max_wait=action_config.stabilization_max_wait,
+                        poll_interval=action_config.stabilization_poll_interval,
+                    )
+                    if not win_stable:
+                        logger.warning(f"[ActionStabilizer] Window list unstable before {action_name}")
+
+                # Tree stabilization (for element interactions)
+                if action_name in {"click_element", "type_element", "focus_and_interact", "click", "type_text", "press_key"}:
+                    tree_stable, _ = await self.wait_for_tree_stability(
+                        tree_hash_fn,
+                        max_wait=action_config.stabilization_max_wait,
+                        poll_interval=action_config.stabilization_poll_interval,
+                    )
+                    if not tree_stable:
+                        logger.warning(f"[ActionStabilizer] Tree hash unstable before {action_name}")
 
             # ── Pre-action: popup check ──
             popup = await self.detect_popup_window(window_list_fn)
             if popup:
                 logger.warning(f"[ActionStabilizer] Detected popup before action: {popup.get('title')}")
                 snapshot.error = f"Popup detected: {popup.get('title')}"
-                # Clean up before_screenshot on early return
+                self._log_action_truth(snapshot, last_result, "POPUP_BLOCKED")
                 if snapshot.before_screenshot_path and os.path.exists(snapshot.before_screenshot_path):
                     try:
                         os.remove(snapshot.before_screenshot_path)
                     except Exception:
                         pass
-                # We don't auto-dismiss; let caller decide
                 return last_result, snapshot
 
             # ── Execute action ──
@@ -427,15 +602,14 @@ class ActionStabilizer:
                 last_error = str(e)
                 snapshot.error = last_error
                 logger.error(f"[ActionStabilizer] Action {action_name} attempt {attempt} failed: {e}")
-
-                # Clean up before_screenshot before retry
+                self._log_action_truth(snapshot, last_result, "EXECUTION_ERROR")
                 if snapshot.before_screenshot_path and os.path.exists(snapshot.before_screenshot_path):
                     try:
                         os.remove(snapshot.before_screenshot_path)
                     except Exception:
                         pass
                 if attempt < max_retries:
-                    backoff = self.config.retry_backoff_base * (2 ** attempt)
+                    backoff = action_config.retry_backoff_base * (2 ** attempt)
                     logger.info(f"[ActionStabilizer] Retrying {action_name} in {backoff}s...")
                     await asyncio.sleep(backoff)
                     continue
@@ -453,36 +627,77 @@ class ActionStabilizer:
             except Exception as e:
                 logger.debug(f"[ActionStabilizer] Could not capture after tree hash: {e}")
 
-            # ── Post-action: verification ──
+            # ── Post-action: structural verification ──
+            structural_changed = True  # Assume changed if we skip verification
             if verify and snapshot.before_screenshot_path:
                 verification = await self.verify_state_change(
                     before_screenshot_path=snapshot.before_screenshot_path,
                     before_tree_hash=snapshot.before_tree_hash,
                     screenshot_fn=screenshot_fn,
                     tree_hash_fn=tree_hash_fn,
+                    timeout=action_config.verification_timeout,
+                    poll_interval=action_config.verification_poll_interval,
                 )
                 snapshot.verification_result = verification
-                if not verification.get("changed"):
+                structural_changed = verification.get("changed", True)
+                if not structural_changed:
                     logger.warning(f"[ActionStabilizer] No state change detected after {action_name}")
-                    # Clean up before_screenshot before retry
+                    snapshot.actual_outcome = "No structural state change detected"
+                    self._log_action_truth(snapshot, last_result, "NO_STATE_CHANGE")
                     if snapshot.before_screenshot_path and os.path.exists(snapshot.before_screenshot_path):
                         try:
                             os.remove(snapshot.before_screenshot_path)
                         except Exception:
                             pass
                     if attempt < max_retries:
-                        backoff = self.config.retry_backoff_base * (2 ** attempt)
+                        backoff = action_config.retry_backoff_base * (2 ** attempt)
                         logger.info(f"[ActionStabilizer] Retrying {action_name} (no state change) in {backoff}s...")
                         await asyncio.sleep(backoff)
                         continue
+                    else:
+                        # Exhausted retries with no state change
+                        return last_result, snapshot
 
-            # Clean up before_screenshot after successful verification
+            # ── Post-action: semantic verification ──
+            semantic_passed = True
+            semantic_notes = "No semantic check requested"
+            if expected_state_fn is not None:
+                semantic = await self.verify_expected_state(
+                    expected_state_fn,
+                    timeout=action_config.verification_timeout,
+                    poll_interval=action_config.verification_poll_interval,
+                )
+                semantic_passed = semantic.get("passed", False)
+                semantic_notes = semantic.get("notes", "")
+                snapshot.semantic_verified = semantic_passed
+                snapshot.semantic_notes = semantic_notes
+                if not semantic_passed:
+                    logger.warning(f"[ActionStabilizer] Semantic verification failed after {action_name}: {semantic_notes}")
+                    snapshot.actual_outcome = f"Semantic check failed: {semantic_notes}"
+                    self._log_action_truth(snapshot, last_result, "SEMANTIC_FAIL")
+                    if snapshot.before_screenshot_path and os.path.exists(snapshot.before_screenshot_path):
+                        try:
+                            os.remove(snapshot.before_screenshot_path)
+                        except Exception:
+                            pass
+                    if attempt < max_retries:
+                        backoff = action_config.retry_backoff_base * (2 ** attempt)
+                        logger.info(f"[ActionStabilizer] Retrying {action_name} (semantic fail) in {backoff}s...")
+                        await asyncio.sleep(backoff)
+                        continue
+                    else:
+                        return last_result, snapshot
+                else:
+                    snapshot.actual_outcome = f"Semantic check passed: {semantic_notes}"
+
+            # ── Success path ──
             if snapshot.before_screenshot_path and os.path.exists(snapshot.before_screenshot_path):
                 try:
                     os.remove(snapshot.before_screenshot_path)
                 except Exception:
                     pass
             snapshot.error = None
+            self._log_action_truth(snapshot, last_result, "SUCCESS")
             return last_result, snapshot
 
         # Exhausted retries
@@ -491,7 +706,38 @@ class ActionStabilizer:
                 os.remove(snapshot.before_screenshot_path)
             except Exception:
                 pass
+        self._log_action_truth(snapshot, last_result, "EXHAUSTED_RETRIES")
         return last_result, snapshot
+
+    def _log_action_truth(self, snapshot: ActionSnapshot, result: Any, status: str) -> None:
+        """Log structured action truth for observability and debugging.
+
+        Format:
+            ACTION: <name>
+            EXPECTED: <expected outcome description>
+            ACTUAL: <actual outcome>
+            VERIFICATION: struct=<bool> semantic=<bool>
+            RETRY: <count>
+            RESULT: <status>
+        """
+        action = snapshot.action_name
+        expected = snapshot.expected_outcome or "(not specified)"
+        actual = snapshot.actual_outcome or "(pending)"
+        struct_ok = snapshot.verification_result.get("changed", True) if snapshot.verification_result else True
+        semantic_ok = snapshot.semantic_verified
+        retry = snapshot.retry_count
+        error = snapshot.error or "none"
+
+        logger.info(
+            f"[ACTION_TRUTH] "
+            f"ACTION={action} | "
+            f"EXPECTED={expected} | "
+            f"ACTUAL={actual} | "
+            f"VERIFICATION=struct:{struct_ok}_semantic:{semantic_ok} | "
+            f"RETRY={retry} | "
+            f"STATUS={status} | "
+            f"ERROR={error}"
+        )
 
     # ── Snapshot history management ──
 

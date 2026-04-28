@@ -406,8 +406,28 @@ class BrowserSession:
     async def click(self, selector: str) -> ToolOutput:
         try:
             page = await self._ensure_page()
-            await page.wait_for_selector(selector, state="visible", timeout=10000)
-            await page.click(selector)
+            # Dismiss cookie/consent overlays before attempting click (best effort)
+            try:
+                await self._dismiss_interstitials(page)
+            except Exception:
+                pass
+            # Wait for element and scroll into view
+            element = await page.wait_for_selector(selector, state="visible", timeout=10000)
+            if element:
+                try:
+                    await element.scroll_into_view_if_needed()
+                except Exception:
+                    pass
+            # Attempt click; fallback to force-click if intercepted
+            try:
+                await page.click(selector, timeout=10000)
+            except PlaywrightError as exc:
+                msg = str(exc).lower()
+                if "intercept" in msg or "overlay" in msg:
+                    logger.warning(f"BrowserSession[{self.task_id}]: click intercepted, retrying with force=True")
+                    await page.click(selector, force=True, timeout=10000)
+                else:
+                    raise
             self._current_url = page.url
             return ToolOutput(
                 success=True,
@@ -449,7 +469,26 @@ class BrowserSession:
         try:
             page = await self._ensure_page()
             if selector:
-                text = await page.inner_text(selector)
+                # Retry loop for lazy-loaded / dynamic content
+                text = ""
+                for attempt in range(3):
+                    try:
+                        # Wait for selector with increasing timeout
+                        await page.wait_for_selector(selector, state="visible", timeout=10000)
+                        element = await page.query_selector(selector)
+                        if element:
+                            await element.scroll_into_view_if_needed()
+                        # Short delay to let lazy content hydrate
+                        await asyncio.sleep(1.5 if attempt == 0 else 2.0)
+                        text = await page.inner_text(selector)
+                        if text.strip():
+                            break
+                    except PlaywrightTimeoutError:
+                        if attempt == 2:
+                            raise
+                        logger.warning(
+                            f"BrowserSession[{self.task_id}]: get_text selector not ready, retrying..."
+                        )
             else:
                 text = await page.inner_text("body")
             return ToolOutput(
