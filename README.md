@@ -5,11 +5,12 @@
 ## Core Mechanism
 
 ```
-User Query → Capability Classification → Feasibility Check → LangGraph Compile
-→ Planner → Executor (Tools/MCP) → Verifier → (Approval Gate) → Summarizer → Result
+User Query → Capability Classification → Feasibility Check → Action V1 Fast Path?
+→ [Yes] Deterministic Executor → Verifier → Result
+→ [No]  LangGraph Compile → Planner → Executor (Tools/MCP) → Verifier → (Approval Gate) → Summarizer → Result
 ```
 
-A user submits a query. The system classifies required capabilities, checks feasibility, compiles a mode-specific LangGraph StateGraph, and executes through planner → executor → verifier nodes. Human approval gates can pause execution via LangGraph `interrupt()`. Every step is checkpointed to PostgreSQL for resume across restarts.
+A user submits a query. The system classifies required capabilities and checks feasibility. For simple, deterministic tasks (browser navigation, desktop automation, file creation), **Action V1** bypasses the full LangGraph overhead and executes directly via MCP tools with deterministic verification. Complex or ambiguous tasks still flow through the full LangGraph StateGraph (planner → executor → verifier → summarizer). Human approval gates can pause execution via LangGraph `interrupt()`. Every LangGraph step is checkpointed to PostgreSQL for resume across restarts.
 
 ## System Architecture
 
@@ -211,6 +212,43 @@ sequenceDiagram
     LG->>DB: Final checkpoint saved
     API-->>FE: Task completed with result
 ```
+
+## Action V1 Fast Path
+
+AgentOS includes an **Action V1** deterministic fast-path layer for simple, single-intent tasks. When the router detects a straightforward instruction (e.g., "open Chrome and search AI news", "create a static HTML page about healthy breakfasts", or "open Notepad and type hello"), Action V1 bypasses the full LangGraph planner/executor/verifier loop and invokes MCP tools directly.
+
+### Architecture
+
+```mermaid
+graph LR
+    QUERY[User Query] --> SEL[Action V1 Selector]
+    SEL -->|deterministic| EXEC[Deterministic Executor]
+    SEL -->|complex / ambiguous| LG[LangGraph Engine]
+    EXEC --> VER[Deterministic Verifier]
+    VER --> RES[Result]
+    EXEC -->|failure| FALL[Vision / Human Fallback]
+    FALL --> LG
+```
+
+### Capabilities
+
+| Capability | Example Query | Tools Used |
+|------------|--------------|------------|
+| **Browser** | "Open Chrome and search latest AI news" | `browser_env__launch`, `browser_env__navigate`, `browser_env__get_text` |
+| **Desktop** | "Open Notepad and type Hello World" | `desktop_env__open_application`, `desktop_env__type_text` |
+| **Filesystem** | "Create a static HTML page about breakfast" | `cloud_api__search_web`, `filesystem__write_file` |
+| **Multi-step** | "Search AI trends, summarize, and save to file" | `cloud_api__search_web` → LLM summary → `filesystem__write_file` |
+
+### Why Action V1?
+
+- **Speed**: Eliminates LangGraph compilation, checkpoint writes, and multi-node traversal for simple tasks.
+- **Reliability**: Avoids PostgreSQL `uq_checkpoint_write` unique-constraint errors that can occur during LangGraph persistence.
+- **Cost**: No LLM calls for planning or verification on deterministic successes; LLM is used only for content generation when needed.
+- **Safety**: Dangerous keywords (`delete`, `password`, `payment`) trigger an automatic human-approval gate before execution.
+
+### Fallback Behavior
+
+If Action V1 fails or the query is classified as ambiguous, the orchestrator automatically falls back to the full LangGraph execution engine. Complex modes (`workflow`, `autonomous`, `collaboration`) always use LangGraph.
 
 ## MCP (Model Context Protocol) Integration
 
@@ -616,6 +654,12 @@ AgentOS/
 │   │       ├── tools.py               # Tool registry + MCP servers
 │   │       ├── config.py              # System configuration
 │   │       └── health.py              # Health/readiness/metrics endpoints
+│   ├── action_v1/                     # Deterministic fast-path execution
+│   │   ├── selector.py                # Lightweight capability selector
+│   │   ├── executor.py                # Direct MCP tool executor
+│   │   ├── verifier.py                # Deterministic result verifier
+│   │   ├── fallback.py                # Vision & human fallback layers
+│   │   └── runner.py                  # Action V1 pipeline orchestrator
 │   ├── langgraph/                     # v2 LangGraph execution engine
 │   │   ├── state.py                   # AgentState TypedDict
 │   │   ├── nodes.py                   # planner, executor, verifier, approval, summarizer
@@ -678,7 +722,14 @@ AgentOS/
 - **End-to-end tests**: API routes, task execution with mocked LLM
 - **Observability tests**: Trace persistence, metrics export, health endpoints
 - **LangGraph tests**: Graph compilation, checkpoint persistence, node execution
+- **Action V1 benchmarks**: Deterministic execution paths for browser, desktop, filesystem, and multi-step tasks
 - **Validation script**: `python validate_fixes.py` tests all Priority 1 systems
+
+Run Action V1 benchmarks:
+
+```bash
+pytest tests/test_action_v1_benchmarks.py -v
+```
 
 Run the validation suite:
 

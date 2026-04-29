@@ -258,7 +258,18 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     write_data=_encode(write),
                 )
                 session.add(row)
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception as exc:
+                # Gracefully ignore duplicate checkpoint writes so graph
+                # completion is not blocked by persistence noise.
+                if "uq_checkpoint_write" in str(exc):
+                    logger.debug(
+                        f"aput_writes: duplicate checkpoint write ignored for "
+                        f"task={task_id} checkpoint={checkpoint_id}"
+                    )
+                    return
+                raise
 
         logger.debug(
             f"aput_writes: thread={thread_id} ns={checkpoint_ns} "

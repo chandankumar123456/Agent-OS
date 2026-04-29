@@ -92,6 +92,15 @@ async def test_runner_tier0_failure_escalates_to_tier1_success():
     runner = TaskRunner()
     task_id = uuid4()
 
+    # Mock Action V1 to fail with unknown capability so adaptive routing is exercised
+    from app.action_v1.models import ActionResult, ActionStatus, Capability
+    runner.action_v1.run = AsyncMock(return_value=ActionResult(
+        status=ActionStatus.FAILURE,
+        task_id=str(task_id),
+        error="mock action v1 failure",
+    ))
+    runner.action_v1.selector.classify = MagicMock(return_value=Capability.UNKNOWN)
+
     decision = TaskRoutingDecision(
         tier=ExecutionTier.DIRECT,
         reason="single atomic",
@@ -129,6 +138,15 @@ async def test_runner_tier0_failure_escalates_to_tier1_success():
 async def test_runner_tier1_failure_escalates_to_tier2_langgraph():
     runner = TaskRunner()
     task_id = uuid4()
+
+    # Mock Action V1 to fail with unknown capability so adaptive routing escalates to LangGraph
+    from app.action_v1.models import ActionResult, ActionStatus, Capability
+    runner.action_v1.run = AsyncMock(return_value=ActionResult(
+        status=ActionStatus.FAILURE,
+        task_id=str(task_id),
+        error="mock action v1 failure",
+    ))
+    runner.action_v1.selector.classify = MagicMock(return_value=Capability.UNKNOWN)
 
     decision = TaskRoutingDecision(
         tier=ExecutionTier.SEQUENTIAL,

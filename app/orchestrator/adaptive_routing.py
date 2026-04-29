@@ -20,6 +20,11 @@ from ..logs.logger import logger
 from ..tools.base import ToolOutput
 from ..tools.registry import tool_registry
 
+# Lazy import to avoid circular deps on module load
+def _get_llm_client():
+    from ..agents.llm_client import get_llm_client
+    return get_llm_client()
+
 
 class ExecutionTier(IntEnum):
     DIRECT = 0
@@ -168,6 +173,15 @@ class TaskComplexityRouter:
                     uses_external_dependencies=uses_external_dependencies,
                     reasoning_depth=reasoning_depth,
                 )
+            if only.kind == "create_file":
+                return TaskRoutingDecision(
+                    tier=ExecutionTier.SEQUENTIAL,
+                    reason="Single file creation intent requires content generation",
+                    intents=intents,
+                    has_multi_step=False,
+                    uses_external_dependencies=uses_external_dependencies,
+                    reasoning_depth=reasoning_depth,
+                )
 
         if intent_count <= 2:
             supported = {
@@ -182,6 +196,7 @@ class TaskComplexityRouter:
                 "open_folder",
                 "create_sheet",
                 "close_app",
+                "create_file",
             }
             if all(intent.kind in supported for intent in intents):
                 return TaskRoutingDecision(
@@ -214,6 +229,11 @@ class TaskComplexityRouter:
 
             if "create" in clause and "sheet" in clause:
                 intents.append(TaskIntent(kind="create_sheet", raw_clause=clause))
+                continue
+
+            file_topic = self._extract_file_creation_topic(clause)
+            if file_topic is not None:
+                intents.append(TaskIntent(kind="create_file", argument=file_topic, raw_clause=clause))
                 continue
 
             open_file_path = self._extract_file_path(clause)
@@ -387,6 +407,23 @@ class TaskComplexityRouter:
             if quoted:
                 return quoted.group(1)
             return after
+
+    def _extract_file_creation_topic(self, clause: str) -> Optional[str]:
+        creation_keywords = ("create", "write", "generate", "make")
+        file_keywords = ("file", "page", "html", "script", "document", "txt", "css", "js", "json")
+        if not any(k in clause for k in creation_keywords):
+            return None
+        if not any(k in clause for k in file_keywords):
+            return None
+        # Try to extract the descriptive topic after creation keywords.
+        match = re.search(r"\b(?:create|write|generate|make)\b\s+(?:a\s+)?(?:static\s+)?(?:html\s+)?(?:page|file|document)\s+(?:on|about|for|with|called|named)?\s*(.+)$", clause)
+        if match:
+            topic = match.group(1).strip(" .")
+            # Remove trailing prepositional phrases like "on it", "for me"
+            topic = re.split(r"\b(?:on it|for me|for us|please)\b", topic)[0].strip(" .")
+            return topic or ""
+        # Fallback: if clause is clearly about creating a file, return the whole clause.
+        return clause
         return None
 
 
@@ -586,6 +623,52 @@ class LightweightSequentialExecutor:
                         tier=ExecutionTier.SEQUENTIAL,
                         actions=action_log,
                         error=key_result.error,
+                        verification={"all_actions_succeeded": False},
+                    )
+                continue
+
+            if intent.kind == "create_file":
+                topic = intent.argument or query
+                # Determine default output path on Desktop
+                desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+                safe_name = re.sub(r"[^\w\s-]", "", topic).strip().replace(" ", "-")[:40]
+                file_path = os.path.join(desktop, f"{safe_name}.html")
+                # Generate content via LLM
+                try:
+                    llm = _get_llm_client()
+                    messages = [
+                        {"role": "system", "content": "You are a helpful web developer. Return only raw HTML without markdown fences."},
+                        {"role": "user", "content": (
+                            f"Create a complete, self-contained HTML page about: {topic}\n\n"
+                            "Requirements:\n"
+                            "- Use inline CSS only (no external files)\n"
+                            "- Responsive, modern, clean design\n"
+                            "- Include a title, content sections, and basic styling\n"
+                            "- Return ONLY the raw HTML string, no markdown code blocks, no explanations\n"
+                        )},
+                    ]
+                    content = await llm.complete(messages)
+                    # Strip markdown code fences if the model wrapped output
+                    content = re.sub(r"^```(?:html)?\s*", "", content, flags=re.IGNORECASE)
+                    content = re.sub(r"\s*```$", "", content)
+                except Exception as exc:
+                    return ExecutionReport(
+                        success=False,
+                        execution_path="tier_1_sequential",
+                        tier=ExecutionTier.SEQUENTIAL,
+                        actions=action_log,
+                        error=f"LLM content generation failed: {exc}",
+                        verification={"all_actions_succeeded": False},
+                    )
+                write_result = await self._direct._tool("filesystem__write_file", {"path": file_path, "content": content}, str(task_id))
+                action_log.append(self._direct._action("filesystem__write_file", {"path": file_path}, write_result))
+                if not write_result.success:
+                    return ExecutionReport(
+                        success=False,
+                        execution_path="tier_1_sequential",
+                        tier=ExecutionTier.SEQUENTIAL,
+                        actions=action_log,
+                        error=write_result.error,
                         verification={"all_actions_succeeded": False},
                     )
                 continue

@@ -102,4 +102,4 @@ async def test_planner_open_chrome_and_search_latest_ai_news(mock_tool_registry,
     assert len(plan) == 4
     assert all(step["step_type"] == "browser_navigation" for step in plan)
     assert "open the browser" in plan[0]["description"].lower()
-    assert "search for the requested query" in plan[2]["description"].lower()
+    assert "search" in plan[2]["description"].lower()

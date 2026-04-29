@@ -279,6 +279,8 @@ const response = await apiClient.createTask({
 console.log(response.task_id);
 ```
 
+> **Note:** Simple deterministic queries (e.g., "open Chrome and search AI news", "create a static HTML page", "open Notepad and type hello") are automatically routed through **Action V1**, a fast-path layer that bypasses the full LangGraph engine for lower latency and higher reliability. Complex or ambiguous tasks still use the full LangGraph pipeline.
+
 ### Listening to Task Events
 
 ```typescript

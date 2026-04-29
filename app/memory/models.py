@@ -305,7 +305,7 @@ class CheckpointWriteModel(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("thread_id", "checkpoint_ns", "checkpoint_id", "task_id", name="uq_checkpoint_write"),
+        UniqueConstraint("thread_id", "checkpoint_ns", "checkpoint_id", "task_id", "task_path", name="uq_checkpoint_write"),
     )
 
 

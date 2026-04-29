@@ -44,6 +44,8 @@ from .adaptive_routing import (
     ExecutionTier,
     summarize_intents,
 )
+from ..action_v1.runner import ActionV1Runner
+from ..action_v1.models import ActionStatus
 
 
 class TaskRunner:
@@ -53,6 +55,7 @@ class TaskRunner:
         self.task_complexity_router = TaskComplexityRouter()
         self.direct_executor = DirectExecutor()
         self.sequential_executor = LightweightSequentialExecutor()
+        self.action_v1 = ActionV1Runner()
 
     @staticmethod
     def _new_trace_id() -> str:
@@ -120,6 +123,86 @@ class TaskRunner:
                           (e.g., human approval) by passing Command(resume=resume_value).
         """
         try:
+            # ── Action V1 Fast Path ─────────────────────────────────────
+            if (
+                mode == "task"
+                and resume_state is None
+                and resume_value is None
+            ):
+                try:
+                    action_v1_result = await self.action_v1.run(str(task_id), query, config)
+                    if action_v1_result.status == ActionStatus.SUCCESS:
+                        logger.info(f"[ActionV1] Fast-path success for task={task_id}")
+                        await event_bus.publish(
+                            f"task:{task_id}",
+                            Event(
+                                "action_v1.executed",
+                                {"task_id": str(task_id), "capability": action_v1_result.steps_executed[0].get("tool", "unknown") if action_v1_result.steps_executed else "unknown"},
+                                source="orchestrator",
+                            ),
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.SUCCESS,
+                            output_data=action_v1_result.output,
+                        )
+                    if action_v1_result.status == ActionStatus.NEEDS_HUMAN:
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.FAILURE,
+                            error_type="human_fallback",
+                            error_message=action_v1_result.error or "Human intervention required",
+                            output_data=action_v1_result.output,
+                        )
+                    # For capabilities Action V1 handles, don't fall through to LangGraph
+                    from ..action_v1.models import Capability
+                    capability = self.action_v1.selector.classify(query)
+                    if capability in (
+                        Capability.BROWSER,
+                        Capability.DESKTOP,
+                        Capability.FILESYSTEM,
+                        Capability.MULTI_STEP,
+                    ):
+                        logger.info(
+                            f"[ActionV1] Fast-path failed for handled capability {capability.value}, "
+                            f"returning failure directly to avoid LangGraph fallback"
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.FAILURE,
+                            error_type="action_v1_failed",
+                            error_message=action_v1_result.error or f"Action V1 failed for {capability.value}",
+                            output_data=action_v1_result.output,
+                        )
+                    logger.info(
+                        f"[ActionV1] Fast-path did not succeed ({action_v1_result.status.value}), "
+                        f"falling back to LangGraph"
+                    )
+                except Exception as av1_err:
+                    from ..action_v1.models import Capability
+                    capability = self.action_v1.selector.classify(query)
+                    if capability in (
+                        Capability.BROWSER,
+                        Capability.DESKTOP,
+                        Capability.FILESYSTEM,
+                        Capability.MULTI_STEP,
+                    ):
+                        logger.warning(
+                            f"[ActionV1] Fast-path exception for handled capability {capability.value}: {av1_err}. "
+                            f"Returning failure directly."
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.FAILURE,
+                            error_type="action_v1_exception",
+                            error_message=str(av1_err),
+                        )
+                    logger.warning(f"[ActionV1] Fast-path failed: {av1_err}. Falling back to LangGraph.")
+
             # ── Adaptive Execution Router (Tier 0 / 1 / 2) ──────────────
             should_route = (
                 mode == "task"
