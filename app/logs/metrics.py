@@ -42,6 +42,23 @@ class MetricsCollector:
                     lines.append(f'{name}_count {count}')
         return "\n".join(lines)
 
+    def record_desktop_task(self, task_id: str, duration_seconds: float, success: bool) -> None:
+        """Record a desktop task execution with duration and outcome."""
+        self.observe_histogram("desktop_task_duration", duration_seconds, {"success": str(success)})
+        self.inc_counter("desktop_task_total", {"success": str(success)})
+
+    def record_desktop_action(self, task_id: str, action_name: str) -> None:
+        """Record a desktop action (e.g. click, type, launch)."""
+        self.inc_counter("desktop_action_count", {"action": action_name})
+
+    def record_desktop_retry(self, task_id: str, action_name: str) -> None:
+        """Record a retry of a desktop action."""
+        self.inc_counter("desktop_retry_count", {"action": action_name})
+
+    def record_desktop_perception_layer(self, task_id: str, layer: str) -> None:
+        """Record usage of a perception layer (e.g. screenshot, OCR, vision)."""
+        self.inc_counter("desktop_perception_layer", {"layer": layer})
+
     def record_tokens(self, model: str, input_tokens: int, output_tokens: int):
         """Record token usage for a model invocation."""
         total = input_tokens + output_tokens
