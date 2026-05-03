@@ -129,6 +129,38 @@ class OpenCVFallbackParser(VisionFallbackParser):
         "custom": 0.50,
     }
 
+    def __init__(self):
+        self._dpi_scale: float = 1.0
+
+    # ------------------------------------------------------------------
+    # DPI helpers
+    # ------------------------------------------------------------------
+
+    def _get_screen_dpi(self) -> Tuple[int, int]:
+        """Return the screen DPI (x, y) for the primary monitor.
+
+        Uses win32 API on Windows; falls back to 96 DPI on other platforms
+        or if detection fails.
+        """
+        if sys.platform == "win32" and win32gui is not None:
+            try:
+                import ctypes
+                hdc = win32gui.GetDC(0)
+                if hdc:
+                    dpi_x = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+                    dpi_y = ctypes.windll.gdi32.GetDeviceCaps(hdc, 90)  # LOGPIXELSY
+                    win32gui.ReleaseDC(0, hdc)
+                    if dpi_x > 0 and dpi_y > 0:
+                        return (dpi_x, dpi_y)
+            except Exception as e:
+                logger.debug(f"_get_screen_dpi: win32 detection failed: {e}")
+        return (96, 96)
+
+    def _get_dpi_scale_factor(self) -> float:
+        """Return DPI scale factor relative to 96 DPI baseline, minimum 1.0."""
+        dpi_x, _ = self._get_screen_dpi()
+        return max(1.0, dpi_x / 96.0)
+
     def is_available(self) -> bool:
         return cv2 is not None and np is not None
 
@@ -140,6 +172,7 @@ class OpenCVFallbackParser(VisionFallbackParser):
         self, elements: List[DetectedElement], full_w: int, full_h: int
     ) -> List[DetectedElement]:
         """Remove elements that are outside screen bounds or unreasonably sized."""
+        min_size = int(3 * self._dpi_scale)
         valid = []
         for elem in elements:
             x, y, w, h = elem.bbox
@@ -147,7 +180,7 @@ class OpenCVFallbackParser(VisionFallbackParser):
                 continue
             if w <= 0 or h <= 0 or w > full_w or h > full_h:
                 continue
-            if w < 3 or h < 3:
+            if w < min_size or h < min_size:
                 continue
             if w > full_w * 0.9 and h > full_h * 0.9:
                 # Probably false positive covering the whole screen
@@ -159,6 +192,10 @@ class OpenCVFallbackParser(VisionFallbackParser):
         if not self.is_available():
             logger.warning("OpenCV fallback not available: cv2 or numpy missing")
             return []
+
+        # Compute DPI scale factor for this parse
+        self._dpi_scale = self._get_dpi_scale_factor()
+        logger.debug(f"OpenCV fallback: DPI scale factor = {self._dpi_scale:.2f}")
 
         img = cv2.imread(screenshot_path)
         if img is None:
@@ -182,10 +219,11 @@ class OpenCVFallbackParser(VisionFallbackParser):
             )
         else:
             # No window detected — exclude taskbar at bottom
-            roi_img = img[: full_h - self.TASKBAR_HEIGHT_ESTIMATE, :]
+            taskbar_height = int(self.TASKBAR_HEIGHT_ESTIMATE * self._dpi_scale)
+            roi_img = img[: full_h - taskbar_height, :]
             window_offset = (0, 0)
             logger.info(
-                f"OpenCV fallback: no active window found; excluding bottom {self.TASKBAR_HEIGHT_ESTIMATE}px taskbar"
+                f"OpenCV fallback: no active window found; excluding bottom {taskbar_height}px taskbar"
             )
 
         if roi_img.size == 0:
@@ -259,6 +297,8 @@ class OpenCVFallbackParser(VisionFallbackParser):
         if sys.platform != "win32":
             return None, (0, 0)
 
+        min_window_dim = int(50 * self._dpi_scale)
+
         # Try win32gui first
         if win32gui is not None:
             try:
@@ -272,7 +312,7 @@ class OpenCVFallbackParser(VisionFallbackParser):
                             cy = max(0, top)
                             cw = min(right - left, full_w - cx)
                             ch = min(bottom - top, full_h - cy)
-                            if cw > 50 and ch > 50:
+                            if cw > min_window_dim and ch > min_window_dim:
                                 return (cx, cy, cw, ch), (cx, cy)
             except Exception as e:
                 logger.debug(f"win32gui foreground window detection failed: {e}")
@@ -288,7 +328,7 @@ class OpenCVFallbackParser(VisionFallbackParser):
                     cy = max(0, rect.top)
                     cw = min(rect.right - rect.left, full_w - cx)
                     ch = min(rect.bottom - rect.top, full_h - cy)
-                    if cw > 50 and ch > 50:
+                    if cw > min_window_dim and ch > min_window_dim:
                         return (cx, cy, cw, ch), (cx, cy)
         except Exception as e:
             logger.debug(f"uiautomation foreground window detection failed: {e}")
@@ -304,6 +344,7 @@ class OpenCVFallbackParser(VisionFallbackParser):
         elements: List[DetectedElement] = []
         element_id = 1
         detected_boxes: List[Tuple[int, int, int, int]] = []
+        min_dim = int(3 * self._dpi_scale)
 
         def add_element(bbox, elem_type, confidence=0.5, label=""):
             nonlocal element_id
@@ -312,7 +353,7 @@ class OpenCVFallbackParser(VisionFallbackParser):
             y = max(0, min(y, h - 1))
             bw = max(1, min(bw, w - x))
             bh = max(1, min(bh, h - y))
-            if bw < 3 or bh < 3:
+            if bw < min_dim or bh < min_dim:
                 return
             for existing in detected_boxes:
                 if self._iou((x, y, bw, bh), existing) > 0.55:
@@ -357,13 +398,14 @@ class OpenCVFallbackParser(VisionFallbackParser):
             # No controls found — keep nothing (too risky to guess)
             return [e for e in elements if e.type != "text"]
 
+        text_proximity = int(self.TEXT_PROXIMITY_PX * self._dpi_scale)
         kept: List[DetectedElement] = []
         for elem in elements:
             if elem.type != "text":
                 kept.append(elem)
                 continue
             # Keep text if it overlaps or is near a control
-            if self._is_near_any_control(elem, controls, threshold_px=self.TEXT_PROXIMITY_PX):
+            if self._is_near_any_control(elem, controls, threshold_px=text_proximity):
                 kept.append(elem)
         return kept
 
@@ -425,14 +467,19 @@ class OpenCVFallbackParser(VisionFallbackParser):
         """Use MSER to find text-like regions."""
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         mser = cv2.MSER_create()
-        mser.setMinArea(100)
-        mser.setMaxArea(6000)
+        scale2 = self._dpi_scale * self._dpi_scale  # area scales quadratically
+        mser.setMinArea(int(100 * scale2))
+        mser.setMaxArea(int(6000 * scale2))
         regions, _ = mser.detectRegions(gray)
         boxes = []
+        min_w = int(24 * self._dpi_scale)
+        min_h = int(12 * self._dpi_scale)
+        max_w = int(450 * self._dpi_scale)
+        max_h = int(70 * self._dpi_scale)
         for region in regions:
             x, y, bw, bh = cv2.boundingRect(region.reshape(-1, 1, 2))
             # Tight filters
-            if bw < 24 or bh < 12 or bw > 450 or bh > 70:
+            if bw < min_w or bh < min_h or bw > max_w or bh > max_h:
                 continue
             aspect = bw / max(bh, 1)
             if aspect < 1.5 or aspect > 22:
@@ -470,11 +517,13 @@ class OpenCVFallbackParser(VisionFallbackParser):
             for cnt in contours
         )
 
+        min_contour_area = int(100 * self._dpi_scale * self._dpi_scale)
+
         if not giant_blob:
             for cnt in contours:
                 x, y, bw, bh = cv2.boundingRect(cnt)
                 area = bw * bh
-                if area < 100 or area > img_area * 0.35:
+                if area < min_contour_area or area > img_area * 0.35:
                     continue
                 elem_type, confidence = self._classify_contour(cnt, bw, bh, area)
                 if elem_type != "custom":
@@ -494,29 +543,41 @@ class OpenCVFallbackParser(VisionFallbackParser):
         perimeter = cv2.arcLength(cnt, True)
         approx = cv2.approxPolyDP(cnt, 0.04 * perimeter, True)
         num_corners = len(approx)
+        s = self._dpi_scale
+        s2 = s * s
 
         # Checkbox / radio: small square-ish
-        if 0.7 <= aspect <= 1.4 and 18 <= bw <= 52 and 18 <= bh <= 52:
+        if 0.7 <= aspect <= 1.4 and \
+           int(18 * s) <= bw <= int(52 * s) and \
+           int(18 * s) <= bh <= int(52 * s):
             if num_corners >= 4:
                 return "checkbox", 0.60
 
         # Button: medium rectangle, roughly 4-10 corners (rounded rects)
-        if 0.3 <= aspect <= 4.0 and 30 <= bw <= 340 and 22 <= bh <= 105:
+        if 0.3 <= aspect <= 4.0 and \
+           int(30 * s) <= bw <= int(340 * s) and \
+           int(22 * s) <= bh <= int(105 * s):
             if 4 <= num_corners <= 10:
                 fill_ratio = area / (bw * bh)
                 conf = 0.65 if fill_ratio > 0.45 else 0.55
                 return "button", conf
 
         # Edit / input: wide, short rectangle
-        if aspect >= 2.2 and 18 <= bh <= 70 and bw >= 80:
+        if aspect >= 2.2 and \
+           int(18 * s) <= bh <= int(70 * s) and \
+           bw >= int(80 * s):
             return "edit", 0.60
 
         # Icon / image: small square
-        if 0.5 <= aspect <= 2 and 20 <= bw <= 64 and 20 <= bh <= 64 and area < 4096:
+        if 0.5 <= aspect <= 2 and \
+           int(20 * s) <= bw <= int(64 * s) and \
+           int(20 * s) <= bh <= int(64 * s) and \
+           area < int(4096 * s2):
             return "image", 0.55
 
         # Slider / scrollbar: very thin, long
-        if (aspect > 10 and bh < 24) or (aspect < 0.12 and bw < 24):
+        if (aspect > 10 and bh < int(24 * s)) or \
+           (aspect < 0.12 and bw < int(24 * s)):
             return "slider", 0.50
 
         return "custom", 0.4
@@ -536,10 +597,13 @@ class OpenCVFallbackParser(VisionFallbackParser):
 
         results: List[Tuple[Tuple[int, int, int, int], str, float]] = []
         h, w = img.shape[:2]
+        s = self._dpi_scale
+        s2 = s * s
+        min_area = int(150 * s2)
         for cnt in contours:
             x, y, bw, bh = cv2.boundingRect(cnt)
             area = bw * bh
-            if area < 150 or area > (w * h * 0.30):
+            if area < min_area or area > (w * h * 0.30):
                 continue
             aspect = bw / max(bh, 1)
 
@@ -548,19 +612,29 @@ class OpenCVFallbackParser(VisionFallbackParser):
             elem_type = "custom"
             confidence = 0.4
 
-            if 0.3 <= aspect <= 4.0 and 28 <= bw <= 360 and 20 <= bh <= 110:
+            if 0.3 <= aspect <= 4.0 and \
+               int(28 * s) <= bw <= int(360 * s) and \
+               int(20 * s) <= bh <= int(110 * s):
                 elem_type = "button"
                 confidence = 0.55
-            elif aspect >= 2.2 and 16 <= bh <= 75 and bw >= 70:
+            elif aspect >= 2.2 and \
+                 int(16 * s) <= bh <= int(75 * s) and \
+                 bw >= int(70 * s):
                 elem_type = "edit"
                 confidence = 0.55
-            elif 0.7 <= aspect <= 1.4 and 16 <= bw <= 55 and 16 <= bh <= 55:
+            elif 0.7 <= aspect <= 1.4 and \
+                 int(16 * s) <= bw <= int(55 * s) and \
+                 int(16 * s) <= bh <= int(55 * s):
                 elem_type = "checkbox"
                 confidence = 0.50
-            elif 0.5 <= aspect <= 2 and 18 <= bw <= 70 and 18 <= bh <= 70 and area < 4900:
+            elif 0.5 <= aspect <= 2 and \
+                 int(18 * s) <= bw <= int(70 * s) and \
+                 int(18 * s) <= bh <= int(70 * s) and \
+                 area < int(4900 * s2):
                 elem_type = "image"
                 confidence = 0.50
-            elif (aspect > 10 and bh < 24) or (aspect < 0.12 and bw < 24):
+            elif (aspect > 10 and bh < int(24 * s)) or \
+                 (aspect < 0.12 and bw < int(24 * s)):
                 elem_type = "slider"
                 confidence = 0.45
 
@@ -579,13 +653,17 @@ class OpenCVFallbackParser(VisionFallbackParser):
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         boxes = []
         h, w = img.shape[:2]
+        s = self._dpi_scale
+        min_area = int(400 * s * s)
         for cnt in contours:
             x, y, bw, bh = cv2.boundingRect(cnt)
             area = bw * bh
-            if area < 400 or area > (w * h * 0.25):
+            if area < min_area or area > (w * h * 0.25):
                 continue
             aspect = bw / max(bh, 1)
-            if 0.3 <= aspect <= 4.5 and 30 <= bw <= 320 and 22 <= bh <= 110:
+            if 0.3 <= aspect <= 4.5 and \
+               int(30 * s) <= bw <= int(320 * s) and \
+               int(22 * s) <= bh <= int(110 * s):
                 boxes.append((x, y, bw, bh))
         return self._merge_boxes(boxes, iou_threshold=0.5)
 
