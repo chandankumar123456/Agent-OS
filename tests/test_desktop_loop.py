@@ -583,3 +583,28 @@ async def test_executor_node_uses_desktop_goal_loop():
 
     mock_loop.execute.assert_awaited_once()
     assert result["status"] == "success"
+
+
+# ── OR2: Desktop metrics emission ──
+
+@pytest.mark.asyncio
+async def test_goal_loop_records_metrics():
+    """OR2: DesktopGoalLoop must record metrics during execution."""
+    from app.desktop.goal_loop import DesktopGoalLoop
+    from unittest.mock import patch, MagicMock, AsyncMock
+
+    loop = DesktopGoalLoop(task_id="metrics-test")
+    mock_metrics = MagicMock()
+
+    with patch("app.desktop.goal_loop.metrics_collector", mock_metrics):
+        with patch.object(loop, "_observe_desktop_state", new_callable=AsyncMock) as mock_observe:
+            with patch.object(loop, "_decide_action", new_callable=AsyncMock) as mock_decide:
+                mock_decide.return_value = {"tool": "desktop__click", "params": {}}
+                with patch.object(loop, "_execute_tool", new_callable=AsyncMock) as mock_exec:
+                    mock_exec.return_value = {"status": "success"}
+                    with patch.object(loop, "_verify_goal") as mock_verify:
+                        mock_verify.return_value = True
+                        await loop.execute(goal="Click OK", plan={}, env_config={})
+
+    mock_metrics.record_desktop_task.assert_called_once()
+    mock_metrics.record_desktop_action.assert_called()

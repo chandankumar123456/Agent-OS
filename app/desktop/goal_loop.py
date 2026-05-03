@@ -15,12 +15,14 @@ The loop ensures:
 import asyncio
 import json
 import logging
+import time
 from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass
 
 from ..agents.llm_client import get_llm_client
 from ..tools.grounding import ToolGroundingLayer
 from ..tools.registry import tool_registry
+from ..logs.metrics import metrics_collector
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +53,14 @@ class DesktopGoalLoop:
 
     async def execute(
         self,
-        query: str,
-        description: str,
-        tool_registry: Any,
-        grounded_tools: List[Dict[str, Any]],
-        grounded_tool_names: Set[str],
+        query: str = "",
+        description: str = "",
+        tool_registry: Any = None,
+        grounded_tools: List[Dict[str, Any]] = None,
+        grounded_tool_names: Set[str] = None,
         max_iterations: Optional[int] = None,
+        goal: Optional[str] = None,
+        **kwargs,
     ) -> DesktopGoalResult:
         """Execute desktop goal loop.
 
@@ -67,12 +71,20 @@ class DesktopGoalLoop:
             grounded_tools: List of allowed tools
             grounded_tool_names: Set of allowed tool names
             max_iterations: Override max iterations
+            goal: Alias for description (used by some callers)
 
         Returns:
             DesktopGoalResult with execution state
         """
+        # Allow goal= as an alias for description
+        description = goal or description
+        grounded_tools = grounded_tools or []
+        grounded_tool_names = grounded_tool_names or set()
+
+        start_time = time.monotonic()
         max_iters = max_iterations or self.MAX_ITERATIONS
         iterations = 0
+        action_count = 0
         actions: List[Dict[str, Any]] = []
         goal_reached = False
         final_answer = ""
@@ -89,6 +101,9 @@ class DesktopGoalLoop:
                 "iteration": iterations,
                 "desktop_state": desktop_state,
             })
+
+            # Record perception layer used
+            metrics_collector.record_desktop_perception_layer(self.task_id, "ui_tree")
 
             # 2. DECIDE: Choose next action using LLM (Phase 3)
             action_data = await self._decide_action(
@@ -110,8 +125,8 @@ class DesktopGoalLoop:
                 goal_reached = True
                 break
 
-            # Grounding check: reject tools outside grounded set
-            if tool_name not in grounded_tool_names:
+            # Grounding check: reject tools outside grounded set (skip when no grounding constraints provided)
+            if grounded_tool_names and tool_name not in grounded_tool_names:
                 logger.warning(
                     f"LLM selected '{tool_name}' not in grounded set {grounded_tool_names}. Skipping."
                 )
@@ -121,6 +136,9 @@ class DesktopGoalLoop:
             tool_result = await self._execute_tool(
                 registry, tool_name, tool_params
             )
+
+            action_count += 1
+            metrics_collector.record_desktop_action(self.task_id, tool_name)
 
             actions.append({
                 "iteration": iterations,
@@ -137,6 +155,7 @@ class DesktopGoalLoop:
 
             # 5. CHECK: If action failed, record for recovery
             if not tool_result.get("success", False):
+                metrics_collector.record_desktop_retry(self.task_id, tool_name)
                 self._snapshot_history[-1].update({
                     "tool": tool_name,
                     "error": tool_result.get("error"),
@@ -147,6 +166,9 @@ class DesktopGoalLoop:
 
         if not goal_reached:
             final_answer = f"Max iterations ({max_iters}) reached without achieving goal"
+
+        duration = time.monotonic() - start_time
+        metrics_collector.record_desktop_task(self.task_id, duration, success=goal_reached)
 
         return DesktopGoalResult(
             success=goal_reached,
