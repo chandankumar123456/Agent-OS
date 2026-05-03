@@ -256,7 +256,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
 
         _session_ctx = self._session_factory() if self._session_factory else db.get_session()
         async with _session_ctx as session:
-            for idx, (task_id_local, channel, value) in enumerate(writes):
+            for task_id_local, channel, value in writes:
                 stmt = pg_insert(self._get_checkpoint_model()).values(
                     id=str(_uuid.uuid4()),
                     thread_id=thread_id,

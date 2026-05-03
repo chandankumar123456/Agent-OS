@@ -93,3 +93,25 @@ async def test_aput_writes_re_raises_non_23505_integrity_error():
     mock_session.rollback.assert_not_called()
     # commit should NOT be called since the write was not suppressed
     mock_session.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_aput_writes_happy_path():
+    """All writes succeed without exceptions."""
+    mock_session_factory = MagicMock()
+    saver = PostgresCheckpointSaver(session_factory=mock_session_factory)
+    mock_session = AsyncMock()
+    mock_session.execute = AsyncMock(return_value=MagicMock())
+    mock_session.commit = AsyncMock()
+    mock_session.begin_nested = MagicMock(return_value=AsyncMock())
+    mock_session_factory.return_value.__aenter__.return_value = mock_session
+    mock_session_factory.return_value.__aexit__.return_value = False
+
+    await saver.aput_writes(
+        config={"configurable": {"thread_id": "t1", "checkpoint_ns": ""}},
+        writes=[("1", "ch1", b"data1"), ("2", "ch2", b"data2")],
+        task_path="path",
+        task_id="task1",
+    )
+    assert mock_session.execute.await_count == 2
+    assert mock_session.commit.await_count == 1
