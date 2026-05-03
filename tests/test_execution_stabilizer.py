@@ -487,3 +487,10 @@ async def test_stabilizer_detects_infinite_loop():
         )
     with pytest.raises(RuntimeError, match="infinite loop"):
         stab.detect_infinite_loop()
+
+
+def test_stabilizer_config_has_cleanup_age():
+    """FR5.3: StabilizerConfig must expose temp_screenshot_max_age_seconds."""
+    from app.environments.execution_stabilizer import StabilizerConfig
+    cfg = StabilizerConfig(temp_screenshot_max_age_seconds=120)
+    assert cfg.temp_screenshot_max_age_seconds == 120

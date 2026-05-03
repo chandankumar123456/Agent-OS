@@ -76,6 +76,9 @@ class StabilizerConfig:
     retry_backoff_base: float = 1.0
     retry_redetect_before_retry: bool = True
 
+    # Temp screenshot cleanup
+    temp_screenshot_max_age_seconds: int = 300
+
     # Per-action-type stabilization overrides (action_type -> config dict)
     action_configs: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "click": {"stabilization_max_wait": 2.0, "verification_timeout": 2.0},
@@ -790,12 +793,15 @@ class ActionStabilizer:
             self._cleanup_snapshot(old)
         self._snapshot_history.clear()
 
-    @staticmethod
-    def cleanup_temp_screenshots() -> int:
-        """Remove orphaned temp screenshots older than 1 hour.
+    def cleanup_temp_screenshots(self, max_age: Optional[int] = None) -> int:
+        """Remove orphaned temp screenshots older than configured age.
 
         Removes files matching agentos_*, stab_*, verify_*, before_*, after_*
         patterns in the system temp directory.
+
+        Args:
+            max_age: Override the config's temp_screenshot_max_age_seconds.
+                     Defaults to self.config.temp_screenshot_max_age_seconds.
 
         Returns the number of files removed.
         """
@@ -803,7 +809,7 @@ class ActionStabilizer:
         temp_dir = tempfile.gettempdir()
         patterns = ("agentos_", "stab_", "verify_", "before_", "after_",
                      "dismiss_check_")
-        max_age = 3600  # 1 hour in seconds
+        max_age = max_age if max_age is not None else self.config.temp_screenshot_max_age_seconds
         now = _time.time()
         removed = 0
         try:
