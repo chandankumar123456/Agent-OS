@@ -1,4 +1,5 @@
-"""Failing tests for desktop goal-driven execution loop (TDD).
+"""Failing tests for desktop goal-driven execution loop (TDD) and
+verifier_node desktop verification.
 
 These tests prove that AgentOS currently:
 1. Does not check desktop goals via _check_desktop_goal
@@ -7,6 +8,7 @@ These tests prove that AgentOS currently:
 4. Returns SUCCESS even when verification fails
 5. Does not catch missing desktop tool calls in verifier_node
 6. Treats a single successful tool call as task success
+7. (FR3.1 FIXED) verifier_node does not call verify_plan() for desktop
 
 All tests are expected to FAIL until the implementation is written.
 """
@@ -464,3 +466,70 @@ async def test_single_tool_success_does_not_equal_task_success(
             assert result.status == AgentStatus.FAILURE, (
                 f"Expected FAILURE, got {result.status}"
             )
+
+
+# ── FR3.1: verifier_node must call verify_plan() for desktop tasks ──
+
+@pytest.mark.asyncio
+@patch("app.langgraph.nodes.get_llm_client")
+@patch("app.langgraph.nodes.verification_engine")
+@patch("app.langgraph.nodes.observability_bus")
+async def test_verifier_node_calls_verify_plan_for_desktop(
+    mock_obs,
+    mock_verification_engine,
+    mock_get_llm,
+):
+    """FR3.1: verifier_node must call verification_engine.verify_plan()
+    when env_type == 'desktop', running desktop-specific deterministic
+    checks like desktop_app_opened and desktop_text_typed.
+    """
+    from app.capabilities.models import VerificationReport, VerificationResult
+
+    mock_obs.emit_safe = AsyncMock(return_value=None)
+
+    # Mock LLM verification as passing
+    mock_llm = AsyncMock()
+    mock_llm.complete_json = AsyncMock(return_value={
+        "verified": True,
+        "notes": "LLM verification passed",
+    })
+    mock_get_llm.return_value = mock_llm
+
+    # verify_plan returns desktop-specific reports
+    mock_report = VerificationReport(
+        task_id="desktop-verify-1",
+        result=VerificationResult.PASS,
+        verifier_type="deterministic",
+        checks=[{"type": "desktop_app_opened"}],
+        evidence={"app_name": "notepad"},
+    )
+    mock_verification_engine.verify_plan = AsyncMock(return_value=[mock_report])
+
+    # State with desktop env and open_application success in tool_calls:
+    # the top-level deterministic section skips verify_plan because of
+    # the open_application match (line 1410), so the desktop block's
+    # verify_plan call is the only one made and can be asserted.
+    state = AgentState(
+        task_id="desktop-verify-1",
+        user_id="u1",
+        query="open notepad and type hello",
+        plan=[{"step_number": 1, "description": "Open Notepad"}],
+        steps=[{"step_number": 1, "description": "Open Notepad", "output": "done"}],
+        tool_calls=[
+            {
+                "step": 1,
+                "tool": "desktop_env__open_application",
+                "result": {"success": True, "data": {"pid": 1234, "window": "Notepad"}},
+            }
+        ],
+        messages=[],
+        environment_config={"environment": "desktop"},
+    )
+
+    result = await verifier_node(state)
+
+    # verify_plan must have been called exactly once from the desktop block
+    mock_verification_engine.verify_plan.assert_awaited_once()
+    assert result["verified"] is True, (
+        f"Expected verified=True, got {result['verified']}"
+    )

@@ -1497,7 +1497,40 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         else:
             env_notes = f"Cloud API verified: {len(cloud_calls)} API calls made."
     elif env_type == "desktop":
-        # Check canonical execution state first, then fall back to tool_calls
+        # FR3.1: Call verification_engine.verify_plan() for desktop-specific
+        # deterministic checks (desktop_app_opened, desktop_text_typed, etc.)
+        # This ensures desktop verifiers run even when earlier det_pass
+        # checks skip verify_plan (e.g., after open_application success).
+        verification_notes_list = []
+        desktop_verify_passed = True
+        try:
+            desktop_verify_reports = await verification_engine.verify_plan(
+                task_id, plan,
+                environment_config=env_config if isinstance(env_config, dict) else {}
+            )
+            for report in desktop_verify_reports:
+                if report.result == VerificationResult.FAIL:
+                    desktop_verify_passed = False
+                    verification_notes_list.append(
+                        report.failure_reason or "Desktop verification via verify_plan() failed"
+                    )
+                else:
+                    check_type = report.checks[0].get("type", "unknown") if report.checks else "unknown"
+                    verification_notes_list.append(
+                        f"Desktop check '{check_type}': {report.result.value}"
+                    )
+            if len(desktop_verify_reports) == 0:
+                # No desktop-specific verifications matched the plan;
+                # rely on tool call check below to determine env_verified
+                pass
+            else:
+                env_verified = desktop_verify_passed
+        except Exception as e:
+            logger.warning(f"[verifier_node] Desktop verify_plan() error: {e}")
+            verification_notes_list.append(f"Desktop verify_plan error: {e}")
+            # Fall through to tool call check
+
+        # Fallback/Supplementary: Check if any desktop tool calls were made
         desktop_calls = []
         if execution_state:
             for step_rec in execution_state.steps.values():
@@ -1511,7 +1544,8 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
             env_verified = False
             env_notes = "Desktop environment selected but no desktop tools were invoked."
         else:
-            env_notes = f"Desktop automation verified: {len(desktop_calls)} desktop actions performed."
+            suffix = " " + " ".join(verification_notes_list) if verification_notes_list else ""
+            env_notes = f"Desktop automation verified: {len(desktop_calls)} desktop actions performed.{suffix}"
 
     # Final verdict: both deterministic and LLM must agree for PASS
     verified = det_pass and llm_verified and env_verified
