@@ -1,18 +1,14 @@
-# AgentOS v2 — LangGraph + MCP Agent Operating System
+# AgentOS v2 — Desktop Automation Agent System with Closed-Loop Execution
 
 > **AgentOS is NOT a chatbot.** It is a structured, stateful agent execution system where AI agents reason via LangGraph state machines and act on the system via the Model Context Protocol (MCP). Every execution is traceable, checkpointed, and observable.
 
-## Core Mechanism
+## Overview
 
-```
-User Query → Capability Classification → Feasibility Check → Action V1 Fast Path?
-→ [Yes] Deterministic Executor → Verifier → Result
-→ [No]  LangGraph Compile → Planner → Executor (Tools/MCP) → Verifier → (Approval Gate) → Summarizer → Result
-```
+AgentOS executes desktop automation tasks through a **closed-loop execution model**: observe → decide → act → verify → recover. The system receives a user query, plans a sequence of desktop actions, executes each action with tool grounding and safety validation, verifies the result before marking success, and automatically recovers from failures.
 
-A user submits a query. The system classifies required capabilities and checks feasibility. For simple, deterministic tasks (browser navigation, desktop automation, file creation), **Action V1** bypasses the full LangGraph overhead and executes directly via MCP tools with deterministic verification. Complex or ambiguous tasks still flow through the full LangGraph StateGraph (planner → executor → verifier → summarizer). Human approval gates can pause execution via LangGraph `interrupt()`. Every LangGraph step is checkpointed to PostgreSQL for resume across restarts.
+For simple, deterministic tasks (browser navigation, desktop automation, file creation), **Action V1** bypasses the full LangGraph overhead and executes directly via MCP tools with deterministic verification. Complex or ambiguous tasks flow through the full LangGraph StateGraph (planner → executor → verifier → summarizer). Human approval gates can pause execution via LangGraph `interrupt()`. Every LangGraph step is checkpointed to PostgreSQL for resume across restarts.
 
-## System Architecture
+## Architecture
 
 AgentOS is organized into 8 layers, each with strict single responsibility:
 
@@ -115,6 +111,132 @@ graph TB
 | Safety + Observability | Validation, tracing, metrics, structured logging | Pydantic, Prometheus |
 | Memory + Persistence | PostgreSQL long-term, Redis short-term, checkpoints | SQLAlchemy async, Redis async |
 
+### Execution Flow
+
+The LangGraph orchestrator compiles mode-specific StateGraphs (task, workflow, autonomous, collaboration). For desktop tasks, the executor delegates to `DesktopGoalLoop`, which runs an observe-act-verify loop with tool grounding and safety gates. If a step fails verification, the recovery engine selects a retry strategy or escalates. Human approval gates pause execution via `interrupt()`.
+
+### DesktopGoalLoop
+
+`DesktopGoalLoop` is the core closed-loop execution engine for desktop automation. It encapsulates the observe-decide-act-verify cycle:
+
+1. **Observe**: Capture desktop state (screenshot, UI tree, window list, element map)
+2. **Decide**: LLM selects the next action grounded to allowed tools
+3. **Act**: Execute the action via `ActionStabilizer` with retry
+4. **Verify**: Check if the goal is reached; if not, continue
+5. **Recover**: On repeated failures, `RecoveryEngine` selects a recovery strategy
+
+`DesktopGoalLoop` is reusable by both the LangGraph `executor_node` and the legacy `ExecutorAgent`.
+
+### Verification Layer
+
+The verifier integrates with `verification_engine` via `verify_plan()`. For desktop tasks, verification checks:
+- Structural state change (screenshot diff, tree hash diff)
+- Semantic correctness (expected outcome achieved)
+- Presence of required UI elements or window state
+
+Verification runs before marking any step as successful. Unverified state changes are treated as failures.
+
+### Recovery System
+
+`RecoveryEngine` supports `RecoveryStrategy.DESKTOP` for desktop-specific failures. Recovery strategies include:
+- Re-focus the target window
+- Rebuild the UI element tree
+- Escalate to vision fallback
+- Dismiss blocking popups
+
+Tool alternatives for desktop tools are constrained to other desktop tools (never browser or shell fallbacks).
+
+### Perception Layer
+
+The perception layer combines multiple input sources for robust desktop state understanding:
+- **UIA tree**: Accessibility tree via `uiautomation` with hash-based caching and TTL
+- **Vision fallback**: OCR + icon detection via OpenCV with DPI-aware scaling
+- **Window registry**: Tracked window positions and class names
+- **Screenshot analysis**: Pixel-level diff for structural change detection
+
+DPI scaling is applied to all vision thresholds to maintain detection accuracy across display configurations.
+
+### Stabilization Layer
+
+`ActionStabilizer` wraps every desktop action with:
+- **Pre-action stabilization**: Poll screenshots until UI is stable
+- **Post-action verification**: Confirm state changed (screenshot + tree hash)
+- **Retry orchestration**: Up to `max_retries` with exponential backoff
+- **Infinite loop detection**: Abort after 3 identical no-change failures
+- **Popup detection**: Identify and dismiss unexpected modals before acting
+- **Action snapshots**: Before/after screenshots, tree hashes, element maps, retry counts
+
+### Infrastructure
+
+- **Checkpointer**: PostgreSQL checkpoint saver with savepoint-based duplicate handling and `IntegrityError` recovery
+- **Graph cache**: LRU eviction (max 50 entries) for compiled LangGraph graphs
+- **Session lifecycle**: Exception-safe `close()` with per-step try/except, screenshot cleanup, and garbage collection hints
+
+### Safety Layer
+
+`SafetyGate` validates desktop tool parameters against credential patterns. Regex blocks `password`, `api_key`, `token`, `secret`, and similar patterns from being passed to desktop actions.
+
+### Observability
+
+`MetricsCollector` exposes desktop-specific metrics:
+- `desktop_task_duration` — histogram of task execution time
+- `desktop_action_count` — counter of actions executed per task
+- `desktop_retry_count` — counter of retries per action
+- `desktop_perception_layer` — counter of perception layer usage (UIA vs vision)
+
+## Execution Flow
+
+The step-by-step lifecycle of a desktop automation task:
+
+1. **Plan received**: Planner generates an OS-aware execution plan with capability context
+2. **Action decision**: `DesktopGoalLoop` calls LLM with grounded tool list to select the next action
+3. **Action execution**: `ActionStabilizer` stabilizes UI, detects popups, executes action, and verifies state change
+4. **Verification**: `verifier_node` calls `verify_plan()` to confirm structural and semantic correctness
+5. **Retry / recovery**: On failure, `ActionStabilizer` retries; if exhausted, `RecoveryEngine` selects a recovery strategy
+6. **Completion or safe failure**: Task returns SUCCESS with verification notes or FAILURE with recovery context
+
+## Features
+
+Implemented desktop automation capabilities:
+
+- **LLM-driven action decision**: Grounded tool selection with JSON parsing and validation
+- **Desktop verification via `verify_plan()`**: Explicit verification before marking success
+- **Automatic recovery on failure**: `RecoveryStrategy.DESKTOP` with re-focus, rebuild, vision escalate, popup dismiss
+- **Infinite loop detection**: Abort after 3 identical no-change failures
+- **UI tree caching with TTL**: Hash-based cache invalidation for performance
+- **Vision fallback with DPI scaling**: Automatic fallback to OCR + icon detection with DPI-aware thresholds
+- **Perception layer tracking**: Expose `perception_layer` (UIA / vision) in task result metadata
+- **Exception-safe session cleanup**: Per-step try/except in `close()` with garbage collection
+- **LRU graph cache**: Bounded graph compilation cache with eviction
+- **Desktop-specific metrics**: Duration, action count, retry count, perception layer usage
+- **Credential safety gate**: Regex blocking of credential patterns in desktop tool parameters
+
+## Reliability Guarantees
+
+- **No silent failures**: Every action is verified before success is reported
+- **Explicit verification**: `verify_plan()` confirms structural and semantic correctness
+- **Controlled retries**: `ActionStabilizer` retries with backoff, bounded by `max_retries`
+- **Recovery before failure**: `RecoveryEngine` attempts re-focus, rebuild, or escalation before marking FAILURE
+- **Safe abort conditions**: Infinite loop detection and popup dismissal verification prevent runaway execution
+
+## Metrics and Observability
+
+Desktop tasks emit the following metrics:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `desktop_task_duration` | Histogram | `success` | Total task execution time |
+| `desktop_task_total` | Counter | `success` | Total tasks executed |
+| `desktop_action_count` | Counter | `action` | Actions executed per type |
+| `desktop_retry_count` | Counter | `action` | Retries per action type |
+| `desktop_perception_layer` | Counter | `layer` | UIA or vision fallback usage |
+
+All metrics are exposed via the Prometheus `/health/metrics` endpoint.
+
+## Safety
+
+Desktop tool parameters are validated by `SafetyGate` before execution. Credential patterns are blocked via regex matching on serialized parameters. Blocked patterns include `password=...`, `api_key=...`, `token=...`, `secret=...`, and similar. If a credential pattern is detected, the action is blocked with a clear reason string.
+
 ## LangGraph Execution Engine
 
 AgentOS v2 uses **LangGraph StateGraph** as its primary execution engine. All agent reasoning flows through compiled state graphs with persistent PostgreSQL checkpoints.
@@ -164,14 +286,15 @@ The engine uses a central `AgentState` (TypedDict) containing:
 | `environment_config` | Orchestrator | Selected execution environment |
 | `verification_reports` | executor/verifier | Deterministic verification reports |
 | `recovery_decisions` | executor | Recovery actions taken |
+| `execution_state` | executor | Canonical `ExecutionState` with tool truth |
 
 ### Node Descriptions
 
 | Node | Name | Responsibility |
 |------|------|---------------|
 | 1 | planner_node | Generates OS-aware execution plan with capability context |
-| 2 | executor_node | Executes current step using ToolRegistry (built-in + MCP) |
-| 3 | verifier_node | Deterministic verification + LLM semantic validation |
+| 2 | executor_node | Executes current step; delegates desktop steps to `DesktopGoalLoop` |
+| 3 | verifier_node | Deterministic verification + LLM semantic validation via `verify_plan()` |
 | 4 | approval_node | LangGraph `interrupt()` for human-in-the-loop |
 | 5 | summarizer_node | Compiles step outputs into final result |
 | 6 | replanner_node | (Autonomous mode) Regenerates plan when stuck |
@@ -562,6 +685,182 @@ Path remapping rules:
 | Cache + PubSub | Redis | 7+ | Short-term memory, event bus |
 | Monitoring | Prometheus client | 0.19+ | Metrics collection |
 
+## System Guarantees
+
+1. **LangGraph is the primary execution engine.** The orchestrator compiles mode-specific StateGraphs and falls back to legacy pipelines only on exception.
+2. **Every execution is checkpointed.** LangGraph state is persisted to PostgreSQL via `PostgresCheckpointSaver` for resume across restarts.
+3. **Human-in-the-loop uses LangGraph interrupt.** Approval gates pause execution via `interrupt()` and resume via API calls.
+4. **Runtime is the ONLY execution entry point.** No module may instantiate or call agents directly.
+5. **MCP tools are auto-discovered.** System servers (filesystem, shell, browser) start automatically and register tools via `MCPWrappedTool`.
+6. **Tool registration is idempotent.** Built-in tools register once via singleton; MCP discovery skips if already registered.
+7. **Runtime initialization is idempotent.** Redis mutex prevents duplicate core agent registration across processes.
+8. **Paths are OS-aware.** Planner generates OS-appropriate paths; executor remaps hallucinated foreign paths.
+9. **Authentication uses JWT with refresh tokens.** Access tokens expire in 30 minutes; refresh tokens expire in 7 days.
+10. **WebSocket connections authenticate via query token.** Invalid or expired tokens close the connection with code 1008.
+11. **All data is strictly typed.** Pydantic models validate every request/response; no untyped dicts in core flow.
+12. **Output is validated before persistence.** Guardrails validate pipeline output before database insertion.
+13. **Desktop actions are verified before success.** `verify_plan()` confirms structural and semantic correctness.
+14. **Desktop tool parameters are safety-checked.** Credential patterns are blocked by `SafetyGate` before execution.
+15. **Infinite loops are detected and aborted.** `ActionStabilizer` aborts after 3 identical no-change failures.
+
+## Project Structure
+
+```
+AgentOS/
+├── README.md                          # This file
+├── validate_fixes.py                  # Priority 1 validation script
+├── v2_implementation_plan.md          # v2 implementation tracking
+├── app/
+│   ├── main.py                        # FastAPI application entry point
+│   ├── config/
+│   │   └── settings.py                # Pydantic Settings with env validation
+│   ├── api/
+│   │   ├── deps.py                    # Dependency injection (orchestrator singleton)
+│   │   ├── ws.py                      # WebSocket connection manager + endpoint
+│   │   └── routes/
+│   │       ├── auth.py                # JWT login/signup/refresh
+│   │       ├── agents.py              # Agent CRUD
+│   │       ├── tasks.py               # Task execution + approval
+│   │       ├── tools.py               # Tool registry + MCP servers
+│   │       ├── config.py              # System configuration
+│   │       └── health.py              # Health/readiness/metrics endpoints
+│   ├── action_v1/                     # Deterministic fast-path execution
+│   │   ├── selector.py                # Lightweight capability selector
+│   │   ├── executor.py                # Direct MCP tool executor
+│   │   ├── verifier.py                # Deterministic result verifier
+│   │   ├── fallback.py                # Vision & human fallback layers
+│   │   └── runner.py                  # Action V1 pipeline orchestrator
+│   ├── desktop/                       # Desktop automation core
+│   │   ├── __init__.py
+│   │   └── goal_loop.py               # DesktopGoalLoop: observe-decide-act-verify
+│   ├── langgraph/                     # v2 LangGraph execution engine
+│   │   ├── state.py                   # AgentState TypedDict
+│   │   ├── nodes.py                   # planner, executor, verifier, approval, summarizer
+│   │   ├── graphs.py                  # Graph compilers per mode (with LRU cache)
+│   │   └── checkpointer.py            # PostgreSQL checkpoint saver
+│   ├── orchestrator/
+│   │   ├── core.py                    # Orchestrator with LangGraph compilation
+│   │   ├── pipeline.py                # Legacy plan → execute → verify pipeline
+│   │   ├── builder.py                 # Workflow DAG persistence
+│   │   ├── executor.py                # Single-step execution service
+│   │   ├── workflow.py                # DAG engine with AST sandbox
+│   │   ├── task_runner.py             # Task runner with recovery + perception
+│   │   └── modes/                     # Mode strategy implementations
+│   ├── runtime/
+│   │   ├── runtime.py                 # AgentRuntime singleton with idempotent init
+│   │   ├── worker.py                  # AgentWorker with inbox queue
+│   │   ├── factory.py                 # AgentFactory
+│   │   └── pool.py                    # AgentPool semaphore
+│   ├── agents/
+│   │   ├── base.py                    # BaseAgent, AgentInput, AgentOutput
+│   │   ├── planner.py                 # PlannerAgent
+│   │   ├── executor.py                # ExecutorAgent with tool loop + path remapping
+│   │   ├── verifier.py                # VerifierAgent
+│   │   └── llm_client.py              # OpenAI async client with JSON extraction
+│   ├── environments/                  # Execution environments
+│   │   ├── desktop_env.py             # DesktopSession (UIA, vision, stabilizer)
+│   │   ├── execution_stabilizer.py    # ActionStabilizer + StabilizerConfig
+│   │   ├── vision_fallback.py         # HybridVisionParser with DPI scaling
+│   │   └── window_registry.py         # WindowRegistry for desktop windows
+│   ├── capabilities/                  # Capability system
+│   │   ├── recovery.py                # RecoveryEngine + RecoveryStrategy enum
+│   │   └── verification.py            # VerificationEngine
+│   ├── safety/
+│   │   └── gate.py                    # SafetyGate with credential regex
+│   ├── mcp/
+│   │   ├── client_manager.py          # MCPClientManager (server lifecycle)
+│   │   ├── servers/
+│   │   │   ├── filesystem.py          # File system MCP server
+│   │   │   ├── shell.py               # Shell command MCP server
+│   │   │   └── browser.py             # Web browsing MCP server
+│   │   ├── bus.py                     # MCPBus (Memory + Redis)
+│   │   ├── router.py                  # MessageRouter
+│   │   └── protocol.py                # MCPProtocol
+│   ├── tools/
+│   │   ├── registry.py                # ToolRegistry singleton (built-in + MCP)
+│   │   ├── sandbox.py                 # ToolSandbox with AST validation
+│   │   ├── grounding.py               # ToolGroundingLayer (exact-match validation)
+│   │   ├── base.py                    # BaseTool, ToolInput, ToolOutput
+│   │   ├── search.py                  # SearchTool
+│   │   ├── calculator.py              # CalculatorTool
+│   │   └── text_processor.py          # TextProcessorTool
+│   ├── guardrails/                    # Input/output validation
+│   ├── logs/                          # Structured logging, tracing, metrics
+│   ├── memory/                        # PostgreSQL + Redis persistence
+│   └── middleware/                    # Auth middleware, rate limiting
+├── frontend/
+│   ├── src/
+│   │   ├── api/client.ts              # API client with auto-refresh
+│   │   ├── context/AuthContext.tsx    # React auth context
+│   │   ├── hooks/useWebSocket.ts      # WebSocket hook with reconnect
+│   │   ├── pages/                     # Dashboard, Builder, Tools, etc.
+│   │   └── components/                # Shared components + Onboarding
+│   └── README.md                      # Frontend documentation
+└── docker/                            # Docker Compose configuration
+```
+
+## Testing
+
+All desktop automation hardening features were implemented using **test-first development**: write a failing test, implement the feature, verify the test passes.
+
+### Major Test Suites
+
+| Test Suite | Coverage |
+|-----------|----------|
+| `tests/test_execution_stabilizer.py` | Stabilization, verification, retry, infinite loop detection, popup dismissal |
+| `tests/test_desktop_env.py` | DesktopSession lifecycle, snapshot history, exception-safe close, tree caching |
+| `tests/test_desktop_loop.py` | DesktopGoalLoop, task runner, verifier integration, executor delegation |
+| `tests/test_desktop_recovery.py` | RecoveryStrategy.DESKTOP enum, tool alternatives, recovery execution |
+| `tests/test_desktop_metrics.py` | MetricsCollector desktop helpers |
+| `tests/test_graph_cache.py` | LRU graph cache eviction |
+| `tests/test_safety_gate.py` | SafetyGate credential blocking |
+| `tests/test_checkpointer.py` | Checkpoint duplicate handling, IntegrityError recovery |
+| `tests/test_vision_fallback.py` | DPI scaling, text proximity, text region sizing |
+| `tests/test_tool_grounding.py` | Phantom tool removal, exact-match validation |
+| `tests/test_executor_agent.py` | Legacy executor reusing DesktopSession, ActionStabilizer, WindowRegistry |
+
+### Running Tests
+
+Run Action V1 benchmarks:
+
+```bash
+pytest tests/test_action_v1_benchmarks.py -v
+```
+
+Run desktop-specific tests:
+
+```bash
+pytest tests/test_desktop_env.py tests/test_desktop_loop.py tests/test_execution_stabilizer.py -v
+```
+
+Run the validation suite:
+
+```bash
+python validate_fixes.py
+```
+
+Run the full pytest suite:
+
+```bash
+pytest -q
+```
+
+**Test results**: All new tests pass. One pre-existing failure in `test_executor_node_invokes_tool_when_llm_requests_it` (tool registry mock issue) is unrelated to desktop automation changes.
+
+## Limitations
+
+- **Depends on LLM decision quality**: Action selection relies on LLM output; incorrect tool selection can cause failures
+- **Perception may fail in complex UIs**: UIA tree and vision fallback may miss elements in heavily customized or non-standard UI frameworks
+- **Not fully validated across all desktop environments**: Tested primarily on Windows; behavior on other platforms may vary
+- **Vision fallback is heuristic-based**: OCR + icon detection thresholds are tuned for common cases; edge cases may require manual adjustment
+
+## Future Improvements
+
+- **End-to-end benchmarking**: Measure task success rates and latency across diverse desktop applications
+- **Improving LLM prompts and grounding**: Refine system prompts and tool descriptions for better action selection accuracy
+- **Expanding recovery strategies**: Add more desktop-specific recovery strategies (e.g., window resize, alternative launch methods)
+- **Performance optimization**: Reduce screenshot comparison overhead and tree hash computation for faster stabilization
+
 ## Setup & Installation
 
 ### Prerequisites
@@ -616,131 +915,6 @@ The frontend starts on `http://localhost:5173`.
 ```bash
 cd docker
 docker compose up --build
-```
-
-## System Guarantees
-
-1. **LangGraph is the primary execution engine.** The orchestrator compiles mode-specific StateGraphs and falls back to legacy pipelines only on exception.
-2. **Every execution is checkpointed.** LangGraph state is persisted to PostgreSQL via `PostgresCheckpointSaver` for resume across restarts.
-3. **Human-in-the-loop uses LangGraph interrupt.** Approval gates pause execution via `interrupt()` and resume via API calls.
-4. **Runtime is the ONLY execution entry point.** No module may instantiate or call agents directly.
-5. **MCP tools are auto-discovered.** System servers (filesystem, shell, browser) start automatically and register tools via `MCPWrappedTool`.
-6. **Tool registration is idempotent.** Built-in tools register once via singleton; MCP discovery skips if already registered.
-7. **Runtime initialization is idempotent.** Redis mutex prevents duplicate core agent registration across processes.
-8. **Paths are OS-aware.** Planner generates OS-appropriate paths; executor remaps hallucinated foreign paths.
-9. **Authentication uses JWT with refresh tokens.** Access tokens expire in 30 minutes; refresh tokens expire in 7 days.
-10. **WebSocket connections authenticate via query token.** Invalid or expired tokens close the connection with code 1008.
-11. **All data is strictly typed.** Pydantic models validate every request/response; no untyped dicts in core flow.
-12. **Output is validated before persistence.** Guardrails validate pipeline output before database insertion.
-
-## Project Structure
-
-```
-AgentOS/
-├── README.md                          # This file
-├── validate_fixes.py                  # Priority 1 validation script
-├── v2_implementation_plan.md          # v2 implementation tracking
-├── app/
-│   ├── main.py                        # FastAPI application entry point
-│   ├── config/
-│   │   └── settings.py                # Pydantic Settings with env validation
-│   ├── api/
-│   │   ├── deps.py                    # Dependency injection (orchestrator singleton)
-│   │   ├── ws.py                      # WebSocket connection manager + endpoint
-│   │   └── routes/
-│   │       ├── auth.py                # JWT login/signup/refresh
-│   │       ├── agents.py              # Agent CRUD
-│   │       ├── tasks.py               # Task execution + approval
-│   │       ├── tools.py               # Tool registry + MCP servers
-│   │       ├── config.py              # System configuration
-│   │       └── health.py              # Health/readiness/metrics endpoints
-│   ├── action_v1/                     # Deterministic fast-path execution
-│   │   ├── selector.py                # Lightweight capability selector
-│   │   ├── executor.py                # Direct MCP tool executor
-│   │   ├── verifier.py                # Deterministic result verifier
-│   │   ├── fallback.py                # Vision & human fallback layers
-│   │   └── runner.py                  # Action V1 pipeline orchestrator
-│   ├── langgraph/                     # v2 LangGraph execution engine
-│   │   ├── state.py                   # AgentState TypedDict
-│   │   ├── nodes.py                   # planner, executor, verifier, approval, summarizer
-│   │   ├── graphs.py                  # Graph compilers per mode
-│   │   └── checkpointer.py            # PostgreSQL checkpoint saver
-│   ├── orchestrator/
-│   │   ├── core.py                    # Orchestrator with LangGraph compilation
-│   │   ├── pipeline.py                # Legacy plan → execute → verify pipeline
-│   │   ├── builder.py                 # Workflow DAG persistence
-│   │   ├── executor.py                # Single-step execution service
-│   │   ├── workflow.py                # DAG engine with AST sandbox
-│   │   └── modes/                     # Mode strategy implementations
-│   ├── runtime/
-│   │   ├── runtime.py                 # AgentRuntime singleton with idempotent init
-│   │   ├── worker.py                  # AgentWorker with inbox queue
-│   │   ├── factory.py                 # AgentFactory
-│   │   └── pool.py                    # AgentPool semaphore
-│   ├── agents/
-│   │   ├── base.py                    # BaseAgent, AgentInput, AgentOutput
-│   │   ├── planner.py                 # PlannerAgent
-│   │   ├── executor.py                # ExecutorAgent with tool loop + path remapping
-│   │   ├── verifier.py                # VerifierAgent
-│   │   └── llm_client.py              # OpenAI async client with JSON extraction
-│   ├── mcp/
-│   │   ├── client_manager.py          # MCPClientManager (server lifecycle)
-│   │   ├── servers/
-│   │   │   ├── filesystem.py          # File system MCP server
-│   │   │   ├── shell.py               # Shell command MCP server
-│   │   │   └── browser.py             # Web browsing MCP server
-│   │   ├── bus.py                     # MCPBus (Memory + Redis)
-│   │   ├── router.py                  # MessageRouter
-│   │   └── protocol.py                # MCPProtocol
-│   ├── tools/
-│   │   ├── registry.py                # ToolRegistry singleton (built-in + MCP)
-│   │   ├── sandbox.py                 # ToolSandbox with AST validation
-│   │   ├── base.py                    # BaseTool, ToolInput, ToolOutput
-│   │   ├── search.py                  # SearchTool
-│   │   ├── calculator.py              # CalculatorTool
-│   │   └── text_processor.py          # TextProcessorTool
-│   ├── capabilities/                  # Capability system
-│   ├── guardrails/                    # Input/output validation
-│   ├── logs/                          # Structured logging, tracing, metrics
-│   ├── memory/                        # PostgreSQL + Redis persistence
-│   └── middleware/                    # Auth middleware, rate limiting
-├── frontend/
-│   ├── src/
-│   │   ├── api/client.ts              # API client with auto-refresh
-│   │   ├── context/AuthContext.tsx    # React auth context
-│   │   ├── hooks/useWebSocket.ts      # WebSocket hook with reconnect
-│   │   ├── pages/                     # Dashboard, Builder, Tools, etc.
-│   │   └── components/                # Shared components + Onboarding
-│   └── README.md                      # Frontend documentation
-└── docker/                            # Docker Compose configuration
-```
-
-## Testing Strategy
-
-- **Unit tests**: Agent logic, tool parsing, guardrails, retry logic
-- **Integration tests**: Runtime initialization, mode strategy factory, task lifecycle
-- **End-to-end tests**: API routes, task execution with mocked LLM
-- **Observability tests**: Trace persistence, metrics export, health endpoints
-- **LangGraph tests**: Graph compilation, checkpoint persistence, node execution
-- **Action V1 benchmarks**: Deterministic execution paths for browser, desktop, filesystem, and multi-step tasks
-- **Validation script**: `python validate_fixes.py` tests all Priority 1 systems
-
-Run Action V1 benchmarks:
-
-```bash
-pytest tests/test_action_v1_benchmarks.py -v
-```
-
-Run the validation suite:
-
-```bash
-python validate_fixes.py
-```
-
-Run the full pytest suite:
-
-```bash
-pytest -q
 ```
 
 ## Deployment Instructions
@@ -803,3 +977,17 @@ Ensure the WebSocket URL includes the token query parameter: `/ws/tasks/{task_id
 
 ### Path remapping not working
 Verify the executor's `_normalize_paths_in_text` regex matches your path format. The regex supports alphanumeric characters, underscores, hyphens, dollar signs, and dots.
+
+## Contributing
+
+Contributions are welcome. When submitting changes:
+
+1. Follow the existing test-first approach: write a failing test, implement the fix, verify the test passes.
+2. Ensure all tests pass before submitting: `pytest -q`
+3. Run the validation suite: `python validate_fixes.py`
+4. Update this README if your changes affect architecture, features, or guarantees.
+5. Keep commits focused and descriptive.
+
+## License
+
+[Add license information here]
