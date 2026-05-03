@@ -114,7 +114,8 @@ async def test_recovery_tool_alternative_browser_to_cloud(mock_redis):
 
 
 @pytest.mark.asyncio
-async def test_recovery_tool_alternative_desktop_to_browser(mock_redis):
+async def test_recovery_tool_alternative_desktop_to_desktop(mock_redis):
+    """FR6.1: Desktop tools must fall back to other desktop tools, NOT browser/shell."""
     engine = RecoveryEngine(max_retries=3)
     decision = await engine.decide(
         "task-t2",
@@ -123,7 +124,8 @@ async def test_recovery_tool_alternative_desktop_to_browser(mock_redis):
         current_tool="desktop__screenshot",
     )
     assert decision.action == RecoveryAction.SWITCH_TOOL
-    assert decision.next_tool == "browser__screenshot"
+    # FR6.1: Should use desktop_env__screenshot, not browser__screenshot
+    assert decision.next_tool == "desktop_env__screenshot"
 
 
 @pytest.mark.asyncio

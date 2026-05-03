@@ -1,4 +1,5 @@
 """Recovery Engine — decides what to do when execution fails."""
+from enum import Enum, auto
 from typing import Dict, Any, Optional, List
 
 from .models import (
@@ -10,6 +11,20 @@ from .models import (
 )
 from ..logs.logger import logger
 from ..memory.short_term import redis_client
+
+
+class RecoveryStrategy(Enum):
+    """Strategy for recovery — constrains what fallback environments/tools are allowed.
+
+    - GENERIC: No constraints; use any fallback environment or tool.
+    - DESKTOP: Stay within desktop tools/environments; never fall back to browser or shell.
+    - BROWSER: Stay within browser tools/environments.
+    - SHELL: Stay within shell tools/environments.
+    """
+    GENERIC = auto()
+    DESKTOP = auto()
+    BROWSER = auto()
+    SHELL = auto()
 
 
 class RecoveryEngine:
@@ -72,9 +87,19 @@ class RecoveryEngine:
             "browser__http_request": ["browser__scrape_page", "cloud_api__http_request"],
             "browser__search": ["cloud_api__search"],
             "cloud_api__search": ["browser__search"],
-            "desktop__screenshot": ["browser__screenshot"],
-            "desktop__click": ["browser__click"],
-            "desktop__type": ["shell__execute_command"],
+            # FR6.1: Desktop tools must fall back to other desktop tools, NOT browser/shell
+            "desktop__screenshot": ["desktop_env__screenshot"],
+            "desktop__click": ["desktop_env__click"],
+            "desktop__type": ["desktop_env__type_text", "desktop__type_element"],
+            "desktop_env__screenshot": ["desktop__screenshot"],
+            "desktop_env__click": ["desktop__click"],
+            "desktop_env__type_text": ["desktop__type_element", "desktop__type"],
+            "desktop__get_ui_tree": ["desktop_env__screenshot"],
+            "desktop__click_element": ["desktop__focus_and_interact"],
+            "desktop__type_element": ["desktop__focus_and_interact", "desktop_env__type_text"],
+            "desktop__focus_and_interact": ["desktop__click_element", "desktop__type_element"],
+            "desktop_env__focus_window": ["desktop_env__ensure_focus"],
+            "desktop_env__ensure_focus": ["desktop_env__focus_window"],
             "cloud_api__scrape_page": ["browser__scrape_page"],
             "cloud_api__http_request": ["browser__http_request"],
         }
@@ -132,8 +157,21 @@ class RecoveryEngine:
         current_tool: Optional[str] = None,
         current_environment: Optional[ExecutionEnvironment] = None,
         execution_state: Optional[Dict[str, Any]] = None,
+        recovery_strategy: Optional[RecoveryStrategy] = None,
     ) -> RecoveryDecision:
-        """Decide the recovery action for a failure."""
+        """Decide the recovery action for a failure.
+
+        Args:
+            task_id: The task identifier.
+            step_id: Optional step identifier.
+            error: The error message, if any.
+            verification_report: Optional verification report.
+            current_tool: The tool that failed, if known.
+            current_environment: The execution environment that failed, if known.
+            execution_state: Optional canonical execution state.
+            recovery_strategy: Optional strategy constraining fallback options
+                (e.g., RecoveryStrategy.DESKTOP prevents falling back to browser/shell).
+        """
         # If canonical execution state shows terminal success, do NOT recover
         if execution_state:
             from ..execution_state import ExecutionState, ExecutionVerdict
@@ -202,6 +240,33 @@ class RecoveryEngine:
             if current_environment:
                 fallback = self._suggest_environment_fallback(current_environment, error_lower)
                 if fallback:
+                    # FR6.1: DESKTOP strategy must not fall back to browser/shell environments
+                    if recovery_strategy == RecoveryStrategy.DESKTOP:
+                        if fallback in (ExecutionEnvironment.BROWSER_UI, ExecutionEnvironment.CLOUD_API, ExecutionEnvironment.SHELL):
+                            # Try a desktop tool alternative instead of switching to non-desktop env
+                            alt = self._get_alternative_tool(current_tool)
+                            if alt:
+                                return RecoveryDecision(
+                                    task_id=task_id,
+                                    step_id=step_id,
+                                    action=RecoveryAction.SWITCH_TOOL,
+                                    reason=(
+                                        f"Desktop env failure ({error}) — DESKTOP strategy prevents "
+                                        f"env fallback to {fallback.value}; trying alternative tool: {alt}"
+                                    ),
+                                    next_tool=alt,
+                                )
+                            # No desktop alternative — escalate
+                            return RecoveryDecision(
+                                task_id=task_id,
+                                step_id=step_id,
+                                action=RecoveryAction.ESCALATE,
+                                reason=(
+                                    f"Desktop env failure ({error}) — DESKTOP strategy prevents "
+                                    f"env fallback to {fallback.value}; no desktop alternative available"
+                                ),
+                                escalation_reason=error,
+                            )
                     return RecoveryDecision(
                         task_id=task_id,
                         step_id=step_id,
@@ -293,6 +358,82 @@ class RecoveryEngine:
             return None
         fallbacks = self.ENVIRONMENT_FALLBACKS.get(current_environment, [])
         return fallbacks[0] if fallbacks else None
+
+    async def execute(
+        self,
+        decision: RecoveryDecision,
+        recovery_strategy: Optional[RecoveryStrategy] = None,
+    ) -> RecoveryDecision:
+        """Execute (validate/enforce) a recovery decision, respecting the recovery strategy.
+
+        For RecoveryStrategy.DESKTOP:
+        - Rejects SWITCH_ENVIRONMENT to browser/shell/cloud environments.
+        - Rejects SWITCH_TOOL to non-desktop tools (browser, shell, cloud_api).
+        - Falls back to escalation when no desktop-appropriate recovery is available.
+
+        For other strategies, the decision passes through unchanged.
+
+        Args:
+            decision: The recovery decision to execute/validate.
+            recovery_strategy: The strategy constraining allowed recovery actions.
+
+        Returns:
+            A potentially modified RecoveryDecision that respects the strategy.
+        """
+        if recovery_strategy != RecoveryStrategy.DESKTOP:
+            return decision
+
+        # FR6.1: DESKTOP strategy — enforce desktop-only recovery actions
+
+        # Reject environment switches to non-desktop environments
+        if decision.action == RecoveryAction.SWITCH_ENVIRONMENT:
+            if decision.next_environment in (
+                ExecutionEnvironment.BROWSER_UI,
+                ExecutionEnvironment.CLOUD_API,
+                ExecutionEnvironment.SHELL,
+            ):
+                logger.warning(
+                    f"RecoveryEngine.execute: DESKTOP strategy overrides "
+                    f"SWITCH_ENVIRONMENT to {decision.next_environment.value}; "
+                    f"escalating instead."
+                )
+                return RecoveryDecision(
+                    task_id=decision.task_id,
+                    step_id=decision.step_id,
+                    action=RecoveryAction.ESCALATE,
+                    reason=(
+                        f"DESKTOP strategy prevented switch to "
+                        f"{decision.next_environment.value}; {decision.reason}"
+                    ),
+                    escalation_reason=(
+                        "Desktop recovery strategy restricts environment fallback "
+                        "to desktop-only environments"
+                    ),
+                )
+
+        # Reject tool switches to non-desktop tools
+        if decision.action == RecoveryAction.SWITCH_TOOL and decision.next_tool:
+            non_desktop_prefixes = ("browser__", "shell__", "cloud_api__")
+            if decision.next_tool.startswith(non_desktop_prefixes):
+                logger.warning(
+                    f"RecoveryEngine.execute: DESKTOP strategy overrides "
+                    f"SWITCH_TOOL to {decision.next_tool}; escalating instead."
+                )
+                return RecoveryDecision(
+                    task_id=decision.task_id,
+                    step_id=decision.step_id,
+                    action=RecoveryAction.ESCALATE,
+                    reason=(
+                        f"DESKTOP strategy prevented switch to non-desktop tool "
+                        f"{decision.next_tool}; {decision.reason}"
+                    ),
+                    escalation_reason=(
+                        "Desktop recovery strategy restricts tool alternatives "
+                        "to desktop-only tools"
+                    ),
+                )
+
+        return decision
 
 
 # Global singleton
