@@ -1,5 +1,6 @@
 """Desktop Environment — native desktop UI automation."""
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -895,6 +896,8 @@ class DesktopSession:
 
     def get_snapshot_history(self) -> List[Dict[str, Any]]:
         """Return action snapshots for debugging."""
+        if self._stabilizer is None:
+            return []
         return [self._snapshot_to_dict(s) for s in self._stabilizer.get_snapshot_history()]
 
     @staticmethod
@@ -1711,7 +1714,41 @@ class DesktopSession:
         return result
 
     async def close(self) -> ToolOutput:
-        self._stabilizer.clear_history()
+        # Screenshot cleanup (try/except log)
+        try:
+            self._screen_size = (0, 0)
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: screenshot cleanup failed: {e}")
+
+        # UI element map clear (try/except log, finally set None)
+        try:
+            self._ui_element_map.clear()
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: UI element map clear failed: {e}")
+        finally:
+            self._ui_element_map = None
+
+        # Stabilizer clear_history (try/except log, finally set None)
+        try:
+            self._stabilizer.clear_history()
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: stabilizer clear failed: {e}")
+        finally:
+            self._stabilizer = None
+
+        # Nullify remaining references
+        self._window_registry = None
+        self._orchestrator = None
+        self._cached_tree = None
+        self._cached_tree_hash = None
+        self._last_tree_hash = None
+        self._last_opened_app_name = None
+        self.perception_layer = None
+        self._next_element_id = 0
+
+        # Hint to garbage collector
+        gc.collect()
+
         logger.info(f"DesktopSession[{self.task_id}]: session closed")
         return ToolOutput(success=True, result={"message": "Desktop session closed"})
 

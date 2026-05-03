@@ -357,6 +357,18 @@ class TestDesktopSession:
                     assert session.perception_layer == "uia"
 
     @pytest.mark.asyncio
+    async def test_desktop_session_close_is_exception_safe(self):
+        """NFR3: close() must never crash the worker even if stabilizer clear fails."""
+        session = DesktopSession(task_id="safe-close")
+        with patch.object(session._stabilizer, "clear_history", side_effect=RuntimeError("boom")):
+            try:
+                await session.close()
+            except Exception:
+                pytest.fail("close() must not propagate exceptions")
+        assert session._ui_element_map is None
+        assert session._stabilizer is None
+
+    @pytest.mark.asyncio
     async def test_desktop_session_caches_ui_tree(self):
         """FR8/NFR1: Tree should be cached and not rebuilt if hash unchanged and <5s old."""
         session = DesktopSession(task_id="cache-test")
