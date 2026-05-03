@@ -584,6 +584,8 @@ class DesktopSession:
                     f"DesktopSession[{self.task_id}]: sparse tree ({actionable_count} actionable nodes, "
                     f"threshold={self.VISION_FALLBACK_THRESHOLD}). Triggering vision fallback."
                 )
+                self._cached_tree = None
+                self._cached_tree_hash = None
                 return await self._vision_fallback()
 
             # --- Update cache ---
@@ -609,6 +611,8 @@ class DesktopSession:
                 f"DesktopSession[{self.task_id}]: get_ui_tree failed: {e}. "
                 "Attempting vision fallback."
             )
+            self._cached_tree = None
+            self._cached_tree_hash = None
             return await self._vision_fallback()
 
     async def click_element(self, element_id: int, verify: bool = True, stabilize: bool = True) -> ToolOutput:
@@ -667,9 +671,10 @@ class DesktopSession:
         # Post-action: if no state change, warn but still return result
         if snapshot.verification_result and not snapshot.verification_result.get("changed"):
             if isinstance(result, ToolOutput):
-                result.result = result.result or {}
-                if isinstance(result.result, dict):
-                    result.result["warning"] = "No UI state change detected after click"
+                updated_result = dict(result.result or {})
+                if isinstance(updated_result, dict):
+                    updated_result["warning"] = "No UI state change detected after click"
+                result = result.model_copy(update={"result": updated_result})
 
         return result if result is not None else ToolOutput(success=False, error="Action failed")
 

@@ -354,7 +354,7 @@ class TestDesktopSession:
                 with patch.object(sys, "platform", "win32"):
                     result = await session.get_ui_tree()
                     assert result.success is True
-                    assert session.perception_layer in ("uia", "vision")
+                    assert session.perception_layer == "uia"
 
     @pytest.mark.asyncio
     async def test_desktop_session_caches_ui_tree(self):

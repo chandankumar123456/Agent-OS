@@ -476,6 +476,8 @@ class TaskRunner:
                 execution_environment.cleanup(str(task_id))
 
             result = final_state.get("result", {})
+            if isinstance(result, dict):
+                result["perception_layer"] = final_state.get("perception_layer", "unknown")
             error = final_state.get("error")
             verified = final_state.get("verified", False)
             status = final_state.get("status", "completed")
