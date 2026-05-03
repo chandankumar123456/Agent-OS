@@ -223,15 +223,21 @@ async def _check_desktop_goal(
             break  # Only check the most recent open_application call
 
     # 4. Fallback: re-verify from UI state
-    reports = await verification_engine.verify_plan(task_id, [
-        {"step": step_description, "id": "desktop_goal"}
-    ])
-    for r in reports:
-        if r.result == VerificationResult.PASS:
-            return True, f"Goal reached: {r.evidence}"
-        if r.result == VerificationResult.FAIL:
-            return False, f"Goal not reached: {r.failure_reason}"
-    return False, "No deterministic verification matched"
+    try:
+        reports = await verification_engine.verify_plan(task_id, [
+            {"step_number": 1, "description": step_description, "step": step_description,
+             "step_type": "action", "tool": "desktop_env__open_application", "params": {},
+             "id": "desktop_goal"}
+        ])
+        for r in reports:
+            if r.result == VerificationResult.PASS:
+                return True, f"Goal reached: {r.evidence}"
+            if r.result == VerificationResult.FAIL:
+                return False, f"Goal not reached: {r.failure_reason}"
+        return False, "No deterministic verification matched"
+    except Exception as e:
+        logger.warning(f"[_check_desktop_goal] Verification fallback failed: {e}")
+        return False, f"Verification fallback failed: {e}"
 
 
 _DESKTOP_LOOP_SYSTEM_PROMPT = """You are a desktop automation agent. Your goal is to bring the desktop to the desired state.
@@ -293,6 +299,9 @@ async def _run_desktop_goal_loop(
     execution_state.current_step = state.get("current_step_index", 0) + 1
     step_number = execution_state.current_step
 
+    # Import desktop_session_manager once (outside loop)
+    from ..environments.desktop_env import desktop_session_manager
+
     while iteration < max_iterations:
         iteration += 1
         logger.info(f"[_run_desktop_goal_loop] Iteration {iteration}/{max_iterations} for task {task_id}")
@@ -304,20 +313,16 @@ async def _run_desktop_goal_loop(
         # 2. CHOOSE ACTION (LLM with state)
         # Include retry context from last snapshot if available
         retry_context = ""
-        try:
-            from ..environments.desktop_env import desktop_session_manager
-            session = desktop_session_manager.get_session(task_id)
-            if session and hasattr(session, "get_snapshot_history"):
-                history = session.get_snapshot_history()
-                if history:
-                    last = history[-1]
-                    if last.get("retry_count", 0) > 0:
-                        retry_context = f"\nLAST ACTION RETRY INFO: retried {last['retry_count']} time(s), error: {last.get('error', 'none')}"
-                    if last.get("verification_result"):
-                        vr = last["verification_result"]
-                        retry_context += f"\nLAST ACTION VERIFICATION: changed={vr.get('changed')}, notes={vr.get('notes')}"
-        except Exception:
-            pass
+        session = desktop_session_manager.get_session(task_id)
+        if session and hasattr(session, "get_snapshot_history"):
+            history = session.get_snapshot_history()
+            if history:
+                last = history[-1]
+                if last.get("retry_count", 0) > 0:
+                    retry_context = f"\nLAST ACTION RETRY INFO: retried {last['retry_count']} time(s), error: {last.get('error', 'none')}"
+                if last.get("verification_result"):
+                    vr = last["verification_result"]
+                    retry_context += f"\nLAST ACTION VERIFICATION: changed={vr.get('changed')}, notes={vr.get('notes')}"
 
         tools_json = json.dumps(grounded_tools, indent=2, default=str)
         system_prompt = _DESKTOP_LOOP_SYSTEM_PROMPT.format(
@@ -1522,12 +1527,13 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
             if len(desktop_verify_reports) == 0:
                 # No desktop-specific verifications matched the plan;
                 # rely on tool call check below to determine env_verified
-                pass
+                desktop_verify_passed = None
             else:
                 env_verified = desktop_verify_passed
         except Exception as e:
             logger.warning(f"[verifier_node] Desktop verify_plan() error: {e}")
             verification_notes_list.append(f"Desktop verify_plan error: {e}")
+            desktop_verify_passed = None
             # Fall through to tool call check
 
         # Fallback/Supplementary: Check if any desktop tool calls were made
@@ -1543,6 +1549,10 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         if not desktop_calls:
             env_verified = False
             env_notes = "Desktop environment selected but no desktop tools were invoked."
+        elif desktop_verify_passed is None:
+            # verify_plan() returned no reports — could not confirm state change
+            env_verified = False
+            env_notes = "Desktop tools were invoked but verify_plan() could not confirm state change."
         else:
             suffix = " " + " ".join(verification_notes_list) if verification_notes_list else ""
             env_notes = f"Desktop automation verified: {len(desktop_calls)} desktop actions performed.{suffix}"

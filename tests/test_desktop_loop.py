@@ -533,3 +533,99 @@ async def test_verifier_node_calls_verify_plan_for_desktop(
     assert result["verified"] is True, (
         f"Expected verified=True, got {result['verified']}"
     )
+
+
+# ── FR3.3: verifier_node returns False when desktop tools invoked but no state change ──
+
+@pytest.mark.asyncio
+@patch("app.langgraph.nodes.get_llm_client")
+@patch("app.langgraph.nodes.verification_engine")
+@patch("app.langgraph.nodes.observability_bus")
+async def test_verifier_node_returns_false_when_desktop_tools_invoked_but_no_state_change(
+    mock_obs,
+    mock_verification_engine,
+    mock_get_llm,
+):
+    """FR3.3: When desktop tools were invoked but verify_plan() returns
+    zero reports (no matching verifiers found), verifier_node must set
+    verified=False because state change could not be confirmed.
+    """
+    mock_obs.emit_safe = AsyncMock(return_value=None)
+
+    # Mock LLM verification as passing
+    mock_llm = AsyncMock()
+    mock_llm.complete_json = AsyncMock(return_value={
+        "verified": True,
+        "notes": "LLM verification passed",
+    })
+    mock_get_llm.return_value = mock_llm
+
+    # verify_plan returns NO reports — no matching verifiers
+    mock_verification_engine.verify_plan = AsyncMock(return_value=[])
+
+    state = AgentState(
+        task_id="fr33-test",
+        user_id="u1",
+        query="focus on notepad window",
+        plan=[{"step_number": 1, "description": "Focus on Notepad"}],
+        steps=[{"step_number": 1, "description": "Focus on Notepad", "output": "done"}],
+        tool_calls=[
+            {
+                "step": 1,
+                "tool": "desktop_env__press_key",
+                "result": {"success": True},
+            }
+        ],
+        messages=[],
+        environment_config={"environment": "desktop"},
+    )
+
+    result = await verifier_node(state)
+
+    # Desktop tools were invoked but verify_plan found no matching verifiers
+    # → env_verified must be False → verified must be False
+    assert result["verified"] is False, (
+        f"Expected verified=False when desktop tools invoked but verify_plan returned no reports, got {result['verified']}"
+    )
+    assert "could not confirm state change" in result.get("verification_notes", ""), (
+        f"Expected state change note in verification_notes, got: {result.get('verification_notes', '')}"
+    )
+
+
+# ── C1: _check_desktop_goal handles verify_plan exception gracefully ──
+
+@pytest.mark.asyncio
+@patch("app.langgraph.nodes.verification_engine")
+async def test_check_desktop_goal_handles_verify_plan_exception(
+    mock_verification_engine,
+):
+    """C1: _check_desktop_goal must catch exceptions from verify_plan()
+    and return graceful fallback (False, error_msg) instead of crashing.
+    """
+    from app.langgraph.nodes import _check_desktop_goal
+
+    # verify_plan raises an exception
+    mock_verification_engine.verify_plan = AsyncMock(
+        side_effect=RuntimeError("Desktop session not available")
+    )
+
+    reached, reason = await _check_desktop_goal(
+        task_id="c1-test",
+        step_description="click the cancel button",
+        tool_calls=[
+            {
+                "step": 1,
+                "tool": "desktop_env__click",
+                "result": {"success": True},
+            }
+        ],
+        step_number=1,
+    )
+
+    # Should return False with a graceful error message, not crash
+    assert reached is False, (
+        f"Expected goal_reached=False on exception, got {reached}"
+    )
+    assert "Verification fallback failed" in reason or "verify_plan" in reason.lower(), (
+        f"Expected error message about verification fallback, got: {reason}"
+    )
