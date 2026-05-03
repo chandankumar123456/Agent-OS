@@ -35,7 +35,7 @@ from ..capabilities import (
     execution_environment,
     recovery_engine,
 )
-from ..capabilities.models import ExecutionEnvironment, FeasibilityResult
+from ..capabilities.models import ExecutionEnvironment, FeasibilityResult, RecoveryAction
 from ..memory.long_term import workflow_repo
 from ..config import settings
 from .adaptive_routing import (
@@ -51,6 +51,8 @@ from ..action_v1.models import ActionStatus
 
 class TaskRunner:
     """Compiles and invokes LangGraph state graphs for task execution."""
+
+    MAX_RECOVERY_RETRIES = 3
 
     def __init__(self):
         self.task_complexity_router = TaskComplexityRouter()
@@ -116,12 +118,15 @@ class TaskRunner:
         mode: str,
         resume_state: Optional[Dict[str, Any]] = None,
         resume_value: Optional[Dict[str, Any]] = None,
+        recovery_retry_count: int = 0,
     ) -> AgentOutput:
         """Execute a task using LangGraph compiled state graphs with capability awareness.
 
         Args:
             resume_value: When provided, resumes a graph paused on an interrupt
                           (e.g., human approval) by passing Command(resume=resume_value).
+            recovery_retry_count: Tracks number of desktop recovery retries to
+                                  prevent infinite recursion. Capped at MAX_RECOVERY_RETRIES.
         """
         try:
             # ── Action V1 Fast Path ─────────────────────────────────────
@@ -489,6 +494,20 @@ class TaskRunner:
                 # ── Desktop Recovery Path ──────────────────────────
                 env = env_config.environment
                 if env == ExecutionEnvironment.DESKTOP and recovery_engine:
+                    if recovery_retry_count >= self.MAX_RECOVERY_RETRIES:
+                        logger.warning(
+                            f"Max desktop recovery retries ({self.MAX_RECOVERY_RETRIES}) "
+                            f"exceeded for task={task_id}; returning FAILURE"
+                        )
+                        return AgentOutput(
+                            task_id=str(task_id),
+                            step_id=uuid4(),
+                            status=AgentStatus.FAILURE,
+                            error_type="max_recovery_retries_exceeded",
+                            error_message=f"Desktop recovery retried {self.MAX_RECOVERY_RETRIES} times but verification still failed.",
+                            output_data=result,
+                        )
+
                     logger.info(
                         f"Desktop task verification failed; entering recovery flow for task={task_id}"
                     )
@@ -498,11 +517,10 @@ class TaskRunner:
                         error="Desktop verification failed",
                         current_environment=env,
                     )
-                    if recovery_decision.action in (
-                        "retry", "RETRY",
-                    ):
+                    if recovery_decision.action == RecoveryAction.RETRY:
                         logger.info(
-                            f"Recovery decided RETRY for task={task_id}; re-running"
+                            f"Recovery decided RETRY for task={task_id}; "
+                            f"re-running (attempt {recovery_retry_count + 1} of {self.MAX_RECOVERY_RETRIES})"
                         )
                         return await self.run(
                             query=query,
@@ -512,6 +530,7 @@ class TaskRunner:
                             mode=mode,
                             resume_state=resume_state,
                             resume_value=resume_value,
+                            recovery_retry_count=recovery_retry_count + 1,
                         )
 
                 return AgentOutput(
