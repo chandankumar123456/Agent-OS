@@ -33,8 +33,9 @@ from ..capabilities import (
     capability_router,
     feasibility_engine,
     execution_environment,
+    recovery_engine,
 )
-from ..capabilities.models import FeasibilityResult
+from ..capabilities.models import ExecutionEnvironment, FeasibilityResult
 from ..memory.long_term import workflow_repo
 from ..config import settings
 from .adaptive_routing import (
@@ -485,6 +486,34 @@ class TaskRunner:
                 )
 
             if not verified:
+                # ── Desktop Recovery Path ──────────────────────────
+                env = env_config.environment
+                if env == ExecutionEnvironment.DESKTOP and recovery_engine:
+                    logger.info(
+                        f"Desktop task verification failed; entering recovery flow for task={task_id}"
+                    )
+                    recovery_decision = await recovery_engine.decide(
+                        task_id=str(task_id),
+                        step_id=None,
+                        error="Desktop verification failed",
+                        current_environment=env,
+                    )
+                    if recovery_decision.action in (
+                        "retry", "RETRY",
+                    ):
+                        logger.info(
+                            f"Recovery decided RETRY for task={task_id}; re-running"
+                        )
+                        return await self.run(
+                            query=query,
+                            config=config,
+                            task_id=task_id,
+                            user_id=user_id,
+                            mode=mode,
+                            resume_state=resume_state,
+                            resume_value=resume_value,
+                        )
+
                 return AgentOutput(
                     task_id=str(task_id),
                     step_id=uuid4(),
