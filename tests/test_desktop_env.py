@@ -341,6 +341,22 @@ class TestDesktopSession:
         assert len(session.get_snapshot_history()) == 0
 
     @pytest.mark.asyncio
+    async def test_desktop_session_tracks_perception_layer(self):
+        """FR8.3: Must expose perception_layer used in task metadata."""
+        session = DesktopSession(task_id="perception-test")
+        assert session.perception_layer is None
+        with patch.object(session, "_is_headless", return_value=False):
+            with patch.object(session, "_build_ui_tree_windows", new_callable=AsyncMock) as mock_build:
+                mock_build.return_value = [
+                    {"id": 1, "name": "OK", "type": "Button"},
+                    {"id": 2, "name": "Cancel", "type": "Button"},
+                ]
+                with patch.object(sys, "platform", "win32"):
+                    result = await session.get_ui_tree()
+                    assert result.success is True
+                    assert session.perception_layer in ("uia", "vision")
+
+    @pytest.mark.asyncio
     async def test_desktop_session_caches_ui_tree(self):
         """FR8/NFR1: Tree should be cached and not rebuilt if hash unchanged and <5s old."""
         session = DesktopSession(task_id="cache-test")

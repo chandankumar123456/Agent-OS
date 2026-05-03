@@ -523,6 +523,9 @@ async def _run_desktop_goal_loop(
         source="executor_node",
     )
 
+    session = desktop_session_manager.get_session(task_id)
+    perception_layer = getattr(session, "perception_layer", None) or "unknown"
+
     return {
         "steps": steps,
         "current_step_index": state.get("current_step_index", 0) + 1,
@@ -533,6 +536,7 @@ async def _run_desktop_goal_loop(
         "status": status,
         "desktop_iterations": iteration,
         "execution_state": execution_state.to_dict(),
+        "perception_layer": perception_layer,
     }
 
 

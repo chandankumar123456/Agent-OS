@@ -70,6 +70,7 @@ class DesktopSession:
         self._cached_tree_hash: Optional[str] = None
         self._cached_tree_timestamp: float = 0.0
         self._tree_cache_ttl_seconds: float = 5.0
+        self.perception_layer: Optional[str] = None  # "uia" | "vision" | "ocr"
         self._refresh_screen_size()
         # Lazy-init WindowRegistry (avoids circular import)
         try:
@@ -447,6 +448,8 @@ class DesktopSession:
                 error="Vision fallback failed: no screenshot path returned",
             )
 
+        self.perception_layer = "vision"
+
         parser = get_vision_parser()
         detected = parser.parse_screenshot(screenshot_path)
 
@@ -573,6 +576,8 @@ class DesktopSession:
                 "mode": "uia_tree",
                 "perception_layer": "uia",
             }
+
+            self.perception_layer = "uia"
 
             if actionable_count < self.VISION_FALLBACK_THRESHOLD:
                 logger.warning(
