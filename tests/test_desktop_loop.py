@@ -36,7 +36,7 @@ async def test_desktop_loop_does_not_stop_after_first_action(
     and return the correct number of tool calls made by the loop.
 
     The mock DesktopGoalLoop simulates 2 tool calls before the goal is reached
-    (matching the old behavior where _check_desktop_goal returned True after 2 calls).
+    (matching the expected behavior where the desktop goal loop completes after 2 actions).
     """
     mock_obs.emit_safe = AsyncMock(return_value=None)
 
@@ -523,45 +523,6 @@ async def test_verifier_node_returns_false_when_desktop_tools_invoked_but_no_sta
     )
     assert "could not confirm state change" in result.get("verification_notes", ""), (
         f"Expected state change note in verification_notes, got: {result.get('verification_notes', '')}"
-    )
-
-
-# ── C1: _check_desktop_goal handles verify_plan exception gracefully ──
-
-@pytest.mark.asyncio
-@patch("app.langgraph.nodes.verification_engine")
-async def test_check_desktop_goal_handles_verify_plan_exception(
-    mock_verification_engine,
-):
-    """C1: _check_desktop_goal must catch exceptions from verify_plan()
-    and return graceful fallback (False, error_msg) instead of crashing.
-    """
-    from app.langgraph.nodes import _check_desktop_goal
-
-    # verify_plan raises an exception
-    mock_verification_engine.verify_plan = AsyncMock(
-        side_effect=RuntimeError("Desktop session not available")
-    )
-
-    reached, reason = await _check_desktop_goal(
-        task_id="c1-test",
-        step_description="click the cancel button",
-        tool_calls=[
-            {
-                "step": 1,
-                "tool": "desktop_env__click",
-                "result": {"success": True},
-            }
-        ],
-        step_number=1,
-    )
-
-    # Should return False with a graceful error message, not crash
-    assert reached is False, (
-        f"Expected goal_reached=False on exception, got {reached}"
-    )
-    assert "Verification fallback failed" in reason or "verify_plan" in reason.lower(), (
-        f"Expected error message about verification fallback, got: {reason}"
     )
 
 

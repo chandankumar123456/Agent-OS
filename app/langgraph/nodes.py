@@ -98,106 +98,6 @@ def _build_default_params(tool_name: str, description: str) -> Optional[Dict[str
     return None
 
 
-
-def _required_desktop_actions(description: str) -> set:
-    """Parse step description to determine which actions must succeed."""
-    desc = description.lower()
-    required = set()
-    if any(k in desc for k in ("type", "write", "enter text", "input text")):
-        required.add("type")
-    if any(k in desc for k in ("paste", "ctrl+v", "clipboard")):
-        required.add("paste")
-    if any(k in desc for k in ("save", "ctrl+s")):
-        required.add("save")
-    if any(k in desc for k in ("focus", "switch to", "bring to front")):
-        required.add("focus")
-    if any(k in desc for k in ("open", "launch", "start")):
-        required.add("open")
-    # If description implies only opening, require open; otherwise leave empty
-    # and fall through to legacy terminal checks
-    return required
-
-
-async def _check_desktop_goal(
-    task_id: str,
-    step_description: str,
-    tool_calls: List[Dict[str, Any]],
-    execution_state: Optional[ExecutionState] = None,
-    step_number: int = 0,
-) -> tuple:
-    """Check if the desktop goal is reached using canonical execution state first.
-
-    Priority:
-    1. Intent-based action completion (type/paste/save/focus/open required)
-    2. ExecutionState terminal success (canonical, no re-verification)
-    3. Recent successful tool_call evidence (backwards compat)
-    4. verification_engine.verify_plan (UI-based fallback)
-    """
-    # 1. Intent-based requirement checking
-    required = _required_desktop_actions(step_description)
-    if required:
-        successful = set()
-        for call in tool_calls:
-            if call.get("step") != step_number:
-                continue
-            result = call.get("result", {})
-            if not result.get("success"):
-                continue
-            tool = call.get("tool", "")
-            if "type_text" in tool or "type_element" in tool:
-                successful.add("type")
-            elif "press_key" in tool:
-                keys = str(call.get("params", {}).get("keys", "")).lower()
-                if "ctrl" in keys and "v" in keys:
-                    successful.add("paste")
-            elif "focus_window" in tool or "ensure_focus" in tool:
-                successful.add("focus")
-            elif "open_application" in tool or "launch_app" in tool:
-                successful.add("open")
-            elif "save" in tool:
-                successful.add("save")
-        missing = required - successful
-        if missing:
-            return False, f"Missing required actions: {missing}"
-        # All required actions satisfied — goal reached
-        return True, f"Goal reached: all required actions completed ({successful})"
-
-    # 2. Canonical execution state (unified truth)
-    if execution_state and execution_state.has_terminal_success(step_number):
-        step_rec = execution_state.get_step(step_number)
-        if step_rec:
-            return True, f"Goal reached (terminal): {step_rec.notes}"
-
-    # 3. Backwards-compat: check recent successful tool_call
-    for call in reversed(tool_calls):
-        if call.get("tool") == "desktop_env__open_application":
-            result = call.get("result", {})
-            if result.get("success"):
-                data = result.get("data", {})
-                if isinstance(data, dict) and (data.get("pid") or data.get("window")):
-                    return True, "Goal reached: open_application succeeded with PID/window"
-            break  # Only check the most recent open_application call
-
-    # 4. Fallback: re-verify from UI state
-    try:
-        reports = await verification_engine.verify_plan(task_id, [
-            {"step_number": 1, "description": step_description, "step": step_description,
-             "step_type": "action", "tool": "desktop_env__open_application", "params": {},
-             "id": "desktop_goal"}
-        ])
-        for r in reports:
-            if r.result == VerificationResult.PASS:
-                return True, f"Goal reached: {r.evidence}"
-            if r.result == VerificationResult.FAIL:
-                return False, f"Goal not reached: {r.failure_reason}"
-        return False, "No deterministic verification matched"
-    except Exception as e:
-        logger.warning(f"[_check_desktop_goal] Verification fallback failed: {e}")
-        return False, f"Verification fallback failed: {e}"
-
-
-
-
 def _deterministic_tool_select(description: str, available_tools: List[Dict[str, Any]]) -> Optional[str]:
     """If a step description maps to exactly one obvious tool, return it without LLM."""
     grounded = tool_grounding_layer.filter_tools_for_step(description, available_tools)
@@ -558,6 +458,14 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
             iterations = desktop_result.get("iterations", 0)
             answer = desktop_result.get("answer", "")
 
+        # Record desktop loop results in canonical execution state
+        for action in actions:
+            if isinstance(action, dict):
+                tool_name = action.get("tool", "unknown")
+                result_dict = action.get("result", {})
+                tool_record = ToolExecutionRecord.from_tool_result(tool_name, result_dict)
+                execution_state.record_tool(step_number, description, tool_record)
+
         steps = list(state.get("steps", []))
         steps.append({
             "step_number": step_number,
@@ -578,6 +486,7 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
             "recovery_decisions": state.get("recovery_decisions", []),
             "status": status,
             "desktop_iterations": iterations,
+            "execution_state": execution_state.to_dict(),
         }
 
     # ── Deterministic Execution (skip LLM for obvious cases) ──────────
