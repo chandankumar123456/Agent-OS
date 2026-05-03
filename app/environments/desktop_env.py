@@ -414,7 +414,7 @@ class DesktopSession:
     def _compute_tree_hash(self, tree: List[Dict[str, Any]]) -> str:
         """Compute a simple hash of the tree for sync detection."""
         canonical = json.dumps(tree, sort_keys=True, ensure_ascii=True)
-        return hashlib.md5(canonical.encode("utf-8")).hexdigest()
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     # Configurable threshold for triggering vision fallback
     VISION_FALLBACK_THRESHOLD: int = 2
@@ -459,6 +459,7 @@ class DesktopSession:
                 success=True,
                 result={
                     "mode": "vision_fallback",
+                    "perception_layer": "vision",
                     "screenshot_path": screenshot_path,
                     "tree": [],
                     "count": 0,
@@ -495,6 +496,7 @@ class DesktopSession:
             success=True,
             result={
                 "mode": "vision_fallback",
+                "perception_layer": "vision",
                 "screenshot_path": screenshot_path,
                 "tree": tree,
                 "count": len(tree),
@@ -568,6 +570,8 @@ class DesktopSession:
                 "tree": tree,
                 "count": len(tree),
                 "actionable_count": actionable_count,
+                "mode": "uia_tree",
+                "perception_layer": "uia",
             }
 
             if actionable_count < self.VISION_FALLBACK_THRESHOLD:
@@ -1306,13 +1310,15 @@ class DesktopSession:
                             TARGET_THREAD_ID = user32.GetWindowThreadProcessId(hwnd, None)
                             if FG_THREAD_ID and TARGET_THREAD_ID and FG_THREAD_ID != TARGET_THREAD_ID:
                                 user32.AttachThreadInput(FG_THREAD_ID, TARGET_THREAD_ID, True)
-                                user32.SetForegroundWindow(hwnd)
-                                user32.AttachThreadInput(FG_THREAD_ID, TARGET_THREAD_ID, False)
-                                logger.debug(
-                                    f"DesktopSession[{self.task_id}]: used AttachThreadInput "
-                                    f"trick for focus (fg_thread={FG_THREAD_ID}, target_thread={TARGET_THREAD_ID})"
-                                )
-                                result = True
+                                try:
+                                    user32.SetForegroundWindow(hwnd)
+                                    logger.debug(
+                                        f"DesktopSession[{self.task_id}]: used AttachThreadInput "
+                                        f"trick for focus (fg_thread={FG_THREAD_ID}, target_thread={TARGET_THREAD_ID})"
+                                    )
+                                    result = True
+                                finally:
+                                    user32.AttachThreadInput(FG_THREAD_ID, TARGET_THREAD_ID, False)
                     except Exception as e:
                         logger.debug(
                             f"DesktopSession[{self.task_id}]: AttachThreadInput failed: {e}"

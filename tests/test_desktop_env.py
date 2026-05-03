@@ -356,4 +356,5 @@ class TestDesktopSession:
                     assert tree1.success is True
                     assert tree2.success is True
                     assert tree1.result == tree2.result
+                    assert tree1.result.get("perception_layer") == "uia"
                     mock_build.assert_awaited_once()  # Should only build once
