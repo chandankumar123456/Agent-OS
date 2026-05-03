@@ -629,3 +629,23 @@ async def test_check_desktop_goal_handles_verify_plan_exception(
     assert "Verification fallback failed" in reason or "verify_plan" in reason.lower(), (
         f"Expected error message about verification fallback, got: {reason}"
     )
+
+
+# ── Phase 3: LLM-driven _decide_action ──
+
+@pytest.mark.asyncio
+async def test_goal_loop_uses_llm_for_action_decision():
+    """Phase 3: _decide_action must be LLM-driven, not hardcoded pattern matching."""
+    from app.desktop.goal_loop import DesktopGoalLoop
+    loop = DesktopGoalLoop(task_id="llm-test")
+    mock_llm = AsyncMock()
+    mock_llm.achain = AsyncMock(return_value=MagicMock(content='{"tool": "desktop__click_element", "params": {"element_id": 5}}'))
+    loop._llm = mock_llm
+
+    action = await loop._decide_action(
+        goal="Click the Submit button",
+        desktop_state={"ui_tree": [{"id": 5, "name": "Submit", "type": "Button"}]},
+        history=[],
+    )
+    assert action["tool"] == "desktop__click_element"
+    mock_llm.achain.assert_awaited_once()
