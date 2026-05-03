@@ -1,5 +1,6 @@
 """LangGraph graph compilers for AgentOS execution modes."""
 import json
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -11,13 +12,44 @@ from .checkpointer import PostgresCheckpointSaver
 from ..logs.logger import logger
 from ..agents.llm_client import get_llm_client
 
-_graph_cache: Dict[str, Any] = {}
+_MAX_CACHE_SIZE = 50
+
+
+class _LRUOrderedDict(OrderedDict):
+    """OrderedDict subclass that enforces a maximum size via LRU eviction.
+
+    When a new key is set and the dict is at capacity, the
+    least-recently-used (first) entry is evicted automatically.
+    """
+
+    def __init__(self, max_size: int = _MAX_CACHE_SIZE, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if key in self:
+            # Move to end on update so it becomes most-recently-used
+            super().__setitem__(key, value)
+            self.move_to_end(key)
+        else:
+            while len(self) >= self.max_size:
+                self.popitem(last=False)
+            super().__setitem__(key, value)
+
+
+_graph_cache: _LRUOrderedDict = _LRUOrderedDict()
 
 
 def get_cached_graph(mode: str, **kwargs) -> Any:
-    """Return a pre-compiled graph for the given mode."""
+    """Return a pre-compiled graph for the given mode.
+
+    Uses LRU eviction: when the cache exceeds _MAX_CACHE_SIZE, the
+    least-recently-used entry is evicted. Entry position is refreshed
+    on every cache hit or insertion.
+    """
     cache_key = f"{mode}:{hash(str(sorted(kwargs.items())))}"
     if cache_key in _graph_cache:
+        _graph_cache.move_to_end(cache_key)
         return _graph_cache[cache_key]
 
     if mode == "task":
@@ -31,6 +63,7 @@ def get_cached_graph(mode: str, **kwargs) -> Any:
     else:
         graph = compile_task_graph(**kwargs)
 
+    # _LRUOrderedDict.__setitem__ handles eviction automatically
     _graph_cache[cache_key] = graph
     return graph
 
