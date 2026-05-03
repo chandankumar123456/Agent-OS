@@ -1,6 +1,8 @@
 """Tool Grounding Layer — deterministic capability-to-tool mapping."""
 from typing import Dict, List, Set, Optional, Any
 from enum import Enum
+from ..logs.logger import logger
+from .registry import tool_registry
 
 
 class ToolCategory(str, Enum):
@@ -467,6 +469,26 @@ class ToolGroundingLayer:
             desktop_fallback = [t for t in tools if t.get("name", "").startswith(("desktop_env__", "desktop__desktop__"))]
             fallback = fallback + [t for t in desktop_fallback if t.get("name") not in {f.get("name") for f in fallback}]
         return fallback
+
+    def ground_tools(self, intent: str, all_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Ground tool list against the global ToolRegistry.
+
+        FR4.3: Warns if any tool in the capability map is not registered
+        in the global ToolRegistry and excludes it from the grounded set.
+        """
+        registered_tool_names = set(tool_registry.tools.keys())
+        grounded: List[Dict[str, Any]] = []
+        for tool in all_tools:
+            name = tool.get("name", "")
+            if name and name not in registered_tool_names:
+                logger.warning(
+                    "Tool '%s' referenced in capability map but not registered in ToolRegistry. "
+                    "It will be excluded from grounded tools.",
+                    name,
+                )
+                continue
+            grounded.append(tool)
+        return grounded
 
 
 # Singleton
