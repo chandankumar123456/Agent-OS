@@ -267,8 +267,12 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     write_data=_encode((task_id_local, channel, value)),
                 ).on_conflict_do_nothing(constraint="uq_checkpoint_write")
                 try:
-                    await session.execute(stmt)
+                    async with session.begin_nested():
+                        await session.execute(stmt)
                 except IntegrityError as exc:
+                    # Savepoint is already rolled back by the context manager;
+                    # only the conflicting write is discarded, preserving all
+                    # other writes in the batch.
                     orig = getattr(exc, "orig", None)
                     pgcode = getattr(orig, "pgcode", None)
                     if pgcode == "23505":
@@ -277,7 +281,6 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                             task=task_id_local,
                             channel=channel,
                         )
-                        await session.rollback()
                         continue
                     raise
             await session.commit()
