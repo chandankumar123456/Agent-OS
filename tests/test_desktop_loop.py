@@ -651,3 +651,42 @@ async def test_goal_loop_uses_llm_for_action_decision():
     )
     assert action["tool"] == "desktop__click_element"
     mock_llm.complete_json.assert_awaited_once()
+
+
+# ── Phase 3: executor_node delegates to DesktopGoalLoop ──
+
+@pytest.mark.asyncio
+async def test_executor_node_uses_desktop_goal_loop():
+    """Phase 3: executor_node must delegate to DesktopGoalLoop for desktop tasks."""
+    from app.langgraph.nodes import executor_node
+    from app.langgraph.state import AgentState
+    from unittest.mock import patch, AsyncMock, MagicMock
+
+    mock_loop = AsyncMock()
+    mock_loop.execute = AsyncMock(return_value={"status": "success", "actions": []})
+
+    state = AgentState(
+        messages=[],
+        task_id="exec-desktop-1",
+        plan=[{
+            "step_number": 1,
+            "description": "Open Notepad",
+            "step_type": "desktop_automation",
+            "tool": "desktop_env__open_application",
+            "allowed_tools": [],
+            "fallback_tools": [],
+            "expected_output": "Notepad opened",
+        }],
+        current_step_index=0,
+        environment_config={"environment": "desktop"},
+    )
+
+    with patch("app.langgraph.nodes.tool_registry") as mock_registry:
+        mock_registry.list_tools = MagicMock(return_value=[])
+        with patch("app.langgraph.nodes.observability_bus") as mock_obs:
+            mock_obs.emit_safe = AsyncMock()
+            with patch("app.langgraph.nodes.DesktopGoalLoop", return_value=mock_loop):
+                result = await executor_node(state)
+
+    mock_loop.execute.assert_awaited_once()
+    assert result["status"] == "success"

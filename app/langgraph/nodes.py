@@ -19,6 +19,7 @@ from ..safety.gate import SafetyGate, ActionSeverity
 from ..orchestrator.event_bus import event_bus, Event
 from .state import AgentState
 from ..execution_state import ExecutionState, ToolExecutionRecord, ExecutionVerdict
+from ..desktop.goal_loop import DesktopGoalLoop
 
 
 def _to_openai_messages(messages):
@@ -875,16 +876,52 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
         or step.get("step_type", "").lower() == "desktop_automation"
     )
     if is_desktop_step:
-        logger.info(f"[executor_node] Desktop step detected for task {task_id}. Running goal-driven loop.")
-        return await _run_desktop_goal_loop(
-            task_id=task_id,
+        logger.info(f"[executor_node] Desktop step detected for task {task_id}. Running goal-driven loop via DesktopGoalLoop.")
+        goal_loop = DesktopGoalLoop(task_id=task_id)
+        goal_loop.max_iterations = state.get("max_tool_rounds", 5)
+        desktop_result = await goal_loop.execute(
             query=state.get("query", ""),
             description=description,
+            tool_registry=tool_registry,
             grounded_tools=grounded_tools,
             grounded_tool_names=grounded_tool_names,
             max_iterations=state.get("max_tool_rounds", 5),
-            state=state,
         )
+        # Map DesktopGoalResult (or mock dict) to state dict
+        if hasattr(desktop_result, 'actions_performed'):
+            # Real DesktopGoalResult dataclass
+            status = "step_executed" if desktop_result.success else "incomplete"
+            actions = desktop_result.actions_performed
+            iterations = desktop_result.iterations
+            answer = desktop_result.final_state.get("answer", "") if desktop_result.final_state else ""
+        else:
+            # Support dict return for test mocking
+            status = desktop_result.get("status", "success")
+            actions = desktop_result.get("actions", [])
+            iterations = desktop_result.get("iterations", 0)
+            answer = desktop_result.get("answer", "")
+
+        steps = list(state.get("steps", []))
+        steps.append({
+            "step_number": step_number,
+            "description": description,
+            "output": answer,
+            "tool_results": [
+                a.get("result", {}) if isinstance(a, dict) else {}
+                for a in actions
+            ],
+        })
+
+        return {
+            "steps": steps,
+            "current_step_index": idx + 1,
+            "tool_calls": actions,
+            "messages": [AIMessage(content=f"Step {step_number} result: {answer}")],
+            "verification_reports": state.get("verification_reports", []),
+            "recovery_decisions": state.get("recovery_decisions", []),
+            "status": status,
+            "desktop_iterations": iterations,
+        }
 
     # ── Deterministic Execution (skip LLM for obvious cases) ──────────
     # Try planner's suggested tool first
