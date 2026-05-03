@@ -609,6 +609,8 @@ class ActionStabilizer:
                     except Exception:
                         pass
                 if attempt < max_retries:
+                    self.add_snapshot(snapshot)
+                    self.detect_infinite_loop()
                     backoff = action_config.retry_backoff_base * (2 ** attempt)
                     logger.info(f"[ActionStabilizer] Retrying {action_name} in {backoff}s...")
                     await asyncio.sleep(backoff)
@@ -650,6 +652,8 @@ class ActionStabilizer:
                         except Exception:
                             pass
                     if attempt < max_retries:
+                        self.add_snapshot(snapshot)
+                        self.detect_infinite_loop()
                         backoff = action_config.retry_backoff_base * (2 ** attempt)
                         logger.info(f"[ActionStabilizer] Retrying {action_name} (no state change) in {backoff}s...")
                         await asyncio.sleep(backoff)
@@ -681,6 +685,8 @@ class ActionStabilizer:
                         except Exception:
                             pass
                     if attempt < max_retries:
+                        self.add_snapshot(snapshot)
+                        self.detect_infinite_loop()
                         backoff = action_config.retry_backoff_base * (2 ** attempt)
                         logger.info(f"[ActionStabilizer] Retrying {action_name} (semantic fail) in {backoff}s...")
                         await asyncio.sleep(backoff)
@@ -761,6 +767,23 @@ class ActionStabilizer:
                     os.remove(path)
                 except Exception:
                     pass
+
+    def detect_infinite_loop(self, threshold: int = 3) -> None:
+        """RR4: Abort if the same action on the same target fails threshold times with no state change."""
+        if len(self._snapshot_history) < threshold:
+            return
+        recent = self._snapshot_history[-threshold:]
+        first = recent[0]
+        if all(
+            s.action_name == first.action_name
+            and s.params == first.params
+            and not (s.verification_result or {}).get("changed", True)
+            for s in recent
+        ):
+            raise RuntimeError(
+                f"infinite loop detected: action='{first.action_name}' params={first.params} "
+                f"failed {threshold} times with no state change. Aborting."
+            )
 
     def clear_history(self) -> None:
         for old in self._snapshot_history:

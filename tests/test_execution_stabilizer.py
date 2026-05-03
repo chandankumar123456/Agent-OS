@@ -463,3 +463,27 @@ class TestActionTruthLogging:
         assert "ACTION=click" in caplog.text
         assert "STATUS=SUCCESS" in caplog.text
         assert "RETRY=0" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stabilizer_detects_infinite_loop():
+    """RR4: Must detect same action on same element failing 3x with no state change and abort."""
+    from app.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
+    stab = ActionStabilizer(config=StabilizerConfig())
+    for i in range(3):
+        stab.add_snapshot(
+            ActionSnapshot(
+                timestamp="",
+                action_name="click",
+                params={"element_id": 7},
+                before_screenshot_path=None,
+                after_screenshot_path=None,
+                before_tree_hash=None,
+                after_tree_hash=None,
+                before_element_map={},
+                selected_target=None,
+                verification_result={"changed": False},
+            )
+        )
+    with pytest.raises(RuntimeError, match="infinite loop"):
+        stab.detect_infinite_loop()
