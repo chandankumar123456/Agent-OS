@@ -76,6 +76,9 @@ class StabilizerConfig:
     retry_backoff_base: float = 1.0
     retry_redetect_before_retry: bool = True
 
+    # Temp screenshot cleanup
+    temp_screenshot_max_age_seconds: int = 300
+
     # Per-action-type stabilization overrides (action_type -> config dict)
     action_configs: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
         "click": {"stabilization_max_wait": 2.0, "verification_timeout": 2.0},
@@ -434,6 +437,7 @@ class ActionStabilizer:
         screenshot_fn: Callable[[Optional[str]], Awaitable[Any]],
         click_fn: Callable[[int, int], Awaitable[Any]],
         press_key_fn: Callable[[str], Awaitable[Any]],
+        window_list_fn: Optional[Callable[[], Awaitable[List[Dict[str, Any]]]]] = None,
     ) -> Dict[str, Any]:
         """Try to dismiss a detected popup window.
 
@@ -443,7 +447,10 @@ class ActionStabilizer:
         3. Press Alt+F4
         4. Press Tab + Enter (navigate to cancel/OK button)
 
-        Returns: {"dismissed": bool, "method": str}
+        After each strategy, if window_list_fn is provided, the stabilizer
+        verifies that the popup is actually gone before returning success.
+
+        Returns: {"dismissed": bool, "method": str, "reason": Optional[str]}
         """
         strategies = [
             ("escape", lambda: press_key_fn("escape")),
@@ -464,18 +471,23 @@ class ActionStabilizer:
                     f"dismiss_check_{method_name}_{datetime.utcnow().timestamp()}.png",
                 )
                 await screenshot_fn(ss_path)
-                # Re-check for popup — need a window_list_fn, but we can't pass it here.
-                # Instead, caller should re-verify. We return success if the action at
-                # least executed cleanly.
-                # Caller is expected to re-run detect_popup_window after dismiss_popup.
-                logger.info(f"[ActionStabilizer] Popup dismissal attempt: method={method_name}")
+                # NFR3: Verify popup is actually gone before claiming success
+                if window_list_fn is not None:
+                    remaining = await self.detect_popup_window(window_list_fn)
+                    if remaining:
+                        logger.info(
+                            f"[ActionStabilizer] Popup still present after {method_name}, "
+                            f"trying next strategy"
+                        )
+                        continue
+                logger.info(f"[ActionStabilizer] Popup dismissed successfully: method={method_name}")
                 return {"dismissed": True, "method": method_name}
             except Exception as e:
                 logger.debug(f"[ActionStabilizer] Dismissal method '{method_name}' failed: {e}")
                 continue
 
         logger.warning("[ActionStabilizer] All popup dismissal strategies failed")
-        return {"dismissed": False, "method": "none"}
+        return {"dismissed": False, "method": "none", "reason": "popup_still_present"}
 
     async def _tab_enter_dismiss(self, press_key_fn: Callable[[str], Awaitable[Any]]) -> None:
         """Helper: Press Tab then Enter to navigate to a dialog's default button."""
@@ -609,6 +621,8 @@ class ActionStabilizer:
                     except Exception:
                         pass
                 if attempt < max_retries:
+                    self.add_snapshot(snapshot)
+                    self.detect_infinite_loop()
                     backoff = action_config.retry_backoff_base * (2 ** attempt)
                     logger.info(f"[ActionStabilizer] Retrying {action_name} in {backoff}s...")
                     await asyncio.sleep(backoff)
@@ -650,6 +664,8 @@ class ActionStabilizer:
                         except Exception:
                             pass
                     if attempt < max_retries:
+                        self.add_snapshot(snapshot)
+                        self.detect_infinite_loop()
                         backoff = action_config.retry_backoff_base * (2 ** attempt)
                         logger.info(f"[ActionStabilizer] Retrying {action_name} (no state change) in {backoff}s...")
                         await asyncio.sleep(backoff)
@@ -681,6 +697,8 @@ class ActionStabilizer:
                         except Exception:
                             pass
                     if attempt < max_retries:
+                        self.add_snapshot(snapshot)
+                        self.detect_infinite_loop()
                         backoff = action_config.retry_backoff_base * (2 ** attempt)
                         logger.info(f"[ActionStabilizer] Retrying {action_name} (semantic fail) in {backoff}s...")
                         await asyncio.sleep(backoff)
@@ -762,17 +780,37 @@ class ActionStabilizer:
                 except Exception:
                     pass
 
+    def detect_infinite_loop(self, threshold: int = 3) -> None:
+        """RR4: Abort if the same action on the same target fails threshold times with no state change."""
+        if len(self._snapshot_history) < threshold:
+            return
+        recent = self._snapshot_history[-threshold:]
+        first = recent[0]
+        if all(
+            s.action_name == first.action_name
+            and s.params == first.params
+            and not (s.verification_result or {}).get("changed", True)
+            for s in recent
+        ):
+            raise RuntimeError(
+                f"infinite loop detected: action='{first.action_name}' params={first.params} "
+                f"failed {threshold} times with no state change. Aborting."
+            )
+
     def clear_history(self) -> None:
         for old in self._snapshot_history:
             self._cleanup_snapshot(old)
         self._snapshot_history.clear()
 
-    @staticmethod
-    def cleanup_temp_screenshots() -> int:
-        """Remove orphaned temp screenshots older than 1 hour.
+    def cleanup_temp_screenshots(self, max_age: Optional[int] = None) -> int:
+        """Remove orphaned temp screenshots older than configured age.
 
         Removes files matching agentos_*, stab_*, verify_*, before_*, after_*
         patterns in the system temp directory.
+
+        Args:
+            max_age: Override the config's temp_screenshot_max_age_seconds.
+                     Defaults to self.config.temp_screenshot_max_age_seconds.
 
         Returns the number of files removed.
         """
@@ -780,7 +818,7 @@ class ActionStabilizer:
         temp_dir = tempfile.gettempdir()
         patterns = ("agentos_", "stab_", "verify_", "before_", "after_",
                      "dismiss_check_")
-        max_age = 3600  # 1 hour in seconds
+        max_age = max_age if max_age is not None else self.config.temp_screenshot_max_age_seconds
         now = _time.time()
         removed = 0
         try:

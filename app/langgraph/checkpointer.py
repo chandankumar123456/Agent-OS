@@ -16,6 +16,7 @@ except ImportError:
         def loads_typed(self, data):
             return data
 from sqlalchemy import select, delete
+from sqlalchemy.exc import IntegrityError
 
 from ..memory.models import CheckpointModel, CheckpointWriteModel
 from ..memory.long_term import db
@@ -57,8 +58,13 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
     across process restarts.
     """
 
-    def __init__(self):
+    def __init__(self, session_factory=None):
         super().__init__()
+        self._session_factory = session_factory
+
+    def _get_checkpoint_model(self):
+        """Return the checkpoint write model class for DB operations."""
+        return CheckpointWriteModel
 
     async def aput(
         self,
@@ -242,34 +248,42 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
     ) -> None:
         """Persist intermediate writes for resume/interrupt support."""
         import uuid as _uuid
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
         thread_id = config["configurable"]["thread_id"]
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
         checkpoint_id = config["configurable"].get("checkpoint_id", "")
 
-        async with db.get_session() as session:
-            for write in writes:
-                row = CheckpointWriteModel(
+        _session_ctx = self._session_factory() if self._session_factory else db.get_session()
+        async with _session_ctx as session:
+            for task_id_local, channel, value in writes:
+                stmt = pg_insert(self._get_checkpoint_model()).values(
                     id=str(_uuid.uuid4()),
                     thread_id=thread_id,
                     checkpoint_ns=checkpoint_ns,
                     checkpoint_id=checkpoint_id,
-                    task_id=task_id,
+                    task_id=task_id_local,
                     task_path=task_path,
-                    write_data=_encode(write),
-                )
-                session.add(row)
-            try:
-                await session.commit()
-            except Exception as exc:
-                # Gracefully ignore duplicate checkpoint writes so graph
-                # completion is not blocked by persistence noise.
-                if "uq_checkpoint_write" in str(exc):
-                    logger.debug(
-                        f"aput_writes: duplicate checkpoint write ignored for "
-                        f"task={task_id} checkpoint={checkpoint_id}"
-                    )
-                    return
-                raise
+                    write_data=_encode((task_id_local, channel, value)),
+                ).on_conflict_do_nothing(constraint="uq_checkpoint_write")
+                try:
+                    async with session.begin_nested():
+                        await session.execute(stmt)
+                except IntegrityError as exc:
+                    # Savepoint is already rolled back by the context manager;
+                    # only the conflicting write is discarded, preserving all
+                    # other writes in the batch.
+                    orig = getattr(exc, "orig", None)
+                    pgcode = getattr(orig, "pgcode", None)
+                    if pgcode == "23505":
+                        logger.debug(
+                            "Checkpoint write conflict suppressed (pgcode=23505)",
+                            task=task_id_local,
+                            channel=channel,
+                        )
+                        continue
+                    raise
+            await session.commit()
 
         logger.debug(
             f"aput_writes: thread={thread_id} ns={checkpoint_ns} "

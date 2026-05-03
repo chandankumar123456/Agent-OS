@@ -1,7 +1,28 @@
+import json
+import re
+from dataclasses import dataclass
 from typing import List, Dict, Any
 
 from .models import ActionSeverity
 from .approval_store import approval_store
+
+
+_CREDENTIAL_PATTERNS = [
+    re.compile(r'password\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'passwd\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'pwd\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'secret\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'api_key\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'token\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'access_key\s*[=:]\s*\S+', re.IGNORECASE),
+    re.compile(r'private_key\s*[=:]\s*\S+', re.IGNORECASE),
+]
+
+
+@dataclass
+class SafetyResult:
+    blocked: bool
+    reason: str = ""
 
 
 class SafetyGate:
@@ -99,6 +120,19 @@ class SafetyGate:
             params = {k: v for k, v in step.items() if k != "tool"}
             results.append(self.check_tool_call(tool, params, query))
         return results
+
+    def validate_desktop_params(self, params: dict) -> SafetyResult:
+        """Check desktop tool parameters for credential-like strings."""
+        params_text = json.dumps(params)
+        for pattern in _CREDENTIAL_PATTERNS:
+            match = pattern.search(params_text)
+            if match:
+                credential_type = match.group().split("=")[0].split(":")[0].strip()
+                return SafetyResult(
+                    blocked=True,
+                    reason=f"Credential pattern detected in desktop tool parameters: {credential_type}"
+                )
+        return SafetyResult(blocked=False)
 
 
 # Module-level singleton

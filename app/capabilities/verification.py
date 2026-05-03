@@ -106,8 +106,8 @@ class DeterministicVerificationEngine:
         """Auto-generate and run verification checks for a plan."""
         reports: List[VerificationReport] = []
         for step in plan:
-            step_id = step.get("id", "unknown")
-            desc = step.get("step", "").lower()
+            step_id = step.get("id", step.get("step_number", "unknown"))
+            desc = step.get("step", step.get("description", "")).lower()
 
             # Auto-detect verification type from step description
             if any(k in desc for k in ("file", "write", "create", "save")):
@@ -166,6 +166,11 @@ class DeterministicVerificationEngine:
                     reports.append(await self.verify(
                         task_id, step_id, "desktop_text_typed", {"text": expected_text}
                     ))
+
+            if any(k in desc for k in ("focus", "bring to front", "activate window")):
+                reports.append(await self.verify(
+                    task_id, step_id, "window_focused", {}
+                ))
 
         return reports
 

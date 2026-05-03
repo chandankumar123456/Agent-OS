@@ -9,6 +9,11 @@ from .llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.parser import ToolCallParser
 from ..tools.registry import tool_registry
+from ..tools.grounding import ToolGroundingLayer
+from ..environments.desktop_env import DesktopSessionManager
+from ..environments.execution_stabilizer import ActionStabilizer
+from ..environments.window_registry import WindowRegistry
+from ..desktop.goal_loop import DesktopGoalLoop
 
 
 def _get_desktop_path() -> str:
@@ -187,12 +192,97 @@ class ExecutorAgent:
         allowed_set = set(allowed)
         return [t for t in tools_schema if t.get("name") in allowed_set]
 
+    def _is_desktop_task(self, input_data: AgentInput) -> bool:
+        """Check if this is a desktop automation task.
+
+        Detects desktop tasks by checking for explicit env_type, desktop tools in the tool
+        list, or a desktop_automation step_type. This gates whether the executor delegates
+        to the goal-driven desktop loop with DesktopSession, ActionStabilizer, and WindowRegistry.
+        """
+        step_data = input_data.input_data
+        if step_data.get("env_type", "").lower() == "desktop":
+            return True
+        tools = step_data.get("tools", [])
+        if any(t.get("name", "").startswith(("desktop_env__", "desktop__")) for t in tools):
+            return True
+        if step_data.get("step_type", "").lower() == "desktop_automation":
+            return True
+        return False
+
+    async def _execute_desktop_goal(
+        self, input_data: AgentInput, session: Any = None
+    ) -> AgentOutput:
+        """Execute a desktop automation step using the goal-driven loop.
+
+        Reuses DesktopSession (with ActionStabilizer + WindowRegistry attached) and
+        DesktopGoalLoop for observe → act → verify cycles. This is the legacy executor's
+        desktop path, sharing the same components as the LangGraph executor_node.
+
+        Args:
+            input_data: The agent input with step, context, tools, etc.
+            session: Optional pre-created DesktopSession. If None, creates one via
+                     DesktopSessionManager (for standalone usage outside execute()).
+        """
+        task_id_str = str(input_data.task_id)
+        step = input_data.input_data.get("step", "")
+        context = input_data.context
+
+        # Ground tools for desktop automation
+        grounding = ToolGroundingLayer()
+        tools_schema = input_data.input_data.get("tools", [])
+        grounded_tools = grounding.filter_tools_for_step(step, tools_schema)
+        grounded_tool_names = {t["name"] for t in grounded_tools}
+        logger.debug(
+            f"ExecutorAgent: grounded {len(grounded_tool_names)} tools for desktop step"
+        )
+
+        # Delegate to DesktopGoalLoop
+        goal_loop = DesktopGoalLoop(task_id=task_id_str)
+        result = await goal_loop.execute(
+            query=context.get("query", step),
+            description=step,
+            tool_registry=tool_registry,
+            grounded_tools=grounded_tools,
+            grounded_tool_names=grounded_tool_names,
+        )
+
+        if result.success:
+            return AgentOutput(
+                task_id=input_data.task_id,
+                step_id=input_data.step_id,
+                status=AgentStatus.SUCCESS,
+                output_data={
+                    "result": result.final_state.get("answer", ""),
+                    "iterations": result.iterations,
+                    "actions_performed": result.actions_performed,
+                },
+            )
+        else:
+            return AgentOutput(
+                task_id=input_data.task_id,
+                step_id=input_data.step_id,
+                status=AgentStatus.FAILURE,
+                error_type="desktop_goal_not_reached",
+                error_message=result.error or "Desktop goal not reached",
+                recoverable=True,
+            )
+
     async def execute(self, input_data: AgentInput) -> AgentOutput:
         step = input_data.input_data.get("step", "")
         context = input_data.context
         tools_schema = input_data.input_data.get("tools", [])
         allowed = self._get_allowed_tools(input_data)
         visible_tools = self._filter_tools(tools_schema, allowed)
+
+        # Desktop task → use goal-driven loop with DesktopSession/ActionStabilizer/WindowRegistry
+        if self._is_desktop_task(input_data):
+            # Get or create desktop session (auto-inits ActionStabilizer + WindowRegistry)
+            manager = DesktopSessionManager()
+            session = await manager.get_or_create_session(str(input_data.task_id))
+            logger.info(
+                f"ExecutorAgent: created desktop session for task {input_data.task_id}"
+            )
+            return await self._execute_desktop_goal(input_data)
 
         # Fail fast if step requires filesystem but no filesystem tool is registered in this worker
         registered_tools = tool_registry.list_tools()

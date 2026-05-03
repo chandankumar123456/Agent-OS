@@ -41,3 +41,13 @@ class TestSafetyGate:
             ActionSeverity.IRREVERSIBLE,
             ActionSeverity.SAFE,
         ]
+
+
+def test_safety_gate_blocks_credentials_in_desktop_params():
+    """SR4: Must block credential-like strings in desktop tool parameters."""
+    gate = SafetyGate()
+    result = gate.validate_desktop_params(
+        {"text": "password=SuperSecret123!"}
+    )
+    assert result.blocked is True
+    assert "credential" in result.reason.lower()

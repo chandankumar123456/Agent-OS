@@ -50,7 +50,7 @@ def _extract_json(text: str) -> str:
         if escape_next:
             escape_next = False
             continue
-        if ch == "\\\\":
+        if ch == "\\":
             escape_next = True
             continue
         if ch == '"' and not in_string:
@@ -128,6 +128,18 @@ class LLMClient:
         except Exception as e:
             logger.error(f"LLM completion failed: {e}")
             raise
+
+    async def achain(self, prompt: str):
+        """Simple achain-compatible interface returning an object with .content.
+
+        Used by DesktopGoalLoop._decide_action and other LangChain-pattern code.
+        """
+        class _AchainResult:
+            def __init__(self, content):
+                self.content = content
+
+        result = await self.complete([{"role": "user", "content": prompt}])
+        return _AchainResult(result)
 
     async def complete_json(
         self,

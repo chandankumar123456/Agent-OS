@@ -1,5 +1,6 @@
 """Desktop Environment — native desktop UI automation."""
 import asyncio
+import gc
 import hashlib
 import json
 import os
@@ -66,6 +67,11 @@ class DesktopSession:
         self._stabilizer = ActionStabilizer(StabilizerConfig())
         self._window_registry: Optional[Any] = None
         self._orchestrator: Optional[Any] = None
+        self._cached_tree: Optional[Dict[str, Any]] = None
+        self._cached_tree_hash: Optional[str] = None
+        self._cached_tree_timestamp: float = 0.0
+        self._tree_cache_ttl_seconds: float = 5.0
+        self.perception_layer: Optional[str] = None  # "uia" | "vision" | "ocr"
         self._refresh_screen_size()
         # Lazy-init WindowRegistry (avoids circular import)
         try:
@@ -201,7 +207,7 @@ class DesktopSession:
         if self._last_tree_hash is not None:
             return self._last_tree_hash
         # Fallback: rebuild
-        tree = self._build_ui_tree_windows()
+        tree = await self._build_ui_tree_windows()
         return self._compute_tree_hash(tree)
 
     def _get_element_map_copy(self) -> Dict[int, Dict[str, Any]]:
@@ -275,7 +281,7 @@ class DesktopSession:
             pass
         return None
 
-    def _build_ui_tree_windows(self, max_depth: int = 8, max_nodes: int = 100) -> List[Dict[str, Any]]:
+    async def _build_ui_tree_windows(self, max_depth: int = 8, max_nodes: int = 100) -> List[Dict[str, Any]]:
         """Build pruned UI tree on Windows using uiautomation."""
         tree: List[Dict[str, Any]] = []
         if auto is None:
@@ -410,7 +416,7 @@ class DesktopSession:
     def _compute_tree_hash(self, tree: List[Dict[str, Any]]) -> str:
         """Compute a simple hash of the tree for sync detection."""
         canonical = json.dumps(tree, sort_keys=True, ensure_ascii=True)
-        return hashlib.md5(canonical.encode("utf-8")).hexdigest()
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     # Configurable threshold for triggering vision fallback
     VISION_FALLBACK_THRESHOLD: int = 2
@@ -443,6 +449,8 @@ class DesktopSession:
                 error="Vision fallback failed: no screenshot path returned",
             )
 
+        self.perception_layer = "vision"
+
         parser = get_vision_parser()
         detected = parser.parse_screenshot(screenshot_path)
 
@@ -455,6 +463,7 @@ class DesktopSession:
                 success=True,
                 result={
                     "mode": "vision_fallback",
+                    "perception_layer": "vision",
                     "screenshot_path": screenshot_path,
                     "tree": [],
                     "count": 0,
@@ -491,6 +500,7 @@ class DesktopSession:
             success=True,
             result={
                 "mode": "vision_fallback",
+                "perception_layer": "vision",
                 "screenshot_path": screenshot_path,
                 "tree": tree,
                 "count": len(tree),
@@ -503,16 +513,36 @@ class DesktopSession:
             },
         )
 
-    async def get_ui_tree(self) -> ToolOutput:
+    async def get_ui_tree(self, force_refresh: bool = False) -> ToolOutput:
         """Dump the pruned accessibility tree as structured JSON.
 
         Returns a ToolOutput where result is a JSON list of visible,
         actionable UI elements with auto-assigned integer IDs.
+
+        Caches the tree for up to tree_cache_ttl_seconds (default 5s).
+        Pass force_refresh=True to bypass the cache.
         """
         if self._is_headless():
             return ToolOutput(
                 success=False,
                 error="Desktop automation unavailable: running headless (no display detected)",
+            )
+
+        # --- Cache check ---
+        now = asyncio.get_event_loop().time()
+        if (
+            not force_refresh
+            and self._cached_tree is not None
+            and (now - self._cached_tree_timestamp) < self._tree_cache_ttl_seconds
+        ):
+            logger.debug(f"DesktopSession[{self.task_id}]: returning cached UI tree")
+            return ToolOutput(
+                success=True,
+                result=self._cached_tree,
+                visibility={
+                    "type": "desktop_ui_tree",
+                    "count": self._cached_tree.get("count", 0),
+                },
             )
 
         # Clear previous map so IDs are stable per call
@@ -521,7 +551,7 @@ class DesktopSession:
 
         try:
             if sys.platform == "win32":
-                tree = self._build_ui_tree_windows()
+                tree = await self._build_ui_tree_windows()
             elif sys.platform.startswith("linux"):
                 tree = self._build_ui_tree_linux()
             elif sys.platform == "darwin":
@@ -544,14 +574,33 @@ class DesktopSession:
                 "tree": tree,
                 "count": len(tree),
                 "actionable_count": actionable_count,
+                "mode": "uia_tree",
+                "perception_layer": "uia",
             }
+
+            self.perception_layer = "uia"
 
             if actionable_count < self.VISION_FALLBACK_THRESHOLD:
                 logger.warning(
                     f"DesktopSession[{self.task_id}]: sparse tree ({actionable_count} actionable nodes, "
                     f"threshold={self.VISION_FALLBACK_THRESHOLD}). Triggering vision fallback."
                 )
+                self._cached_tree = None
+                self._cached_tree_hash = None
                 return await self._vision_fallback()
+
+            # --- Update cache ---
+            tree_hash = hashlib.sha256(
+                json.dumps(tree, sort_keys=True, default=str).encode()
+            ).hexdigest()[:16]
+
+            if tree_hash == self._cached_tree_hash and self._cached_tree is not None:
+                # Hash unchanged; just refresh timestamp
+                self._cached_tree_timestamp = now
+            else:
+                self._cached_tree = result_payload
+                self._cached_tree_hash = tree_hash
+                self._cached_tree_timestamp = now
 
             return ToolOutput(
                 success=True,
@@ -563,6 +612,8 @@ class DesktopSession:
                 f"DesktopSession[{self.task_id}]: get_ui_tree failed: {e}. "
                 "Attempting vision fallback."
             )
+            self._cached_tree = None
+            self._cached_tree_hash = None
             return await self._vision_fallback()
 
     async def click_element(self, element_id: int, verify: bool = True, stabilize: bool = True) -> ToolOutput:
@@ -621,9 +672,10 @@ class DesktopSession:
         # Post-action: if no state change, warn but still return result
         if snapshot.verification_result and not snapshot.verification_result.get("changed"):
             if isinstance(result, ToolOutput):
-                result.result = result.result or {}
-                if isinstance(result.result, dict):
-                    result.result["warning"] = "No UI state change detected after click"
+                updated_result = dict(result.result or {})
+                if isinstance(updated_result, dict):
+                    updated_result["warning"] = "No UI state change detected after click"
+                result = result.model_copy(update={"result": updated_result})
 
         return result if result is not None else ToolOutput(success=False, error="Action failed")
 
@@ -844,6 +896,8 @@ class DesktopSession:
 
     def get_snapshot_history(self) -> List[Dict[str, Any]]:
         """Return action snapshots for debugging."""
+        if self._stabilizer is None:
+            return []
         return [self._snapshot_to_dict(s) for s in self._stabilizer.get_snapshot_history()]
 
     @staticmethod
@@ -1018,20 +1072,8 @@ class DesktopSession:
             screenshot_fn=_screenshot_fn,
             click_fn=_click_fn,
             press_key_fn=_press_key_fn,
+            window_list_fn=lambda: self._get_window_list_for_stabilizer(),
         )
-
-        # Re-verify popup is actually gone
-        if result.get("dismissed"):
-            remaining = await self._stabilizer.detect_popup_window(
-                window_list_fn=lambda: self._get_window_list_for_stabilizer()
-            )
-            if remaining:
-                logger.warning(
-                    f"DesktopSession[{self.task_id}]: popup dismissal reported success "
-                    f"but popup still detected: {remaining.get('title')}"
-                )
-                result["dismissed"] = False
-                result["method"] = f"{result['method']}_failed_verify"
 
         return ToolOutput(
             success=result.get("dismissed", False),
@@ -1269,13 +1311,15 @@ class DesktopSession:
                             TARGET_THREAD_ID = user32.GetWindowThreadProcessId(hwnd, None)
                             if FG_THREAD_ID and TARGET_THREAD_ID and FG_THREAD_ID != TARGET_THREAD_ID:
                                 user32.AttachThreadInput(FG_THREAD_ID, TARGET_THREAD_ID, True)
-                                user32.SetForegroundWindow(hwnd)
-                                user32.AttachThreadInput(FG_THREAD_ID, TARGET_THREAD_ID, False)
-                                logger.debug(
-                                    f"DesktopSession[{self.task_id}]: used AttachThreadInput "
-                                    f"trick for focus (fg_thread={FG_THREAD_ID}, target_thread={TARGET_THREAD_ID})"
-                                )
-                                result = True
+                                try:
+                                    user32.SetForegroundWindow(hwnd)
+                                    logger.debug(
+                                        f"DesktopSession[{self.task_id}]: used AttachThreadInput "
+                                        f"trick for focus (fg_thread={FG_THREAD_ID}, target_thread={TARGET_THREAD_ID})"
+                                    )
+                                    result = True
+                                finally:
+                                    user32.AttachThreadInput(FG_THREAD_ID, TARGET_THREAD_ID, False)
                     except Exception as e:
                         logger.debug(
                             f"DesktopSession[{self.task_id}]: AttachThreadInput failed: {e}"
@@ -1658,7 +1702,41 @@ class DesktopSession:
         return result
 
     async def close(self) -> ToolOutput:
-        self._stabilizer.clear_history()
+        # Screenshot cleanup (try/except log)
+        try:
+            self._screen_size = (0, 0)
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: screenshot cleanup failed: {e}")
+
+        # UI element map clear (try/except log, finally set None)
+        try:
+            self._ui_element_map.clear()
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: UI element map clear failed: {e}")
+        finally:
+            self._ui_element_map = None
+
+        # Stabilizer clear_history (try/except log, finally set None)
+        try:
+            self._stabilizer.clear_history()
+        except Exception as e:
+            logger.warning(f"DesktopSession[{self.task_id}]: stabilizer clear failed: {e}")
+        finally:
+            self._stabilizer = None
+
+        # Nullify remaining references
+        self._window_registry = None
+        self._orchestrator = None
+        self._cached_tree = None
+        self._cached_tree_hash = None
+        self._last_tree_hash = None
+        self._last_opened_app_name = None
+        self.perception_layer = None
+        self._next_element_id = 0
+
+        # Hint to garbage collector
+        gc.collect()
+
         logger.info(f"DesktopSession[{self.task_id}]: session closed")
         return ToolOutput(success=True, result={"message": "Desktop session closed"})
 

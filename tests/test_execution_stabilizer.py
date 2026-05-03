@@ -463,3 +463,56 @@ class TestActionTruthLogging:
         assert "ACTION=click" in caplog.text
         assert "STATUS=SUCCESS" in caplog.text
         assert "RETRY=0" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stabilizer_detects_infinite_loop():
+    """RR4: Must detect same action on same element failing 3x with no state change and abort."""
+    from app.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
+    stab = ActionStabilizer(config=StabilizerConfig())
+    for i in range(3):
+        stab.add_snapshot(
+            ActionSnapshot(
+                timestamp="",
+                action_name="click",
+                params={"element_id": 7},
+                before_screenshot_path=None,
+                after_screenshot_path=None,
+                before_tree_hash=None,
+                after_tree_hash=None,
+                before_element_map={},
+                selected_target=None,
+                verification_result={"changed": False},
+            )
+        )
+    with pytest.raises(RuntimeError, match="infinite loop"):
+        stab.detect_infinite_loop()
+
+
+def test_stabilizer_config_has_cleanup_age():
+    """FR5.3: StabilizerConfig must expose temp_screenshot_max_age_seconds."""
+    from app.environments.execution_stabilizer import StabilizerConfig
+    cfg = StabilizerConfig(temp_screenshot_max_age_seconds=120)
+    assert cfg.temp_screenshot_max_age_seconds == 120
+
+
+@pytest.mark.asyncio
+async def test_dismiss_popup_verifies_popup_is_gone():
+    """NFR3: dismiss_popup must confirm popup no longer exists after dismissal."""
+    from app.environments.execution_stabilizer import ActionStabilizer
+    from unittest.mock import patch, AsyncMock
+    stab = ActionStabilizer()
+    
+    # First call (before first strategy) detects popup, second call (after dismissal) does not
+    with patch.object(stab, "detect_popup_window", new_callable=AsyncMock, side_effect=[
+        {"title": "Popup"},  # pre-dismissal check: popup found
+        None,                 # post-dismissal check: popup gone
+    ]) as mock_detect:
+        result = await stab.dismiss_popup(
+            screenshot_fn=AsyncMock(),
+            click_fn=AsyncMock(),
+            press_key_fn=AsyncMock(),
+            window_list_fn=AsyncMock(),
+        )
+    assert result["dismissed"] is True
+    assert mock_detect.await_count >= 2

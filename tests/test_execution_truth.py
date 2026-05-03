@@ -4,7 +4,6 @@ Validates the systemic fix: tool success must become canonical truth
 that prevents re-verification, recovery, and fallback loops.
 """
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from app.execution_state import (
@@ -13,7 +12,7 @@ from app.execution_state import (
     StepExecutionRecord,
     ExecutionVerdict,
 )
-from app.langgraph.nodes import _check_desktop_goal, verifier_node
+from app.langgraph.nodes import verifier_node
 from app.capabilities.recovery import RecoveryEngine, RecoveryAction
 
 
@@ -120,95 +119,6 @@ class TestCanonicalExecutionState:
         assert restored.has_terminal_success(1) is True
         step = restored.get_step(1)
         assert step.verdict == ExecutionVerdict.TERMINAL
-
-
-class TestGoalLoopConsumesExecutionState:
-    """Tests that goal loop respects canonical execution state."""
-
-    @pytest.mark.asyncio
-    async def test_check_desktop_goal_uses_terminal_success(self):
-        """_check_desktop_goal returns True when execution_state has terminal success."""
-        execution_state = ExecutionState(task_id="test-task")
-        execution_state.record_tool(
-            1,
-            "Open Notepad",
-            ToolExecutionRecord.from_tool_result(
-                "desktop_env__open_application",
-                {
-                    "success": True,
-                    "data": {"pid": 1234, "window": "Notepad"},
-                    "error": None,
-                },
-            ),
-        )
-
-        reached, notes = await _check_desktop_goal(
-            task_id="test-task",
-            step_description="Open Notepad",
-            tool_calls=[],
-            execution_state=execution_state,
-            step_number=1,
-        )
-
-        assert reached is True
-        assert "terminal" in notes.lower()
-
-    @pytest.mark.asyncio
-    async def test_check_desktop_goal_falls_back_to_tool_calls(self):
-        """Backwards compat: checks tool_calls when no execution_state."""
-        tool_calls = [
-            {
-                "step": 1,
-                "tool": "desktop_env__open_application",
-                "result": {
-                    "success": True,
-                    "data": {"pid": 1234, "window": "Notepad"},
-                    "error": None,
-                },
-            }
-        ]
-
-        reached, notes = await _check_desktop_goal(
-            task_id="test-task",
-            step_description="Open Notepad",
-            tool_calls=tool_calls,
-            execution_state=None,
-            step_number=1,
-        )
-
-        assert reached is True
-        assert "PID/window" in notes
-
-    @pytest.mark.asyncio
-    async def test_check_desktop_goal_no_terminal_no_tool_calls(self):
-        """ Falls back to verify_plan when no terminal success and no tool_calls."""
-        execution_state = ExecutionState(task_id="test-task")
-        # Record a non-terminal tool (e.g., screenshot)
-        execution_state.record_tool(
-            1,
-            "Take screenshot",
-            ToolExecutionRecord.from_tool_result(
-                "desktop_env__screenshot",
-                {
-                    "success": True,
-                    "data": {"image": "base64..."},
-                    "error": None,
-                },
-            ),
-        )
-
-        with patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
-            mock_verify.return_value = []
-            reached, notes = await _check_desktop_goal(
-                task_id="test-task",
-                step_description="Open Notepad",
-                tool_calls=[],
-                execution_state=execution_state,
-                step_number=1,
-            )
-
-            # verify_plan was called because no terminal success
-            mock_verify.assert_called_once()
 
 
 class TestVerifierRespectsExecutionState:
@@ -416,18 +326,7 @@ class TestNoFallbackLoop:
             ),
         )
 
-        # Goal loop should immediately say "reached"
-        reached, notes = await _check_desktop_goal(
-            task_id="test-task",
-            step_description="Open Notepad",
-            tool_calls=[],
-            execution_state=execution_state,
-            step_number=1,
-        )
-        assert reached is True
-        assert "terminal" in notes.lower()
-
-        # Verifier should skip re-verification
+        # Verifier should skip re-verification on terminal success
         state = {
             "task_id": "test-task",
             "query": "Open Notepad",

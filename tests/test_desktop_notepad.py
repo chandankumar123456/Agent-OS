@@ -26,11 +26,6 @@ def runtime_tools_mock():
         {"name": "desktop__click_element"},
         {"name": "desktop__type_element"},
         {"name": "desktop__focus_and_interact"},
-        # MCP desktop tools (desktop__desktop__*)
-        {"name": "desktop__desktop__click"},
-        {"name": "desktop__desktop__type_text"},
-        {"name": "desktop__desktop__press_key"},
-        {"name": "desktop__desktop__focus_window"},
         # Generic tools that must NOT be returned for desktop intents
         {"name": "web_search"},
         {"name": "calculator"},
@@ -51,7 +46,7 @@ class TestDesktopGroundingRegression:
         assert "desktop_env__open_application" in grounded_names
         assert "desktop_env__click" in grounded_names
         assert "desktop_env__type_text" in grounded_names
-        assert "desktop__desktop__click" in grounded_names
+        assert "desktop__click_element" in grounded_names
 
         # Must NOT contain generic tools
         assert "web_search" not in grounded_names
@@ -81,7 +76,7 @@ class TestDesktopGroundingRegression:
 
         # Must contain typing tools
         assert "desktop_env__type_text" in grounded_names
-        assert "desktop__desktop__type_text" in grounded_names
+        assert "desktop__type_element" in grounded_names
 
         # Must NOT contain generic tools
         assert "web_search" not in grounded_names
