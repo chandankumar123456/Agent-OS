@@ -308,7 +308,8 @@ class TestDesktopSession:
         session = DesktopSession("task-clear")
         session._ui_element_map = {1: {"name": "dummy"}, 2: {"name": "dummy2"}}
         session._next_element_id = 99
-        with patch.object(session, "_build_ui_tree_windows", return_value=[]):
+        with patch.object(session, "_build_ui_tree_windows", new_callable=AsyncMock) as mock_build:
+            mock_build.return_value = []
             with patch.object(sys, "platform", "win32"):
                 with patch.object(session, "_is_headless", return_value=False):
                     await session.get_ui_tree()
@@ -338,3 +339,21 @@ class TestDesktopSession:
         assert len(session.get_snapshot_history()) == 1
         await session.close()
         assert len(session.get_snapshot_history()) == 0
+
+    @pytest.mark.asyncio
+    async def test_desktop_session_caches_ui_tree(self):
+        """FR8/NFR1: Tree should be cached and not rebuilt if hash unchanged and <5s old."""
+        session = DesktopSession(task_id="cache-test")
+        with patch.object(session, "_build_ui_tree_windows", new_callable=AsyncMock) as mock_build:
+            mock_build.return_value = [
+                {"id": 1, "name": "OK", "type": "Button"},
+                {"id": 2, "name": "Cancel", "type": "Button"},
+            ]
+            with patch.object(session, "_is_headless", return_value=False):
+                with patch.object(sys, "platform", "win32"):
+                    tree1 = await session.get_ui_tree()
+                    tree2 = await session.get_ui_tree()
+                    assert tree1.success is True
+                    assert tree2.success is True
+                    assert tree1.result == tree2.result
+                    mock_build.assert_awaited_once()  # Should only build once
