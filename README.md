@@ -15,57 +15,57 @@ AgentOS is organized into 8 layers, each with strict single responsibility:
 ```mermaid
 graph TB
     subgraph "Layer 1 — Frontend (React 18 + Vite)"
-        FE[React UI<br/>Tailwind CSS + Shepherd.js]
+        FE["React UI / Tailwind CSS + Shepherd.js"]
     end
 
     subgraph "Layer 2 — API Gateway (FastAPI)"
-        API[FastAPI Server<br/>JWT Auth + Rate Limiting]
-        WS[WebSocket Server<br/>Real-time Events]
+        API["FastAPI Server / JWT Auth + Rate Limiting"]
+        WS["WebSocket Server / Real-time Events"]
     end
 
     subgraph "Layer 3 — Orchestration"
-        ORCH[Orchestrator<br/>Mode Selection + Fallback]
-        LG[LangGraph Engine<br/>StateGraph Compilation]
-        PIPE[PipelineExecutor<br/>Legacy Fallback]
+        ORCH["Orchestrator / Mode Selection + Fallback"]
+        LG["LangGraph Engine / StateGraph Compilation"]
+        PIPE["PipelineExecutor / Legacy Fallback"]
     end
 
     subgraph "Layer 4 — LangGraph Execution Engine"
         PLAN[planner_node]
         EXEC[executor_node]
         VER[verifier_node]
-        APPROV[approval_node<br/>interrupt()]
+        APPROV["approval_node / interrupt()"]
         SUMM[summarizer_node]
         PLAN --> EXEC --> VER --> APPROV --> SUMM
         EXEC -. replan .-> PLAN
     end
 
     subgraph "Layer 5 — Agent Runtime"
-        RUNTIME[AgentRuntime<br/>Singleton Registry]
-        WORKER[AgentWorker<br/>Inbox Queue]
-        FACT[AgentFactory<br/>Agent Creation]
-        POOL[AgentPool<br/>Semaphore 100]
+        RUNTIME["AgentRuntime / Singleton Registry"]
+        WORKER["AgentWorker / Inbox Queue"]
+        FACT["AgentFactory / Agent Creation"]
+        POOL["AgentPool / Semaphore 100"]
     end
 
     subgraph "Layer 6 — MCP + Tools"
-        MCP_MGR[MCPClientManager<br/>Server Lifecycle]
+        MCP_MGR["MCPClientManager / Server Lifecycle"]
         FS[Filesystem Server]
         SH[Shell Server]
         BR[Browser Server]
-        TREG[ToolRegistry<br/>Built-in + MCP]
-        SANDBOX[ToolSandbox<br/>AST Validation]
+        TREG["ToolRegistry / Built-in + MCP"]
+        SANDBOX["ToolSandbox / AST Validation"]
     end
 
     subgraph "Layer 7 — Safety + Observability"
-        GUARD[Guardrails<br/>Input/Output Validation]
-        TRACE[TraceManager<br/>Span Persistence]
-        METRICS[MetricsCollector<br/>Prometheus Export]
-        LOG[StructuredLogger<br/>JSON Logs]
+        GUARD["Guardrails / Input/Output Validation"]
+        TRACE["TraceManager / Span Persistence"]
+        METRICS["MetricsCollector / Prometheus Export"]
+        LOG["StructuredLogger / JSON Logs"]
     end
 
     subgraph "Layer 8 — Memory + Persistence"
-        PG[(PostgreSQL<br/>Long-term State)]
-        REDIS[(Redis<br/>Short-term Cache + PubSub)]
-        CHK[Checkpoints<br/>LangGraph State]
+        PG["PostgreSQL / Long-term State"]
+        REDIS["Redis / Short-term Cache + PubSub"]
+        CHK["Checkpoints / LangGraph State"]
     end
 
     FE <-->|REST API| API
@@ -249,7 +249,7 @@ graph LR
     PLAN --> EXEC[executor_node]
     EXEC -->|steps remain| EXEC
     EXEC -->|all steps done| VER[verifier_node]
-    VER -->|approval required| APPROV[approval_node<br/>interrupt()]
+    VER -->|approval required| APPROV["approval_node / interrupt()"]
     VER -->|no approval| SUMM[summarizer_node]
     APPROV -->|approved| SUMM
     APPROV -->|rejected| END_REJECT([REJECTED])
@@ -385,20 +385,20 @@ graph TB
         EX[Executor Node]
         TREG[ToolRegistry]
         MCP_MGR[MCPClientManager]
-        BENV[BrowserEnvironment<br/>Playwright]
+        BENV["BrowserEnvironment / Playwright"]
     end
 
     subgraph "MCP Servers (stdio transport)"
-        FS[FilesystemServer<br/>FastMCP]
-        SH[ShellServer<br/>FastMCP]
-        CA[CloudAPIServer<br/>FastMCP]
+        FS["FilesystemServer / FastMCP"]
+        SH["ShellServer / FastMCP"]
+        CA["CloudAPIServer / FastMCP"]
     end
 
     subgraph "System Resources"
         DISK[(File System)]
         SHELL[Shell / Process]
         WEB[Web / HTTP]
-        BROWSER[(Browser UI<br/>Chromium)]
+        BROWSER["Browser UI / Chromium"]
     end
 
     EX -->|tool_call| TREG
