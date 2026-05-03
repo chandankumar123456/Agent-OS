@@ -130,3 +130,21 @@ class TestTextRegionScaling:
         assert min_h == 24
         assert max_w == 900
         assert max_h == 140
+
+
+class TestHybridVisionParserDPI:
+    """HybridVisionParser must propagate DPI scale to its internal OpenCV parser."""
+
+    def test_hybrid_vision_parser_propagates_dpi_scale(self):
+        """parse_screenshot() sets _opencv._dpi_scale before calling OpenCV methods."""
+        from app.environments.vision_fallback import HybridVisionParser
+        parser = HybridVisionParser()
+        if not parser.is_available():
+            pytest.skip("Hybrid parser not available (OpenCV missing)")
+        with patch.object(parser._opencv, "_get_dpi_scale_factor", return_value=2.0):
+            with patch.object(parser._opencv, "_detect_raw_elements", return_value=[]) as mock_detect:
+                with patch.object(parser._opencv, "_get_active_window_crop", return_value=(None, (0, 0))):
+                    parser.parse_screenshot("dummy.png")
+        assert parser._opencv._dpi_scale == 2.0, (
+            f"Expected _opencv._dpi_scale to be 2.0, got {parser._opencv._dpi_scale}"
+        )

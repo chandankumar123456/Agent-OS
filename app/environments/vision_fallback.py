@@ -147,11 +147,13 @@ class OpenCVFallbackParser(VisionFallbackParser):
                 import ctypes
                 hdc = win32gui.GetDC(0)
                 if hdc:
-                    dpi_x = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
-                    dpi_y = ctypes.windll.gdi32.GetDeviceCaps(hdc, 90)  # LOGPIXELSY
-                    win32gui.ReleaseDC(0, hdc)
-                    if dpi_x > 0 and dpi_y > 0:
-                        return (dpi_x, dpi_y)
+                    try:
+                        dpi_x = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+                        dpi_y = ctypes.windll.gdi32.GetDeviceCaps(hdc, 90)  # LOGPIXELSY
+                        if dpi_x > 0 and dpi_y > 0:
+                            return (dpi_x, dpi_y)
+                    finally:
+                        win32gui.ReleaseDC(0, hdc)
             except Exception as e:
                 logger.debug(f"_get_screen_dpi: win32 detection failed: {e}")
         return (96, 96)
@@ -733,17 +735,25 @@ class HybridVisionParser(VisionFallbackParser):
     def _get_omni(self):
         if self._omni is None:
             try:
-                from .omniparser_client import get_omni_parser, OmniParserClient
+                from .omniparser_client import get_omni_parser
                 self._omni = get_omni_parser()
             except Exception as e:
                 logger.debug(f"HybridVisionParser: OmniParser not available: {e}")
                 self._omni = False  # sentinel: tried and failed
-        return self._omni if isinstance(self._omni, OmniParserClient) else None
+        if self._omni is False:
+            return None
+        return self._omni
 
     def parse_screenshot(self, screenshot_path: str) -> List[DetectedElement]:
         if not self.is_available():
             logger.warning("HybridVisionParser: OpenCV not available")
             return []
+
+        # Propagate DPI scale factor to the internal OpenCV parser
+        self._opencv._dpi_scale = self._opencv._get_dpi_scale_factor()
+        logger.debug(
+            f"HybridVisionParser: DPI scale factor = {self._opencv._dpi_scale:.2f}"
+        )
 
         img = cv2.imread(screenshot_path)
         if img is None:
