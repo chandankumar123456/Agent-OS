@@ -17,7 +17,7 @@ def runtime_tools_mock():
         # Desktop
         {"name": "desktop_env__click"},
         {"name": "desktop_env__type_text"},
-        {"name": "desktop__desktop__click"},
+        {"name": "desktop__click_element"},
         # Browser
         {"name": "browser_env__launch"},
         {"name": "browser_env__navigate"},
@@ -77,7 +77,7 @@ class TestIntentFastPathClassification:
 
     def test_file_write_intent_fast_path(self, runtime_tools_mock):
         grounded = tool_grounding_layer.filter_tools_for_step(
-            "Write a hello world message to output.txt", runtime_tools_mock
+            "Write file output.log with hello world", runtime_tools_mock
         )
         names = {t["name"] for t in grounded}
         assert "filesystem__write_file" in names, f"File write not grounded. Got: {names}"

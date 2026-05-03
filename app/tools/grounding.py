@@ -85,26 +85,6 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
         "desktop__click_element",
         "desktop__type_element",
         "desktop__focus_and_interact",
-        # MCP desktop tools (double-prefix namespace)
-        "desktop__desktop__screenshot",
-        "desktop__desktop__click",
-        "desktop__desktop__type_text",
-        "desktop__desktop__press_key",
-        "desktop__desktop__get_window_list",
-        "desktop__desktop__focus_window",
-        "desktop__desktop__get_clipboard",
-        "desktop__desktop__set_clipboard",
-        "desktop__desktop__get_ui_tree",
-        "desktop__desktop__click_element",
-        "desktop__desktop__type_element",
-        "desktop__desktop__focus_and_interact",
-        "desktop__desktop__ensure_focus",
-        "desktop__desktop__open_application",
-        "desktop__desktop__launch_app_and_open_file",
-        "desktop__desktop__get_window_registry",
-        "desktop__desktop__save_checkpoint",
-        "desktop__desktop__get_workflow_state",
-        "desktop__desktop__set_approval_mode",
     ],
     "content_generation": [
         "filesystem__write_file",
@@ -269,8 +249,6 @@ class ToolGroundingLayer:
     DESKTOP_LAUNCH_TOOL_NAMES = (
         "desktop_env__open_application",
         "desktop_env__launch_app_and_open_file",
-        "desktop__desktop__open_application",
-        "desktop__desktop__launch_app_and_open_file",
     )
 
     def classify_intent(self, step_description: str) -> str:
@@ -354,27 +332,49 @@ class ToolGroundingLayer:
 
     def get_allowed_tools(self, intent: str, all_tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Filter the full tool list to only tools allowed for this intent."""
-        allowed_patterns = CAPABILITY_TOOL_MAP.get(intent, CAPABILITY_TOOL_MAP["general"])
-        allowed = []
+        # FR4.3: Validate tools against registry at entry point (ground_tools replacement).
+        # Warn about unregistered tools so phantom entries surface in production logs,
+        # but do NOT exclude — MCP tools are registered late (post-discovery).
+        registered_tool_names = set(tool_registry.tools.keys())
         for tool in all_tools:
             name = tool.get("name", "")
-            for pattern in allowed_patterns:
-                if name == pattern or name.startswith(pattern.rsplit("__", 1)[0] + "__"):
-                    allowed.append(tool)
-                    break
+            if name and name not in registered_tool_names:
+                logger.warning(f"Tool '{name}' not registered; may be phantom or pending MCP discovery")
+
+        allowed_patterns = CAPABILITY_TOOL_MAP.get(intent, CAPABILITY_TOOL_MAP["general"])
+
+        # Build exact-match allowed set (Issue 2 fix: no prefix leakage)
+        allowed_names: Set[str] = set()
+        all_tool_names = [t.get("name") for t in all_tools]
+        for pattern in allowed_patterns:
+            if "__" in pattern:
+                # MCP-style tool name: exact match only (security fix)
+                allowed_names.add(pattern)
+            else:
+                # Bare pattern: exact match + namespace expansion
+                allowed_names.add(pattern)
+                allowed_names.update(t for t in all_tool_names if t.startswith(pattern + "__"))
+
+        allowed = [t for t in all_tools if t.get("name") in allowed_names]
+
+        # Issue 3: Apply forbidden-prefix blacklist for ALL intents
+        forbidden_prefixes = self._get_forbidden_prefixes(intent)
+        if forbidden_prefixes:
+            allowed = [t for t in allowed if not any(t.get("name", "").startswith(fp) for fp in forbidden_prefixes)]
+
         if not allowed:
             # For ANY specialized intent, NEVER silently fall back to generic tools.
             # Only "general" intent is allowed to use the broad fallback.
             if intent != "general":
                 return []
-            forbidden_prefixes = self._get_forbidden_prefixes(intent)
-            allowed = [t for t in all_tools if not any(t.get("name", "").startswith(fp) for fp in forbidden_prefixes)]
+            allowed = all_tools
+
         return allowed
 
     def _get_forbidden_prefixes(self, intent: str) -> Set[str]:
         """Return tool prefixes that should NEVER be used for a given intent."""
         browser_forbidden = {"browser_env__"}
-        desktop_forbidden = {"desktop_env__", "desktop__desktop__"}
+        desktop_forbidden = {"desktop_env__"}
         comm_forbidden = {"cloud_api__send", "slack__"}
         forbidden_map = {
             "file_search": browser_forbidden | comm_forbidden,
@@ -411,8 +411,12 @@ class ToolGroundingLayer:
         """Reverse lookup: what intent is a tool valid for?"""
         for intent, patterns in CAPABILITY_TOOL_MAP.items():
             for pattern in patterns:
-                if tool_name == pattern or tool_name.startswith(pattern.rsplit("__", 1)[0] + "__"):
-                    return intent
+                if "__" in pattern:
+                    if tool_name == pattern:
+                        return intent
+                else:
+                    if tool_name == pattern or tool_name.startswith(pattern + "__"):
+                        return intent
         return None
 
     def is_tool_allowed(self, tool_name: str, step_description: str) -> bool:
@@ -433,8 +437,8 @@ class ToolGroundingLayer:
             "calculator",
             "text_processor",
             "code_executor__",
-            "desktop__desktop__",
             "desktop_env__",
+            "desktop__",
         ]
         allowed = self.get_allowed_tools(intent, tools)
 
@@ -456,7 +460,7 @@ class ToolGroundingLayer:
             remainder = [t for t in ranked if t.get("name") not in self.DESKTOP_LAUNCH_TOOL_NAMES]
             ranked = launch_tools + remainder
         if exclude_desktop_for_non_desktop and intent != "desktop_automation":
-            ranked = [t for t in ranked if not t.get("name", "").startswith(("desktop_env__", "desktop__desktop__"))]
+            ranked = [t for t in ranked if not t.get("name", "").startswith(("desktop_env__", "desktop__"))]
         return ranked
 
     def get_fallback_tools(self, intent: str, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -466,7 +470,7 @@ class ToolGroundingLayer:
         fallback = [t for t in all_tools if t.get("name") not in primary_names]
         # For non-desktop intents, desktop tools are fallback
         if intent != "desktop_automation":
-            desktop_fallback = [t for t in tools if t.get("name", "").startswith(("desktop_env__", "desktop__desktop__"))]
+            desktop_fallback = [t for t in tools if t.get("name", "").startswith(("desktop_env__", "desktop__"))]
             fallback = fallback + [t for t in desktop_fallback if t.get("name") not in {f.get("name") for f in fallback}]
         return fallback
 
@@ -482,9 +486,8 @@ class ToolGroundingLayer:
             name = tool.get("name", "")
             if name and name not in registered_tool_names:
                 logger.warning(
-                    "Tool '%s' referenced in capability map but not registered in ToolRegistry. "
-                    "It will be excluded from grounded tools.",
-                    name,
+                    f"Tool '{name}' referenced in capability map but not registered in ToolRegistry. "
+                    "It will be excluded from grounded tools."
                 )
                 continue
             grounded.append(tool)
