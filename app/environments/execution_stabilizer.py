@@ -437,6 +437,7 @@ class ActionStabilizer:
         screenshot_fn: Callable[[Optional[str]], Awaitable[Any]],
         click_fn: Callable[[int, int], Awaitable[Any]],
         press_key_fn: Callable[[str], Awaitable[Any]],
+        window_list_fn: Optional[Callable[[], Awaitable[List[Dict[str, Any]]]]] = None,
     ) -> Dict[str, Any]:
         """Try to dismiss a detected popup window.
 
@@ -446,7 +447,10 @@ class ActionStabilizer:
         3. Press Alt+F4
         4. Press Tab + Enter (navigate to cancel/OK button)
 
-        Returns: {"dismissed": bool, "method": str}
+        After each strategy, if window_list_fn is provided, the stabilizer
+        verifies that the popup is actually gone before returning success.
+
+        Returns: {"dismissed": bool, "method": str, "reason": Optional[str]}
         """
         strategies = [
             ("escape", lambda: press_key_fn("escape")),
@@ -467,18 +471,23 @@ class ActionStabilizer:
                     f"dismiss_check_{method_name}_{datetime.utcnow().timestamp()}.png",
                 )
                 await screenshot_fn(ss_path)
-                # Re-check for popup — need a window_list_fn, but we can't pass it here.
-                # Instead, caller should re-verify. We return success if the action at
-                # least executed cleanly.
-                # Caller is expected to re-run detect_popup_window after dismiss_popup.
-                logger.info(f"[ActionStabilizer] Popup dismissal attempt: method={method_name}")
+                # NFR3: Verify popup is actually gone before claiming success
+                if window_list_fn is not None:
+                    remaining = await self.detect_popup_window(window_list_fn)
+                    if remaining:
+                        logger.info(
+                            f"[ActionStabilizer] Popup still present after {method_name}, "
+                            f"trying next strategy"
+                        )
+                        continue
+                logger.info(f"[ActionStabilizer] Popup dismissed successfully: method={method_name}")
                 return {"dismissed": True, "method": method_name}
             except Exception as e:
                 logger.debug(f"[ActionStabilizer] Dismissal method '{method_name}' failed: {e}")
                 continue
 
         logger.warning("[ActionStabilizer] All popup dismissal strategies failed")
-        return {"dismissed": False, "method": "none"}
+        return {"dismissed": False, "method": "none", "reason": "popup_still_present"}
 
     async def _tab_enter_dismiss(self, press_key_fn: Callable[[str], Awaitable[Any]]) -> None:
         """Helper: Press Tab then Enter to navigate to a dialog's default button."""

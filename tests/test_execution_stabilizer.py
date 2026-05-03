@@ -494,3 +494,25 @@ def test_stabilizer_config_has_cleanup_age():
     from app.environments.execution_stabilizer import StabilizerConfig
     cfg = StabilizerConfig(temp_screenshot_max_age_seconds=120)
     assert cfg.temp_screenshot_max_age_seconds == 120
+
+
+@pytest.mark.asyncio
+async def test_dismiss_popup_verifies_popup_is_gone():
+    """NFR3: dismiss_popup must confirm popup no longer exists after dismissal."""
+    from app.environments.execution_stabilizer import ActionStabilizer
+    from unittest.mock import patch, AsyncMock
+    stab = ActionStabilizer()
+    
+    # First call (before first strategy) detects popup, second call (after dismissal) does not
+    with patch.object(stab, "detect_popup_window", new_callable=AsyncMock, side_effect=[
+        {"title": "Popup"},  # pre-dismissal check: popup found
+        None,                 # post-dismissal check: popup gone
+    ]) as mock_detect:
+        result = await stab.dismiss_popup(
+            screenshot_fn=AsyncMock(),
+            click_fn=AsyncMock(),
+            press_key_fn=AsyncMock(),
+            window_list_fn=AsyncMock(),
+        )
+    assert result["dismissed"] is True
+    assert mock_detect.await_count >= 2

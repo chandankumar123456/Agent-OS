@@ -1072,20 +1072,8 @@ class DesktopSession:
             screenshot_fn=_screenshot_fn,
             click_fn=_click_fn,
             press_key_fn=_press_key_fn,
+            window_list_fn=lambda: self._get_window_list_for_stabilizer(),
         )
-
-        # Re-verify popup is actually gone
-        if result.get("dismissed"):
-            remaining = await self._stabilizer.detect_popup_window(
-                window_list_fn=lambda: self._get_window_list_for_stabilizer()
-            )
-            if remaining:
-                logger.warning(
-                    f"DesktopSession[{self.task_id}]: popup dismissal reported success "
-                    f"but popup still detected: {remaining.get('title')}"
-                )
-                result["dismissed"] = False
-                result["method"] = f"{result['method']}_failed_verify"
 
         return ToolOutput(
             success=result.get("dismissed", False),
