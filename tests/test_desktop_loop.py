@@ -320,28 +320,29 @@ async def test_task_runner_returns_failure_when_not_verified(
     mock_execution_env.configure = MagicMock()
     mock_execution_env.cleanup = MagicMock()
 
-    with patch("app.orchestrator.task_runner.get_checkpointer", return_value=MagicMock()):
-        with patch("app.orchestrator.task_runner.get_cached_graph") as mock_get_graph:
-            mock_graph = AsyncMock()
-            mock_graph.ainvoke = AsyncMock(return_value={
-                "verified": False,
-                "error": None,
-                "status": "completed",
-                "result": {},
-            })
-            mock_get_graph.return_value = mock_graph
+    with patch("app.orchestrator.task_runner.recovery_engine", None):
+        with patch("app.orchestrator.task_runner.get_checkpointer", return_value=MagicMock()):
+            with patch("app.orchestrator.task_runner.get_cached_graph") as mock_get_graph:
+                mock_graph = AsyncMock()
+                mock_graph.ainvoke = AsyncMock(return_value={
+                    "verified": False,
+                    "error": None,
+                    "status": "completed",
+                    "result": {},
+                })
+                mock_get_graph.return_value = mock_graph
 
-            runner = TaskRunner()
-            runner.task_complexity_router.classify = MagicMock(return_value=TaskRoutingDecision(
-                tier=ExecutionTier.FULL_RUNTIME,
-                reason="forced_tier2_for_test",
-                intents=(),
-            ))
-            result = await runner.run("open notepad", {}, uuid4(), "user-1", "task")
+                runner = TaskRunner()
+                runner.task_complexity_router.classify = MagicMock(return_value=TaskRoutingDecision(
+                    tier=ExecutionTier.FULL_RUNTIME,
+                    reason="forced_tier2_for_test",
+                    intents=(),
+                ))
+                result = await runner.run("open notepad", {}, uuid4(), "user-1", "autonomous")
 
-            assert result.status == AgentStatus.FAILURE, (
-                f"Expected FAILURE when verified=False, got {result.status}"
-            )
+                assert result.status == AgentStatus.FAILURE, (
+                    f"Expected FAILURE when verified=False, got {result.status}"
+                )
 
 
 # ── Tests for verifier_node desktop awareness ──
@@ -431,41 +432,42 @@ async def test_single_tool_success_does_not_equal_task_success(
     mock_execution_env.configure = MagicMock()
     mock_execution_env.cleanup = MagicMock()
 
-    with patch("app.orchestrator.task_runner.get_checkpointer", return_value=MagicMock()):
-        with patch("app.orchestrator.task_runner.get_cached_graph") as mock_get_graph:
-            mock_graph = AsyncMock()
-            # Graph state: one desktop tool succeeded, but verifier said False
-            mock_graph.ainvoke = AsyncMock(return_value={
-                "tool_calls": [
-                    {"step": 1, "tool": "desktop_env__press_key", "result": {"success": True}},
-                ],
-                "steps": [{
-                    "step_number": 1,
-                    "description": "Open Notepad",
-                    "output": "pressed key",
-                    "tool_results": [{"success": True}],
-                }],
-                "verified": False,
-                "error": None,
-                "status": "completed",
-                "result": {},
-            })
-            mock_get_graph.return_value = mock_graph
+    with patch("app.orchestrator.task_runner.recovery_engine", None):
+        with patch("app.orchestrator.task_runner.get_checkpointer", return_value=MagicMock()):
+            with patch("app.orchestrator.task_runner.get_cached_graph") as mock_get_graph:
+                mock_graph = AsyncMock()
+                # Graph state: one desktop tool succeeded, but verifier said False
+                mock_graph.ainvoke = AsyncMock(return_value={
+                    "tool_calls": [
+                        {"step": 1, "tool": "desktop_env__press_key", "result": {"success": True}},
+                    ],
+                    "steps": [{
+                        "step_number": 1,
+                        "description": "Open Notepad",
+                        "output": "pressed key",
+                        "tool_results": [{"success": True}],
+                    }],
+                    "verified": False,
+                    "error": None,
+                    "status": "completed",
+                    "result": {},
+                })
+                mock_get_graph.return_value = mock_graph
 
-            runner = TaskRunner()
-            runner.task_complexity_router.classify = MagicMock(return_value=TaskRoutingDecision(
-                tier=ExecutionTier.FULL_RUNTIME,
-                reason="forced_tier2_for_test",
-                intents=(),
-            ))
-            result = await runner.run("open notepad", {}, uuid4(), "user-1", "task")
+                runner = TaskRunner()
+                runner.task_complexity_router.classify = MagicMock(return_value=TaskRoutingDecision(
+                    tier=ExecutionTier.FULL_RUNTIME,
+                    reason="forced_tier2_for_test",
+                    intents=(),
+                ))
+                result = await runner.run("open notepad", {}, uuid4(), "user-1", "autonomous")
 
-            assert result.status != AgentStatus.SUCCESS, (
-                f"Expected status != SUCCESS for unverified task, got {result.status}"
-            )
-            assert result.status == AgentStatus.FAILURE, (
-                f"Expected FAILURE, got {result.status}"
-            )
+                assert result.status != AgentStatus.SUCCESS, (
+                    f"Expected status != SUCCESS for unverified task, got {result.status}"
+                )
+                assert result.status == AgentStatus.FAILURE, (
+                    f"Expected FAILURE, got {result.status}"
+                )
 
 
 # ── FR3.1: verifier_node must call verify_plan() for desktop tasks ──
@@ -639,7 +641,7 @@ async def test_goal_loop_uses_llm_for_action_decision():
     from app.desktop.goal_loop import DesktopGoalLoop
     loop = DesktopGoalLoop(task_id="llm-test")
     mock_llm = AsyncMock()
-    mock_llm.achain = AsyncMock(return_value=MagicMock(content='{"tool": "desktop__click_element", "params": {"element_id": 5}}'))
+    mock_llm.complete_json = AsyncMock(return_value={"tool": "desktop__click_element", "params": {"element_id": 5}})
     loop._llm = mock_llm
 
     action = await loop._decide_action(
@@ -648,4 +650,4 @@ async def test_goal_loop_uses_llm_for_action_decision():
         history=[],
     )
     assert action["tool"] == "desktop__click_element"
-    mock_llm.achain.assert_awaited_once()
+    mock_llm.complete_json.assert_awaited_once()

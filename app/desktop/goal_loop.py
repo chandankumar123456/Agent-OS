@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from ..agents.llm_client import get_llm_client
 from ..tools.grounding import ToolGroundingLayer
+from ..tools.registry import tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,8 @@ class DesktopGoalLoop:
         goal_reached = False
         final_answer = ""
 
-        # Get tool registry reference
-        from ..tools.registry import tool_registry as tr
-        registry = tr
+        # Use the tool registry passed by caller
+        registry = tool_registry
 
         while iterations < max_iters:
             iterations += 1
@@ -194,14 +194,16 @@ class DesktopGoalLoop:
         """
         grounded_tools = self._grounding.ground_tools(
             intent="desktop_automation",
-            all_tools=[],  # Will be populated from registry in real impl
+            all_tools=[{"name": name} for name in tool_registry.tools.keys()],
         )
 
         prompt = self._build_executor_prompt(goal, desktop_state, history, grounded_tools)
 
         try:
-            response = await self._llm.achain(prompt)
-            action = json.loads(response.content)
+            response = await self._llm.complete_json(
+                messages=[{"role": "user", "content": prompt}],
+            )
+            action = response
         except (json.JSONDecodeError, Exception) as e:
             logger.warning(f"LLM returned non-JSON action ({e}); falling back to pattern match")
             return self._fallback_pattern_match(goal, desktop_state)
