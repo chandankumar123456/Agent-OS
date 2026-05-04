@@ -120,8 +120,8 @@ async def test_recovery_tool_alternative_desktop_to_desktop(mock_redis):
     decision = await engine.decide(
         "task-t2",
         "step-1",
-        error="desktop screenshot failed",
-        current_tool="desktop__screenshot",
+        error="desktop ui tree failed",
+        current_tool="desktop__get_ui_tree",
     )
     assert decision.action == RecoveryAction.SWITCH_TOOL
     # FR6.1: Should use desktop_env__screenshot, not browser__screenshot

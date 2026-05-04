@@ -85,6 +85,16 @@ CAPABILITY_TOOL_MAP: Dict[str, List[str]] = {
         "desktop__click_element",
         "desktop__type_element",
         "desktop__focus_and_interact",
+        # FR7.1: MCP desktop server tools — discovered post-startup but must be
+        # reachable via capability grounding.
+        "desktop__screenshot",
+        "desktop__click",
+        "desktop__type_text",
+        "desktop__press_key",
+        "desktop__get_window_list",
+        "desktop__focus_window",
+        "desktop__get_clipboard",
+        "desktop__set_clipboard",
     ],
     "content_generation": [
         "filesystem__write_file",
@@ -240,6 +250,45 @@ STEP_INTENT_MAP: Dict[str, str] = {
     "average": "calculation",
     "percentage": "calculation",
 }
+
+
+# ── Module-level validation ────────────────────────────────────────────
+
+
+def _validate_capability_tool_map() -> None:
+    """Warn about phantom tools referenced in CAPABILITY_TOOL_MAP.
+
+    Scans every tool name in the capability map against the global
+    ToolRegistry and logs a warning for any tool that is not registered.
+    This runs at module import time to surface configuration drift before
+    any task execution begins.
+
+    Note: MCP tools discovered post-startup may not be registered yet,
+    so warnings are advisory (not fatal).
+    """
+    registered_names: Set[str] = set()
+    try:
+        registered_names = {t.get("name", "") for t in tool_registry.list_tools()}
+    except Exception as exc:
+        logger.warning(f"_validate_capability_tool_map: could not query registry: {exc}")
+        return
+
+    phantom_found = False
+    for capability, tool_names in CAPABILITY_TOOL_MAP.items():
+        for tool_name in tool_names:
+            if tool_name and tool_name not in registered_names:
+                phantom_found = True
+                logger.warning(
+                    f"CAPABILITY_TOOL_MAP['{capability}'] references tool "
+                    f"'{tool_name}' which is not registered in ToolRegistry. "
+                    "This tool may be pending MCP discovery or may be a phantom reference."
+                )
+    if not phantom_found:
+        logger.debug("_validate_capability_tool_map: all capability tools are registered")
+
+
+# Run validation at module import time
+_validate_capability_tool_map()
 
 
 class ToolGroundingLayer:

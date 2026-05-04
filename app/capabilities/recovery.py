@@ -27,6 +27,97 @@ class RecoveryStrategy(Enum):
     SHELL = auto()
 
 
+class DesktopRecoveryAction(Enum):
+    """Desktop-specific positive recovery action classifications.
+
+    These are mapped to RecoveryDecision (via SWITCH_TOOL / ESCALATE) by
+    DesktopRecoveryPlanner.
+    """
+    REFOCUS = auto()           # → SWITCH_TOOL: desktop_env__ensure_focus
+    REBUILD_TREE = auto()      # → SWITCH_TOOL: desktop__get_ui_tree
+    DISMISS_POPUP = auto()     # → SWITCH_TOOL: desktop_env__press_key {"key": "esc"}
+    VISION_ESCALATE = auto()   # → SWITCH_TOOL: desktop_env__screenshot
+    ESCALATE = auto()          # → ESCALATE: unrecoverable
+
+
+class DesktopRecoveryPlanner:
+    """Plans positive desktop recovery strategies based on error patterns.
+
+    Returns a RecoveryDecision that the RecoveryEngine can execute directly,
+    using SWITCH_TOOL to a concrete recovery tool or ESCALATE when no
+    positive strategy matches.
+    """
+
+    def plan(
+        self,
+        error: Optional[str],
+        current_tool: Optional[str],
+        task_id: str,
+    ) -> RecoveryDecision:
+        """Analyse error message and produce a desktop recovery decision.
+
+        Args:
+            error: The error message, if any.
+            current_tool: The tool that failed, if known.
+            task_id: The task identifier.
+
+        Returns:
+            A RecoveryDecision with SWITCH_TOOL to a concrete recovery tool,
+            or ESCALATE if no positive match is found.
+        """
+        if not error:
+            return RecoveryDecision(
+                task_id=task_id,
+                action=RecoveryAction.ESCALATE,
+                reason="Desktop recovery planner: no error provided, escalating for human review",
+            )
+
+        error_lower = error.lower()
+
+        # Focus / foreground / activation issues → re-focus the window
+        if any(p in error_lower for p in ("focus", "foreground", "not active", "hwnd")):
+            return RecoveryDecision(
+                task_id=task_id,
+                action=RecoveryAction.SWITCH_TOOL,
+                reason=f"Desktop recovery: focus/activation error detected, switching to ensure_focus",
+                next_tool="desktop_env__ensure_focus",
+            )
+
+        # Stale element / tree changed → rebuild the UI tree
+        if any(p in error_lower for p in ("stale", "element not found", "tree changed", "invalid element")):
+            return RecoveryDecision(
+                task_id=task_id,
+                action=RecoveryAction.SWITCH_TOOL,
+                reason=f"Desktop recovery: stale UI element detected, rebuilding UI tree",
+                next_tool="desktop__get_ui_tree",
+            )
+
+        # Popup / dialog / modal blocking → dismiss with Esc
+        if any(p in error_lower for p in ("popup", "dialog", "modal", "blocking")):
+            return RecoveryDecision(
+                task_id=task_id,
+                action=RecoveryAction.SWITCH_TOOL,
+                reason=f"Desktop recovery: popup/dialog blocking, pressing Esc to dismiss",
+                next_tool="desktop_env__press_key",
+            )
+
+        # Coordinate / pyautogui / vision / click / type failure → screenshot for visual inspection
+        if any(p in error_lower for p in ("pyautogui", "coordinate", "click failed", "type failed", "vision")):
+            return RecoveryDecision(
+                task_id=task_id,
+                action=RecoveryAction.SWITCH_TOOL,
+                reason=f"Desktop recovery: coordinate/vision failure, taking screenshot for visual analysis",
+                next_tool="desktop_env__screenshot",
+            )
+
+        # No positive match — fall through to the engine's generic logic
+        return RecoveryDecision(
+            task_id=task_id,
+            action=RecoveryAction.ESCALATE,
+            reason="Desktop recovery planner: no positive match for error pattern",
+        )
+
+
 class RecoveryEngine:
     """Analyzes failures and decides recovery actions.
 
@@ -88,18 +179,18 @@ class RecoveryEngine:
             "browser__search": ["cloud_api__search"],
             "cloud_api__search": ["browser__search"],
             # FR6.1: Desktop tools must fall back to other desktop tools, NOT browser/shell
-            "desktop__screenshot": ["desktop_env__screenshot"],
-            "desktop__click": ["desktop_env__click"],
-            "desktop__type": ["desktop_env__type_text", "desktop__type_element"],
-            "desktop_env__screenshot": ["desktop__screenshot"],
-            "desktop_env__click": ["desktop__click"],
-            "desktop_env__type_text": ["desktop__type_element", "desktop__type"],
+            # Only tools registered in the tool registry are mapped; phantom tools
+            # (desktop__screenshot, desktop__click, desktop__type) are removed.
             "desktop__get_ui_tree": ["desktop_env__screenshot"],
             "desktop__click_element": ["desktop__focus_and_interact"],
             "desktop__type_element": ["desktop__focus_and_interact", "desktop_env__type_text"],
             "desktop__focus_and_interact": ["desktop__click_element", "desktop__type_element"],
+            "desktop_env__screenshot": ["desktop__get_ui_tree"],
+            "desktop_env__click": ["desktop_env__press_key", "desktop__click_element"],
+            "desktop_env__type_text": ["desktop__type_element", "desktop_env__press_key"],
             "desktop_env__focus_window": ["desktop_env__ensure_focus"],
             "desktop_env__ensure_focus": ["desktop_env__focus_window"],
+            "desktop_env__press_key": ["desktop_env__type_text"],
             "cloud_api__scrape_page": ["browser__scrape_page"],
             "cloud_api__http_request": ["browser__http_request"],
         }
@@ -120,14 +211,22 @@ class RecoveryEngine:
         except (ValueError, TypeError):
             return 0
 
-    async def _increment_retry(self, task_id: str, step_id: Optional[str]) -> int:
+    async def _increment_retry(
+        self,
+        task_id: str,
+        step_id: Optional[str],
+        recovery_strategy: Optional[RecoveryStrategy] = None,
+    ) -> int:
         key = self._retry_key(task_id, step_id)
         if not redis_client.client:
             logger.debug(f"Redis unavailable; incrementing in-memory retry count for {task_id}")
             self._memory_retry_counts[key] = self._memory_retry_counts.get(key, 0) + 1
             return self._memory_retry_counts[key]
         new_count = await redis_client.client.incr(key)
-        await redis_client.client.expire(key, 604800)
+        # FR6.5: Desktop tasks use a short 1-hour TTL so stale retry counters
+        # don't persist across task restarts.  Generic tasks keep the 7-day default.
+        ttl = 3600 if recovery_strategy == RecoveryStrategy.DESKTOP else 604800
+        await redis_client.client.expire(key, ttl)
         return new_count
 
     async def reset_retries(self, task_id: str) -> None:
@@ -190,6 +289,19 @@ class RecoveryEngine:
                         reason="Terminal success already recorded in canonical execution state",
                     )
 
+        # FR6.2: For DESKTOP strategy, run positive recovery planner first.
+        # If it produces a concrete recovery action (non-ESCALATE), return it
+        # immediately — no need to count retries for a recovery tool switch.
+        if recovery_strategy == RecoveryStrategy.DESKTOP and error:
+            planner_decision = DesktopRecoveryPlanner().plan(error=error, current_tool=current_tool, task_id=task_id)
+            if planner_decision.action != RecoveryAction.ESCALATE:
+                logger.info(
+                    f"[RecoveryEngine] DesktopRecoveryPlanner produced positive action: "
+                    f"{planner_decision.action.value} → {planner_decision.next_tool}"
+                )
+                return planner_decision
+            # Planner returned ESCALATE (no positive match) — fall through to generic logic
+
         current_retries = await self._get_retry_count(task_id, step_id)
 
         # Check if max retries reached
@@ -206,7 +318,7 @@ class RecoveryEngine:
         # Verification-driven recovery
         if verification_report:
             if verification_report.retry_suggested:
-                await self._increment_retry(task_id, step_id)
+                await self._increment_retry(task_id, step_id, recovery_strategy)
                 return RecoveryDecision(
                     task_id=task_id,
                     step_id=step_id,
@@ -285,7 +397,7 @@ class RecoveryEngine:
                 "playwright_timeout", "network_unreachable",
             ]
             if any(p in error_lower for p in transient_patterns):
-                await self._increment_retry(task_id, step_id)
+                await self._increment_retry(task_id, step_id, recovery_strategy)
                 return RecoveryDecision(
                     task_id=task_id,
                     step_id=step_id,
@@ -325,7 +437,7 @@ class RecoveryEngine:
 
         # Default: retry once, then escalate
         if current_retries < self.max_retries:
-            await self._increment_retry(task_id, step_id)
+            await self._increment_retry(task_id, step_id, recovery_strategy)
             return RecoveryDecision(
                 task_id=task_id,
                 step_id=step_id,
