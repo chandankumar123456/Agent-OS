@@ -7,23 +7,42 @@ export default {
   theme: {
     extend: {
       colors: {
-        background: '#131314',
-        surface: '#131314',
-        'surface-low': '#1c1b1c',
-        'surface-high': '#2a2a2b',
-        'surface-highest': '#353436',
-        'surface-lowest': '#0e0e0f',
-        primaryText: '#e5e2e3',
-        secondaryText: '#bac9cc',
-        primary: '#c3f5ff',
-        'primary-container': '#00e5ff',
-        outline: '#3b494c',
+        background: '#F2F2F2',
+        surface: '#FFFFFF',
+        primary: {
+          DEFAULT: '#FF6B00',
+          dark: '#CC5500',
+        },
+        secondary: {
+          DEFAULT: '#4ECDC4',
+          dark: '#3DBAB1',
+        },
+        accent: {
+          yellow: '#FFE66D',
+          pink: '#FF80AB',
+          purple: '#B388FF',
+          mint: '#95E1D3',
+        },
+        primaryText: '#000000',
+        secondaryText: '#4A4A5A',
+        outline: '#000000',
       },
       fontFamily: {
-        sans: ['Inter', 'sans-serif'],
+        pixel: ['"Press Start 2P"', 'monospace'],
+        retro: ['"VT323"', 'monospace'],
+      },
+      borderWidth: {
+        '4': '4px',
+        '6': '6px',
+        '8': '8px',
+      },
+      borderRadius: {
+        'none': '0',
       },
       boxShadow: {
-        'glow-cyan': '0 0 40px rgba(0, 218, 243, 0.04)',
+        'pixel': '4px 4px 0px 0px #000000',
+        'pixel-sm': '2px 2px 0px 0px #000000',
+        'pixel-lg': '8px 8px 0px 0px #000000',
       }
     },
   },
