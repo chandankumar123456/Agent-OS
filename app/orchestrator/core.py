@@ -231,7 +231,6 @@ class Orchestrator:
             return await self._execute_with_langgraph(query, config, task_id, user_id, mode)
         except Exception as langgraph_err:
             err_str = str(langgraph_err)
-            is_checkpoint_error = "uq_checkpoint_write" in err_str or "checkpoint_writes" in err_str
             logger.warning(f"LangGraph execution failed, attempting checkpoint recovery: {langgraph_err}")
             await event_bus.publish(
                 f"task:{task_id}",
@@ -243,16 +242,6 @@ class Orchestrator:
                 recovery_service = CheckpointRecoveryService()
                 recovered_state = await recovery_service.resume_task(str(task_id), mode, {})
                 if recovered_state:
-                    # If the error was just a checkpoint write collision but the graph
-                    # actually finished (verified, completed status), return success.
-                    if is_checkpoint_error and recovered_state.get("verified") and recovered_state.get("status") == "completed":
-                        logger.info(f"Task {task_id} checkpoint indicates completion despite write error; returning success")
-                        return AgentOutput(
-                            task_id=str(task_id),
-                            step_id=uuid4(),
-                            status=AgentStatus.SUCCESS,
-                            output_data=recovered_state.get("result", {}),
-                        )
                     logger.info(f"Checkpoint recovered for task {task_id}, re-attempting LangGraph execution")
                     return await self._execute_with_langgraph(query, config, task_id, user_id, mode, resume_state=recovered_state)
             except Exception as recovery_err:
