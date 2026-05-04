@@ -109,6 +109,51 @@ class StabilizerConfig:
 class ActionStabilizer:
     config: StabilizerConfig = field(default_factory=StabilizerConfig)
     _snapshot_history: List[ActionSnapshot] = field(default_factory=list)
+    _cleanup_task: Optional[asyncio.Task] = field(default=None, repr=False)
+    _cleanup_interval_seconds: int = field(default=300, repr=False)
+
+    def __post_init__(self) -> None:
+        """Start the background screenshot cleanup task."""
+        self._start_cleanup_task()
+
+    def _start_cleanup_task(self) -> None:
+        """Start the background screenshot reaper if not already running."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # No event loop — skip (e.g. during dataclass init outside async context)
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = loop.create_task(
+                self._cleanup_loop(), name="stabilizer_screenshot_reaper"
+            )
+
+    async def _cleanup_loop(self) -> None:
+        """Background loop that cleans orphaned screenshots every 5 minutes."""
+        try:
+            while True:
+                await asyncio.sleep(self._cleanup_interval_seconds)
+                try:
+                    removed = self.cleanup_temp_screenshots()
+                    if removed:
+                        logger.info(
+                            f"[ActionStabilizer] Background reaper removed {removed} orphaned screenshot(s)"
+                        )
+                except Exception as exc:
+                    logger.error(
+                        f"[ActionStabilizer] Screenshot cleanup iteration failed: {exc}"
+                    )
+        except asyncio.CancelledError:
+            pass  # Normal shutdown — do not re-raise
+
+    async def shutdown(self) -> None:
+        """Cancel the background cleanup task."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
 
     # ── Screenshot comparison helpers ──
 
