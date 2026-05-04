@@ -16,8 +16,6 @@ except ImportError:
         def loads_typed(self, data):
             return data
 from sqlalchemy import select, delete
-from sqlalchemy.exc import IntegrityError
-
 from ..memory.models import CheckpointModel, CheckpointWriteModel
 from ..memory.long_term import db
 from ..logs.logger import logger
@@ -266,23 +264,7 @@ class PostgresCheckpointSaver(BaseCheckpointSaver):
                     task_path=task_path,
                     write_data=_encode((task_id_local, channel, value)),
                 ).on_conflict_do_nothing(constraint="uq_checkpoint_write")
-                try:
-                    async with session.begin_nested():
-                        await session.execute(stmt)
-                except IntegrityError as exc:
-                    # Savepoint is already rolled back by the context manager;
-                    # only the conflicting write is discarded, preserving all
-                    # other writes in the batch.
-                    orig = getattr(exc, "orig", None)
-                    pgcode = getattr(orig, "pgcode", None)
-                    if pgcode == "23505":
-                        logger.debug(
-                            "Checkpoint write conflict suppressed (pgcode=23505)",
-                            task=task_id_local,
-                            channel=channel,
-                        )
-                        continue
-                    raise
+                await session.execute(stmt)
             await session.commit()
 
         logger.debug(
