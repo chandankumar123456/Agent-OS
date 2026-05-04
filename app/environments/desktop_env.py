@@ -1742,18 +1742,70 @@ class DesktopSession:
 
 
 class DesktopSessionManager:
-    """Manages desktop sessions per task_id."""
+    """Manages desktop sessions per task_id with TTL-based expiration."""
 
-    def __init__(self):
+    def __init__(self, session_ttl_seconds: int = 1800):
         self._sessions: Dict[str, DesktopSession] = {}
+        self._session_meta: Dict[str, dict] = {}
+        self._session_ttl_seconds = session_ttl_seconds
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._cleanup_interval_seconds: int = 60
+
+    def _start_cleanup_task(self) -> None:
+        """Start the background reaper if not already running."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(
+                self._cleanup_loop(), name="desktop_session_reaper"
+            )
+
+    async def _cleanup_loop(self) -> None:
+        """Background loop that closes expired sessions every 60 seconds."""
+        try:
+            while True:
+                await asyncio.sleep(self._cleanup_interval_seconds)
+                try:
+                    closed = await self.close_expired_sessions()
+                    if closed:
+                        logger.info(
+                            f"DesktopSessionManager: reaper closed {closed} expired session(s)"
+                        )
+                except Exception as exc:
+                    logger.error(
+                        f"DesktopSessionManager: cleanup loop iteration failed: {exc}"
+                    )
+        except asyncio.CancelledError:
+            pass  # Normal shutdown — do not re-raise
+
+    async def close_expired_sessions(self) -> int:
+        """Close every session whose age exceeds the TTL.
+
+        Returns the number of sessions closed.
+        """
+        import time as _time
+
+        now = _time.time()
+        expired_ids = [
+            task_id
+            for task_id, meta in self._session_meta.items()
+            if (now - meta.get("created_at", now)) > self._session_ttl_seconds
+        ]
+        for task_id in expired_ids:
+            await self.close_session(task_id)
+        return len(expired_ids)
 
     async def get_or_create_session(self, task_id: str) -> DesktopSession:
+        self._start_cleanup_task()
         session = self._sessions.get(task_id)
         if session:
             logger.info(f"DesktopSessionManager: reusing session for task {task_id}")
+            import time as _time
+            self._session_meta[task_id]["last_accessed"] = _time.time()
             return session
+        import time as _time
+        now = _time.time()
         session = DesktopSession(task_id)
         self._sessions[task_id] = session
+        self._session_meta[task_id] = {"created_at": now, "last_accessed": now}
         logger.info(f"DesktopSessionManager: created new session for task {task_id}")
         return session
 
@@ -1762,14 +1814,25 @@ class DesktopSessionManager:
 
     async def close_session(self, task_id: str) -> ToolOutput:
         session = self._sessions.pop(task_id, None)
+        self._session_meta.pop(task_id, None)
         if session:
             return await session.close()
         return ToolOutput(success=True, result={"message": "No session to close"})
 
     async def close_all(self):
+        # Cancel the background reaper first
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            self._cleanup_task = None
+
         for task_id, session in list(self._sessions.items()):
             await session.close()
         self._sessions.clear()
+        self._session_meta.clear()
 
 
 desktop_session_manager = DesktopSessionManager()
