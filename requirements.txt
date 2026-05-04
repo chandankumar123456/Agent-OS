@@ -113,3 +113,7 @@ einops
 supervision==0.18.0
 pillow
 pytest-asyncio==1.3.0
+psutil
+asyncio-throttle
+pytesseract
+comtypes
