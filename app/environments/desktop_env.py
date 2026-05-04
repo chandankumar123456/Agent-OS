@@ -1790,7 +1790,10 @@ class DesktopSessionManager:
             if (now - meta.get("created_at", now)) > self._session_ttl_seconds
         ]
         for task_id in expired_ids:
-            await self.close_session(task_id)
+            try:
+                await self.close_session(task_id)
+            except Exception as exc:
+                logger.warning(f"Failed to close expired session {task_id}: {exc}")
         return len(expired_ids)
 
     async def get_or_create_session(self, task_id: str) -> DesktopSession:
