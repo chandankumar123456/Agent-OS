@@ -1,4 +1,5 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+const API_BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' && window.location.origin.includes('localhost') ? 'http://127.0.0.1:8000/api/v1' : '/api/v1');
+
 
 export interface WorkflowState {
   workflow: {
@@ -235,48 +236,56 @@ class ApiClient {
     options: RequestInit = {}
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
+    let attempts = 0;
+    const maxAttempts = 3;
 
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        ...this.getAuthHeaders(),
-        ...options.headers,
-      },
-    });
+    
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch(url, {
+          ...options,
+          headers: {
+            ...this.getAuthHeaders(),
+            ...options.headers,
+          },
+        });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: 'Request failed' }));
-      const message = error.error?.message || error.error || error.detail || `HTTP ${response.status}`;
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Request failed' }));
+          const message = error.error?.message || error.error || error.detail || `HTTP ${response.status}`;
 
-      // Attempt token refresh on 401 with token_expired
-      if (response.status === 401 && error.error === 'token_expired') {
-        const refreshed = await this._attemptRefresh();
-        if (refreshed) {
-          // Retry original request with new token
-          const retryResponse = await fetch(url, {
-            ...options,
-            headers: {
-              ...this.getAuthHeaders(),
-              ...options.headers,
-            },
-          });
-          if (retryResponse.ok) {
-            return retryResponse.json();
+          // Attempt token refresh on 401 with token_expired
+          if (response.status === 401 && error.error === 'token_expired') {
+            const refreshed = await this._attemptRefresh();
+            if (refreshed) {
+              // Retry once more with new token (doesn't count towards connection retries)
+              const retryResponse = await fetch(url, {
+                ...options,
+                headers: {
+                  ...this.getAuthHeaders(),
+                  ...options.headers,
+                },
+              });
+              if (retryResponse.ok) return retryResponse.json();
+            }
+            window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
+          } else if (response.status === 401) {
+            window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
           }
-          // Retry also failed — do NOT auto-logout if refresh succeeded.
-          // The retry failure is likely a permission/server issue, not auth.
           throw new Error(message);
         }
-        // Refresh failed — token is genuinely invalid
-        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
-      } else if (response.status === 401) {
-        // Non-token_expired 401 — token might be missing or malformed
-        window.dispatchEvent(new CustomEvent('auth:expired', { detail: { status: response.status, message } }));
-      }
-      throw new Error(message);
-    }
 
-    return response.json();
+        return response.json();
+      } catch (error: any) {
+        attempts++;
+        if (attempts >= maxAttempts || error.message?.includes('HTTP')) {
+          throw error;
+        }
+        // Wait before retry
+        await new Promise(r => setTimeout(r, 500 * attempts));
+      }
+    }
+    throw new Error('Request failed after multiple attempts');
   }
 
   private async _attemptRefresh(): Promise<boolean> {
@@ -329,7 +338,7 @@ class ApiClient {
     taskId: string,
     onStatusChange?: (task: Task) => void,
     interval: number = 2000,
-    maxAttempts: number = 60,
+    maxAttempts: number = 150, // 5 minutes default
     signal?: AbortSignal
   ): Promise<Task> {
     let attempts = 0;
@@ -337,7 +346,7 @@ class ApiClient {
     return new Promise((resolve, reject) => {
       const poll = async () => {
         if (signal?.aborted) {
-          reject(new Error('Polling aborted'));
+          reject(new Error('Polling aborted by user or system.'));
           return;
         }
 
@@ -355,7 +364,8 @@ class ApiClient {
 
           attempts++;
           if (attempts >= maxAttempts) {
-            reject(new Error('Polling timeout'));
+            const timeElapsed = (attempts * interval) / 1000;
+            reject(new Error(`Polling timeout after ${timeElapsed}s. The task may still be running in the background.`));
             return;
           }
 
@@ -376,18 +386,21 @@ class ApiClient {
   async getTaskTrace(taskId: string): Promise<TaskTrace | null> {
     const response = await this.request<TaskTrace | { message: string; task_id: string }>(`/tasks/${taskId}/trace`);
     // Backend returns { message: "No trace available" } when no trace exists
-    if ('message' in response) {
+    if (response && 'message' in response) {
       return null;
     }
-    return response;
+    return response as TaskTrace;
   }
 
   async getHealth(): Promise<{ status: string; version: string }> {
-    // Health endpoint is at root level, not under /api/v1
-    const response = await fetch(`${this.baseUrl.replace('/api/v1', '')}/health`);
+    const healthUrl = this.baseUrl.includes('http') 
+      ? this.baseUrl.split('/api')[0] + '/health'
+      : '/health';
+    const response = await fetch(healthUrl);
     if (!response.ok) throw new Error('Health check failed');
     return response.json();
   }
+
 
   async getMetrics(): Promise<{
     requests_total: number;
