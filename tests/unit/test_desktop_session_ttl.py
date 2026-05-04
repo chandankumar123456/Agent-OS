@@ -34,8 +34,9 @@ async def test_session_expires_after_ttl(manager):
     session = await manager.get_or_create_session("task-expire")
     assert manager.get_session("task-expire") is not None
 
-    # Simulate time passing beyond TTL by backdating created_at
+    # Simulate time passing beyond TTL by backdating both created_at and last_accessed
     manager._session_meta["task-expire"]["created_at"] = _time.time() - 3
+    manager._session_meta["task-expire"]["last_accessed"] = _time.time() - 3
 
     closed = await manager.close_expired_sessions()
     assert closed == 1
@@ -44,13 +45,14 @@ async def test_session_expires_after_ttl(manager):
 
 
 @pytest.mark.asyncio
-async def test_cleanup_loop_closes_expired_sessions(manager):
-    """The background reaper should close expired sessions automatically."""
+async def test_close_expired_sessions_closes_old_sessions(manager):
+    """close_expired_sessions should close sessions older than TTL."""
     await manager.get_or_create_session("task-reaper")
     assert manager.get_session("task-reaper") is not None
 
-    # Backdate the session so it's already expired
+    # Backdate the session so it's already expired (both timestamps)
     manager._session_meta["task-reaper"]["created_at"] = _time.time() - 3
+    manager._session_meta["task-reaper"]["last_accessed"] = _time.time() - 3
 
     # Wait for one cleanup cycle (TTL check interval is 60s by default,
     # but we can invoke the logic directly for a fast test)

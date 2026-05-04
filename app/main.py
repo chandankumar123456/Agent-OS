@@ -123,6 +123,13 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error(f"MCP system servers stop failed: {e}")
 
+    try:
+        from .environments.desktop_env import DesktopSessionManager
+        await DesktopSessionManager().close_all()
+        logger.info("Desktop sessions closed")
+    except Exception as e:
+        logger.error(f"Desktop session close_all failed: {e}")
+
     if "mcp_monitor" in initialized:
         try:
             mcp_health_monitor.stop()

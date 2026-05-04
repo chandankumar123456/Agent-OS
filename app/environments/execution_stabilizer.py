@@ -133,7 +133,7 @@ class ActionStabilizer:
             while True:
                 await asyncio.sleep(self._cleanup_interval_seconds)
                 try:
-                    removed = self.cleanup_temp_screenshots()
+                    removed = await asyncio.to_thread(self.cleanup_temp_screenshots)
                     if removed:
                         logger.info(
                             f"[ActionStabilizer] Background reaper removed {removed} orphaned screenshot(s)"

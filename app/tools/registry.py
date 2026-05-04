@@ -576,6 +576,27 @@ class ToolRegistry:
                     error=f"Missing required parameter '{param}' for tool '{tool_name}'",
                 )
 
+        # Safety gate: mandatory pre-execution validation for ALL tool invocations
+        from ..safety.gate import safety_gate
+        from ..safety.models import ActionSeverity
+        severity = safety_gate.check_tool_call(tool_name, parameters, "")
+        if severity.value >= ActionSeverity.IRREVERSIBLE.value:
+            logger.error(f"[registry][TRACE] EXECUTE BLOCKED: tool '{tool_name}' severity={severity.value}")
+            return ToolOutput(
+                success=False,
+                error=f"Safety gate blocked tool {tool_name}: {severity.value}",
+            )
+
+        # For desktop tools, also validate credential leakage in parameters
+        if tool_name.startswith(("desktop_env__", "desktop__")):
+            cred_violation = safety_gate.validate_desktop_params(parameters)
+            if cred_violation.blocked:
+                logger.error(f"[registry][TRACE] EXECUTE BLOCKED: tool '{tool_name}' credential violation")
+                return ToolOutput(
+                    success=False,
+                    error=f"Safety gate blocked credential in desktop tool: {cred_violation.reason}",
+                )
+
         logger.info(f"[registry][TRACE] EXECUTE DISPATCH: tool_name='{tool_name}' type={getattr(registered.tool, 'tool_type', 'unknown')} mcp={registered.mcp_tool}")
         try:
             tool_input = ToolInput(parameters=parameters)

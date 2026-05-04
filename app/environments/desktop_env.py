@@ -4,6 +4,7 @@ import gc
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -1472,6 +1473,19 @@ class DesktopSession:
 
         try:
             if app_name:
+                # Only allow simple executable names, no paths
+                if any(c in app_name for c in ("\\", "/", "..", ";", "&", "|", "$")):
+                    return ToolOutput(
+                        success=False,
+                        error="Invalid app_name: path separators and shell metacharacters are not allowed",
+                    )
+                resolved = shutil.which(app_name)
+                if not resolved:
+                    return ToolOutput(
+                        success=False,
+                        error=f"app_name '{app_name}' not found in PATH",
+                    )
+                app_name = resolved
                 process = subprocess.Popen([app_name, abs_path])
             else:
                 if sys.platform == "win32":
@@ -1708,6 +1722,13 @@ class DesktopSession:
         except Exception as e:
             logger.warning(f"DesktopSession[{self.task_id}]: screenshot cleanup failed: {e}")
 
+        # Clear system clipboard before nullifying references
+        try:
+            import pyperclip
+            pyperclip.copy("")
+        except Exception:
+            pass
+
         # UI element map clear (try/except log, finally set None)
         try:
             self._ui_element_map.clear()
@@ -1716,8 +1737,9 @@ class DesktopSession:
         finally:
             self._ui_element_map = None
 
-        # Stabilizer clear_history (try/except log, finally set None)
+        # Stabilizer shutdown (cancel background task) then clear history
         try:
+            await self._stabilizer.shutdown()
             self._stabilizer.clear_history()
         except Exception as e:
             logger.warning(f"DesktopSession[{self.task_id}]: stabilizer clear failed: {e}")
@@ -1787,7 +1809,7 @@ class DesktopSessionManager:
         expired_ids = [
             task_id
             for task_id, meta in self._session_meta.items()
-            if (now - meta.get("created_at", now)) > self._session_ttl_seconds
+            if (now - meta.get("last_accessed", meta.get("created_at", now))) > self._session_ttl_seconds
         ]
         for task_id in expired_ids:
             try:
