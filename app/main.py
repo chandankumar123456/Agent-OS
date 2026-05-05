@@ -12,6 +12,7 @@ from .memory.short_term import redis_client
 from .migrations.runner import run_pending_migrations
 from .middleware.auth import APIKeyMiddleware, get_api_keys
 from .middleware.rate_limit import RateLimitMiddleware, get_rate_limit
+from .middleware.request_logging import RequestLoggingMiddleware
 from .runtime.runtime import AgentRuntime
 from .logs.metrics import metrics_collector
 from .mcp.monitor import mcp_health_monitor
@@ -164,6 +165,8 @@ async def lifespan(app: FastAPI):
     logger.info("Agent-OS shutting down")
 
 
+from .middleware.validation import InputValidationMiddleware
+
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.VERSION,
@@ -186,6 +189,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.add_middleware(InputValidationMiddleware)
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RateLimitMiddleware, requests_per_minute=get_rate_limit())
 
 api_keys = get_api_keys()
@@ -206,6 +211,7 @@ async def prometheus_metrics():
 
 @app.exception_handler(AgentOSError)
 async def agent_error_handler(_: Request, exc: AgentOSError):
+    logger.log_error(exc)
     return JSONResponse(
         status_code=exc.http_status,
         content={
@@ -220,6 +226,7 @@ async def agent_error_handler(_: Request, exc: AgentOSError):
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(_: Request, exc: HTTPException):
+    logger.log_error(exc)
     code_map = {
         401: ErrorCode.AUTH_UNAUTHORIZED.value,
         403: ErrorCode.AUTH_FORBIDDEN.value,
@@ -269,18 +276,6 @@ async def unhandled_exception_handler(_: Request, exc: Exception):
             }
         }
     )
-
-
-@app.middleware("http")
-async def logging_middleware(request, call_next):
-    logger.info(f"{request.method} {request.url.path}")
-    try:
-        response = await call_next(request)
-        logger.info(f"{request.method} {request.url.path} -> {response.status_code}")
-        return response
-    except Exception as exc:
-        logger.error(f"{request.method} {request.url.path} -> ERROR: {exc}")
-        raise
 
 
 @app.middleware("http")
