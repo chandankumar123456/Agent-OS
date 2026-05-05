@@ -17,8 +17,32 @@ from ..capabilities.models import VerificationResult, RecoveryAction
 from ..observability import observability_bus, ObservabilityEventType
 from ..safety.gate import SafetyGate, ActionSeverity
 from ..orchestrator.event_bus import event_bus, Event
+from ..guardrails.validator import guardrails
 from .state import AgentState
 from ..execution_state import ExecutionState, ToolExecutionRecord, ExecutionVerdict
+from ..orchestrator.errors import ErrorType, ErrorCode
+
+async def _validate_node_output(node_name: str, task_id: str, result: Dict[str, Any], output_content: Any) -> Dict[str, Any]:
+    """Helper to validate node output through guardrails. Returns updated result if blocked."""
+    from ..guardrails.validator import guardrails
+    status = result.get("status", "unknown")
+    payload = {"status": status, "node": node_name}
+    
+    # Add snippet of output for content-based guardrails
+    if isinstance(output_content, str):
+        payload["output"] = output_content[:1000]
+    elif isinstance(output_content, (dict, list)):
+        payload["output"] = str(output_content)[:1000]
+        
+    out_valid = await guardrails.verify_output(payload)
+    if not out_valid:
+        logger.warning(f"[{node_name}] Guardrail output validation failed for task {task_id}")
+        result["error"] = f"{node_name.replace('_node', '').capitalize()} guardrail validation failed"
+        result["status"] = "guardrail_blocked"
+        if "verified" in result:
+            result["verified"] = False
+    return result
+
 from ..desktop.goal_loop import DesktopGoalLoop
 
 
@@ -324,12 +348,14 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
         source="planner_node",
     )
 
-    return {
+    # ── Output Validation at Node Exit ────────────────────────────────
+    result = {
         "plan": plan,
         "current_step_index": 0,
         "messages": [AIMessage(content=f"Plan: {json.dumps(plan, indent=2)}")],
         "status": "planning_complete",
     }
+    return await _validate_node_output("planner_node", task_id, result, plan)
 
 
 async def executor_node(state: AgentState) -> Dict[str, Any]:
@@ -348,7 +374,8 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
 
     if idx >= len(plan):
         logger.info(f"[executor_node] All steps complete for task {task_id}")
-        return {"status": "execution_complete"}
+        result = {"status": "execution_complete"}
+        return await _validate_node_output("executor_node", task_id, result, "All steps executed")
 
     step = plan[idx]
     step_number = step.get("step_number", idx + 1)
@@ -383,7 +410,7 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
                 )
                 logger.error(f"[executor_node] {error_msg}")
                 # Halt the workflow entirely — do not advance to subsequent steps
-                return {
+                result = {
                     "steps": state.get("steps", []),
                     "current_step_index": len(plan),  # Skip to end so graph terminates
                     "error": error_msg,
@@ -391,6 +418,7 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
                     "messages": [AIMessage(content=f"Workflow halted: {error_msg}")],
                     "status": "failed",
                 }
+                return await _validate_node_output("executor_node", task_id, result, error_msg)
 
     # ── Tool Selection: Use Planner Constraints (NO re-grounding) ─────
     available_tools = tool_registry.list_tools()
@@ -848,16 +876,23 @@ async def _execute_tool_call(
         }
         steps = list(state.get("steps", []))
         steps.append(step_output)
-        return {
-            "steps": steps,
-            "current_step_index": idx + 1,
-            "tool_calls": tool_calls,
-            "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
-            "verification_reports": verification_reports,
-            "recovery_decisions": recovery_decisions,
-            "status": "step_executed",
-            "execution_state": execution_state.to_dict(),
-        }
+    # ── Output Validation at Node Exit ────────────────────────────────
+    result = {
+        "steps": steps,
+        "current_step_index": idx + 1,
+        "tool_calls": tool_calls,
+        "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
+        "verification_reports": verification_reports,
+        "recovery_decisions": recovery_decisions,
+        "status": "step_executed",
+        "execution_state": execution_state.to_dict(),
+    }
+    out_valid = await guardrails.verify_output({"status": result["status"], "output": final_answer[:500]})
+    if not out_valid:
+        logger.warning(f"[executor_node] Guardrail output validation failed for task {task_id} step {step_number}")
+        result["error"] = "Executor guardrail validation failed"
+        result["status"] = "guardrail_blocked"
+    return result
 
     severity = SafetyGate().check_tool_call(tool_name, tool_params, state.get("query", ""))
     if severity == ActionSeverity.IRREVERSIBLE:
@@ -888,7 +923,7 @@ async def _execute_tool_call(
         }
         steps = state.get("steps", [])
         steps.append(step_output)
-        return {
+        result = {
             "steps": steps,
             "current_step_index": idx + 1,
             "tool_calls": tool_calls,
@@ -898,6 +933,7 @@ async def _execute_tool_call(
             "status": "blocked",
             "execution_state": execution_state.to_dict(),
         }
+        return await _validate_node_output("executor_node", task_id, result, blocked_error)
 
     logger.info(f"[_execute_tool_call][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
     logger.info(f"[_execute_tool_call][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
@@ -966,7 +1002,7 @@ async def _execute_tool_call(
         source="executor_node",
     )
 
-    return {
+    result = {
         "steps": steps,
         "current_step_index": idx + 1,
         "tool_calls": tool_calls,
@@ -976,6 +1012,7 @@ async def _execute_tool_call(
         "status": "step_executed",
         "execution_state": execution_state.to_dict(),
     }
+    return await _validate_node_output("executor_node", task_id, result, str(final_answer)[:500])
 
 
 async def verifier_node(state: AgentState) -> Dict[str, Any]:
@@ -1188,13 +1225,15 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         source="verifier_node",
     )
 
-    return {
+    # ── Output Validation at Node Exit ────────────────────────────────
+    result = {
         "verified": verified,
         "verification_notes": notes,
         "verification_reports": existing_reports,
         "messages": [AIMessage(content=f"Verification: {'PASS' if verified else 'FAIL'} — {notes}")],
         "status": "verification_complete",
     }
+    return await _validate_node_output("verifier_node", task_id, result, notes)
 
 
 async def approval_node(state: AgentState) -> Dict[str, Any]:
@@ -1209,12 +1248,13 @@ async def approval_node(state: AgentState) -> Dict[str, Any]:
     if mode.value == "full_trust":
         logger.info(f"[approval_node] Full-trust mode active for task {task_id}. Auto-approving.")
         approval_store.log_auto_approval(task_id, "final_verification", {}, "full_trust_verification")
-        return {
+        result = {
             "approved": True,
             "approval_reason": "Auto-approved: full-trust session mode",
             "messages": [AIMessage(content="Auto-approved: full-trust session mode")],
             "status": "approved",
         }
+        return await _validate_node_output("approval_node", task_id, result, "Auto-approved: full-trust session mode")
 
     # LangGraph interrupt pauses the graph and stores the checkpoint
     # The value returned here is what gets passed when the graph is resumed
@@ -1237,12 +1277,13 @@ async def approval_node(state: AgentState) -> Dict[str, Any]:
         source="approval_node",
     )
 
-    return {
+    result = {
         "approved": approved,
         "approval_reason": reason,
         "messages": [AIMessage(content=f"Approval {'granted' if approved else 'denied'}: {reason}")],
         "status": "approved" if approved else "rejected",
     }
+    return await _validate_node_output("approval_node", task_id, result, f"Approval {'granted' if approved else 'denied'}: {reason}")
 
 
 async def summarizer_node(state: AgentState) -> Dict[str, Any]:
@@ -1298,7 +1339,8 @@ Provide a brief summary (2-4 sentences) of what was accomplished and any importa
         source="summarizer_node",
     )
 
-    return {
+    # ── Output Validation at Node Exit ────────────────────────────────
+    result = {
         "result": {
             "query": query,
             "steps_executed": len(steps),
@@ -1309,3 +1351,4 @@ Provide a brief summary (2-4 sentences) of what was accomplished and any importa
         "messages": [AIMessage(content=f"Task complete. Summary:\n{summary}")],
         "status": "completed",
     }
+    return await _validate_node_output("summarizer_node", task_id, result, summary)
