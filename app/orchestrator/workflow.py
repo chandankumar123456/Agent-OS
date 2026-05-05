@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 import asyncio
 import ast
-from .errors import WorkflowPausedForApproval
+from .errors import WorkflowPausedForApproval, UnrecoverableError, ErrorCode, ErrorType
 
 
 NodeRunner = Callable[["WorkflowNode", Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -73,7 +73,11 @@ class WorkflowEngine:
 
     def load_template(self, template_id: str) -> Dict[str, Any]:
         if template_id not in WORKFLOW_TEMPLATES:
-            raise ValueError(f"Unknown template: {template_id}")
+            raise UnrecoverableError(
+                f"Unknown template: {template_id}",
+                error_type=ErrorType.VALIDATION_ERROR,
+                code=ErrorCode.WORKFLOW_NOT_FOUND
+            )
         return WORKFLOW_TEMPLATES[template_id]
 
     def load_workflow(self, spec: Dict[str, Any]) -> List[WorkflowNode]:
@@ -99,14 +103,22 @@ class WorkflowEngine:
         for node in nodes:
             missing = [dep for dep in node.depends_on if dep not in node_ids]
             if missing:
-                raise ValueError(f"invalid dependency: {node.id} depends on missing nodes {missing}")
+                raise UnrecoverableError(
+                    f"invalid dependency: {node.id} depends on missing nodes {missing}",
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    code=ErrorCode.INVALID_DEPENDENCY
+                )
 
         visiting: set[str] = set()
         visited: set[str] = set()
 
         def visit(node_id: str) -> None:
             if node_id in visiting:
-                raise ValueError("workflow cycle detected")
+                raise UnrecoverableError(
+                    "workflow cycle detected",
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    code=ErrorCode.INVALID_DEPENDENCY
+                )
             if node_id in visited:
                 return
             visiting.add(node_id)
@@ -281,7 +293,11 @@ class WorkflowEngine:
             ]
 
             if not ready:
-                raise RuntimeError("Circular or unsatisfied workflow dependencies")
+                raise UnrecoverableError(
+                    "Circular or unsatisfied workflow dependencies",
+                    error_type=ErrorType.EXECUTION_ERROR,
+                    code=ErrorCode.INVALID_DEPENDENCY
+                )
 
             runnable: List[WorkflowNode] = []
             for node in ready:
