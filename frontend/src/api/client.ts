@@ -32,6 +32,7 @@ export interface Task {
   workflow_state: WorkflowState;
   error: { message: string } | null;
   created_at: string | null;
+  query?: string;
 }
 
 export interface TaskTraceSpan {
@@ -212,9 +213,14 @@ export interface ChatMessage {
 
 class ApiClient {
   private baseUrl: string;
+  private lastRateLimit: { limit: number; remaining: number } | null = null;
 
   constructor(baseUrl: string = API_BASE_URL) {
     this.baseUrl = baseUrl;
+  }
+
+  getLastRateLimit(): { limit: number; remaining: number } | null {
+    return this.lastRateLimit;
   }
 
   private getAuthHeaders(): HeadersInit {
@@ -249,6 +255,16 @@ class ApiClient {
             ...options.headers,
           },
         });
+
+        // Extract rate limit headers before consuming body
+        const rateLimitHeader = response.headers.get('X-RateLimit-Limit');
+        const rateLimitRemainingHeader = response.headers.get('X-RateLimit-Remaining');
+        if (rateLimitHeader && rateLimitRemainingHeader) {
+          this.lastRateLimit = {
+            limit: parseInt(rateLimitHeader, 10),
+            remaining: parseInt(rateLimitRemainingHeader, 10),
+          };
+        }
 
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: 'Request failed' }));
