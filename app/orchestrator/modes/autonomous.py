@@ -2,6 +2,7 @@ from typing import Dict, Any
 from uuid import UUID
 from ...agents.base import AgentOutput, AgentStatus, AgentInput, AgentRole
 from ...agents.types import TaskStatus
+from ..errors import ErrorType, ErrorCode, UnrecoverableError
 from ...logs.logger import logger
 from ...logs.tracing import trace_manager
 from ...memory.long_term import task_repo
@@ -53,7 +54,11 @@ class AutonomousMode(ModeStrategy):
             )
             planner_worker = runtime.get("core_planner")
             if not planner_worker:
-                raise RuntimeError("core_planner not available in runtime")
+                raise UnrecoverableError(
+                    "core_planner not available in runtime",
+                    ErrorType.SYSTEM_ERROR,
+                    ErrorCode.INTERNAL_ERROR
+                )
             plan_result = await orchestrator._execute_with_retry(planner_worker.agent_instance, plan_input, role="planner")
 
             trace_manager.end_span(plan_span, "success" if plan_result.status == AgentStatus.SUCCESS else "failure")
@@ -88,7 +93,11 @@ class AutonomousMode(ModeStrategy):
             )
             executor_worker = runtime.get("core_executor")
             if not executor_worker:
-                raise RuntimeError("core_executor not available in runtime")
+                raise UnrecoverableError(
+                    "core_executor not available in runtime",
+                    ErrorType.SYSTEM_ERROR,
+                    ErrorCode.INTERNAL_ERROR
+                )
             exec_result = await orchestrator._execute_with_retry(executor_worker.agent_instance, exec_input, role="executor")
 
             trace_manager.end_span(exec_span, "success" if exec_result.status == AgentStatus.SUCCESS else "failure")
@@ -130,7 +139,11 @@ class AutonomousMode(ModeStrategy):
         )
         verifier_worker = runtime.get("core_verifier")
         if not verifier_worker:
-            raise RuntimeError("core_verifier not available in runtime")
+            raise UnrecoverableError(
+                "core_verifier not available in runtime",
+                ErrorType.SYSTEM_ERROR,
+                ErrorCode.INTERNAL_ERROR
+            )
         verify_result = await orchestrator._execute_with_retry(verifier_worker.agent_instance, verify_input, role="verifier")
 
         trace_manager.end_span(verify_span, "success" if verify_result.status == AgentStatus.SUCCESS else "failure")
