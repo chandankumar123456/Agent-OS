@@ -236,3 +236,8 @@ DESKTOP_AUTOMATION_RESEARCH.md
 hybrid-perception-research-report.md
 production-automation-failure-report.md
 .opencode/
+.agents/
+.claude/
+thoughts/
+.worktrees/
+skills-lock.json
