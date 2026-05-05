@@ -89,10 +89,14 @@ class ToolRegistry:
         self.tools: Dict[str, RegisteredTool] = {}
         self._discovery_lock = asyncio.Lock()
         self._register_default_tools()
+        self._register_filesystem_tools()
+        self._register_shell_tools()
+        self._register_cloud_api_tools()
         self._register_browser_env_tools()
         self._register_desktop_env_tools()
         self._register_document_tools()
         self._register_code_tools()
+        self._register_communication_tools()
         self._initialized = True
 
     def _register_default_tools(self):
@@ -103,6 +107,164 @@ class ToolRegistry:
         # Placeholders with schemas are registered in _register_document_tools()
         # so the grounding layer sees them before MCP discovery completes.
         logger.info("Default tools registered")
+
+    def _register_filesystem_tools(self):
+        """Register filesystem tools as MCP wrappers.
+
+        The actual file system logic lives in the ``filesystem`` MCP stdio server
+        (``app/mcp/servers/filesystem.py``).  These placeholders ensure the tools
+        are visible to the grounding layer and executor even before MCP discovery.
+        """
+        schemas = {
+            "filesystem__read_file": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the file to read"},
+                },
+                "required": ["path"],
+            },
+            "filesystem__write_file": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the file to write"},
+                    "content": {"type": "string", "description": "Content to write"},
+                },
+                "required": ["path", "content"],
+            },
+            "filesystem__list_directory": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Absolute path to the directory"},
+                },
+                "required": ["path"],
+            },
+            "filesystem__search_files": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Directory to search in"},
+                    "pattern": {"type": "string", "description": "Glob pattern to match"},
+                },
+                "required": ["path", "pattern"],
+            },
+        }
+        for name, schema in schemas.items():
+            action = name.split("__")[-1]
+            self.tools[name] = RegisteredTool(
+                name=name,
+                description=f"Filesystem: {action}",
+                type="mcp",
+                tool=MCPWrappedTool(name=name, description=f"Filesystem: {action}", schema=schema),
+                mcp_tool=True,
+            )
+        logger.info("Filesystem tools registered (MCP placeholders)")
+
+    def _register_shell_tools(self):
+        """Register shell tools as MCP wrappers.
+
+        The actual shell logic lives in the ``shell`` MCP stdio server
+        (``app/mcp/servers/shell.py``).  These placeholders ensure the tools
+        are visible to the grounding layer and executor even before MCP discovery.
+        """
+        schemas = {
+            "shell__execute_command": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Shell command to execute"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 60},
+                    "cwd": {"type": "string", "description": "Working directory"},
+                },
+                "required": ["command"],
+            },
+            "shell__run_script": {
+                "type": "object",
+                "properties": {
+                    "script": {"type": "string", "description": "Script content"},
+                    "interpreter": {"type": "string", "description": "Interpreter to use", "default": "bash"},
+                    "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 60},
+                },
+                "required": ["script"],
+            },
+            "shell__get_process_status": {
+                "type": "object",
+                "properties": {
+                    "pid": {"type": "integer", "description": "Process ID"},
+                },
+                "required": ["pid"],
+            },
+        }
+        for name, schema in schemas.items():
+            action = name.split("__")[-1]
+            self.tools[name] = RegisteredTool(
+                name=name,
+                description=f"Shell: {action}",
+                type="mcp",
+                tool=MCPWrappedTool(name=name, description=f"Shell: {action}", schema=schema),
+                mcp_tool=True,
+            )
+        logger.info("Shell tools registered (MCP placeholders)")
+
+    def _register_cloud_api_tools(self):
+        """Register cloud API tools as MCP wrappers.
+
+        The actual web logic lives in the ``cloud_api`` MCP stdio server
+        (``app/mcp/servers/cloud_api.py``).  These placeholders ensure the tools
+        are visible to the grounding layer and executor even before MCP discovery.
+        """
+        schemas = {
+            "cloud_api__search_web": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "max_results": {"type": "integer", "description": "Maximum results", "default": 5},
+                },
+                "required": ["query"],
+            },
+            "cloud_api__http_request": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to request"},
+                    "method": {"type": "string", "description": "HTTP method", "default": "GET"},
+                    "headers": {"type": "object", "description": "Request headers"},
+                    "body": {"type": "string", "description": "Request body"},
+                },
+                "required": ["url"],
+            },
+            "cloud_api__scrape_page": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to scrape"},
+                    "selector": {"type": "string", "description": "CSS selector to extract"},
+                },
+                "required": ["url"],
+            },
+            "cloud_api__send_email": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string", "description": "Recipient email address"},
+                    "subject": {"type": "string", "description": "Email subject"},
+                    "body": {"type": "string", "description": "Email body"},
+                },
+                "required": ["to", "subject", "body"],
+            },
+            "cloud_api__send_message": {
+                "type": "object",
+                "properties": {
+                    "recipient": {"type": "string", "description": "Message recipient"},
+                    "message": {"type": "string", "description": "Message content"},
+                },
+                "required": ["recipient", "message"],
+            },
+        }
+        for name, schema in schemas.items():
+            action = name.split("__")[-1]
+            self.tools[name] = RegisteredTool(
+                name=name,
+                description=f"Cloud API: {action}",
+                type="mcp",
+                tool=MCPWrappedTool(name=name, description=f"Cloud API: {action}", schema=schema),
+                mcp_tool=True,
+            )
+        logger.info("Cloud API tools registered (MCP placeholders)")
 
     def _register_browser_env_tools(self):
         """Register browser tools as MCP wrappers.
@@ -285,6 +447,32 @@ class ToolRegistry:
         )
         logger.info("Code execution tools registered (MCP placeholders)")
 
+    def _register_communication_tools(self):
+        """Register communication tools as MCP wrappers.
+
+        Placeholders for Slack and other communication MCP servers.
+        """
+        schemas = {
+            "slack__send_message": {
+                "type": "object",
+                "properties": {
+                    "channel": {"type": "string", "description": "Slack channel ID or name"},
+                    "message": {"type": "string", "description": "Message text"},
+                },
+                "required": ["channel", "message"],
+            },
+        }
+        for name, schema in schemas.items():
+            action = name.split("__")[-1]
+            self.tools[name] = RegisteredTool(
+                name=name,
+                description=f"Communication: {action}",
+                type="mcp",
+                tool=MCPWrappedTool(name=name, description=f"Communication: {action}", schema=schema),
+                mcp_tool=True,
+            )
+        logger.info("Communication tools registered (MCP placeholders)")
+
     def _register_desktop_env_tools(self):
         from ..environments.desktop_env import desktop_session_manager
 
@@ -444,6 +632,9 @@ class ToolRegistry:
             self.register(DesktopEnvTool(f"desktop_env__{action}", action))
         # Register semantic element-based tools with desktop__ prefix (matching MCP naming)
         for action in ["get_ui_tree", "click_element", "type_element", "focus_and_interact"]:
+            self.register(DesktopEnvTool(f"desktop__{action}", action))
+        # Register desktop__ aliases for grounding layer compatibility
+        for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard"]:
             self.register(DesktopEnvTool(f"desktop__{action}", action))
         logger.info("Desktop environment tools registered")
 
