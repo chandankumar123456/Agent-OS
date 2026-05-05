@@ -1,8 +1,7 @@
-import React, { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Play, 
-  Square, 
   Activity, 
   Terminal, 
   Zap, 
@@ -10,7 +9,8 @@ import {
   AlertCircle, 
   ChevronRight,
   Loader2,
-  Trash2
+  Trash2,
+  Shield
 } from 'lucide-react';
 import { apiClient, type Task, type DashboardMetrics } from '../api/client';
 import { buttonTap, cardInteractions, staggerContainer, staggerItem } from '../lib/animations';
@@ -27,10 +27,13 @@ const Dashboard = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLoadingTasks, setIsLoadingTasks] = useState(true);
   const [loadError, setLoadError] = useState('');
+  const [rateLimit, setRateLimit] = useState<{ limit: number; remaining: number } | null>(null);
   
-  // Real-time status via WebSocket or polling
-  const [wsStatus, setWsStatus] = useState<'connecting' | 'open' | 'closed'>('closed');
-  const [wsTaskId, setWsTaskId] = useState<string | null>(null);
+  // Real-time status via WebSocket or polling (reserved for future use)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_wsStatus, _setWsStatus] = useState<'connecting' | 'open' | 'closed'>('closed');
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_wsTaskId, _setWsTaskId] = useState<string | null>(null);
 
   const initialLoadRef = useRef(false);
 
@@ -57,6 +60,8 @@ const Dashboard = () => {
     setLoadError('');
     try {
       await Promise.all([loadTasks(), loadMetrics()]);
+      const rl = apiClient.getLastRateLimit();
+      if (rl) setRateLimit(rl);
     } catch (err) {
       setLoadError('Failed to synchronize with kernel.');
     } finally {
@@ -142,6 +147,17 @@ const Dashboard = () => {
           <h1 className="text-4xl font-pixel uppercase tracking-tight mb-2">Command Center</h1>
           <p className="text-xl font-retro uppercase text-secondaryText opacity-60">Primary interface for neural orchestration and task dispatch.</p>
         </div>
+        {rateLimit && (
+          <div className="pixel-card-small px-4 py-2 border-4 border-outline bg-white flex items-center gap-3">
+            <Shield className="w-5 h-5 text-secondary" />
+            <div className="flex flex-col">
+              <span className="text-[8px] font-pixel uppercase text-secondaryText">Rate_Limit</span>
+              <span className="text-lg font-retro text-black uppercase leading-none">
+                {rateLimit.remaining} <span className="text-secondaryText">/ {rateLimit.limit}</span>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* KPI Grid */}
@@ -301,7 +317,7 @@ const Dashboard = () => {
                         <StatusBadge status={task.status} showIcon={false} />
                       </div>
                       <div className="flex justify-between items-center mt-4">
-                        <span className="text-[10px] font-retro text-secondaryText uppercase">{new Date(task.created_at).toLocaleTimeString()}</span>
+                        <span className="text-[10px] font-retro text-secondaryText uppercase">{task.created_at ? new Date(task.created_at).toLocaleTimeString() : '—'}</span>
                         <div className="flex gap-2">
                            <motion.button 
                             onClick={(e) => { e.stopPropagation(); handleDeleteTask(task.task_id); }}
