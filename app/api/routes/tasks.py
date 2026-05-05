@@ -8,7 +8,7 @@ from ...agents.types import TaskStatus, StepStatus
 from ...logs.logger import logger
 from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo
 from ...config.settings import settings
-from ...orchestrator.errors import ErrorCode
+from ...orchestrator.errors import ErrorCode, UnrecoverableError
 from ...orchestrator.event_bus import event_bus, Event
 from ..deps import OrchestratorDep, get_current_user
 
@@ -39,6 +39,8 @@ class TaskStatusResponse(BaseModel):
     steps: Optional[List[Dict[str, Any]]] = None
     workflow_state: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
+    retry_info: Optional[Dict[str, Any]] = None
+    fallback_chain: Optional[List[str]] = None
     created_at: Optional[datetime] = None
 
 
@@ -223,16 +225,43 @@ async def create_task(
                         f"task:{task_id}",
                         Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
                     )
+            except UnrecoverableError as e:
+                logger.error(f"Task {task_id} blocked by guardrails: {e.message}", task_id=str(task_id))
+                await task_repo.update(
+                    str(task_id),
+                    status=TaskStatus.FAILED.value,
+                    error={"code": e.code.value, "message": e.message, "context": e.context}
+                )
+                await event_bus.publish(
+                    f"task:{task_id}",
+                    Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
+                )
             except Exception as e:
-                logger.error(f"Background task execution failed: {e}")
+                logger.error(f"Background task execution failed: {e}", task_id=str(task_id))
                 try:
-                    await task_repo.update(str(task_id), status=TaskStatus.FAILED.value, error=str(e))
+                    error_detail = getattr(e, 'message', str(e))
+                    error_code = getattr(getattr(e, 'code', None), 'value', ErrorCode.EXECUTION_ERROR.value)
+                    error_context = getattr(e, 'context', {})
+                    # Extract retry and fallback info from error context if available
+                    retry_info = error_context.get("retry_info") if isinstance(error_context, dict) else None
+                    fallback = error_context.get("fallback_chain") if isinstance(error_context, dict) else None
+                    result_data = {}
+                    if retry_info:
+                        result_data["retry_info"] = retry_info
+                    if fallback:
+                        result_data["fallback_chain"] = fallback
+                    await task_repo.update(
+                        str(task_id),
+                        status=TaskStatus.FAILED.value,
+                        error={"code": error_code, "message": error_detail, "context": error_context},
+                        result=result_data if result_data else None
+                    )
                     await event_bus.publish(
                         f"task:{task_id}",
                         Event("task.status_changed", {"status": TaskStatus.FAILED.value, "task_id": str(task_id)})
                     )
                 except Exception as db_err:
-                    logger.error(f"Failed to persist background task failure: {db_err}")
+                    logger.error(f"Failed to persist background task failure: {db_err}", task_id=str(task_id))
 
         background_tasks.add_task(_run_task)
         logger.info(f"Started background task {task_id}")
@@ -252,6 +281,12 @@ async def get_task(task_id: UUID, current_user: object = Depends(get_current_use
     _ensure_task_access(db_task, current_user)
     if db_task:
         workflow_state = await _task_scoped_workflow_state(task_id, current_user)
+        # Extract retry and fallback context from task result
+        retry_info = None
+        fallback_chain = None
+        if db_task and db_task.result and isinstance(db_task.result, dict):
+            retry_info = db_task.result.get("retry_info")
+            fallback_chain = db_task.result.get("fallback_chain")
         return TaskStatusResponse(
             task_id=UUID(db_task.id),
             status=_safe_task_status(db_task.status),
@@ -272,6 +307,8 @@ async def get_task(task_id: UUID, current_user: object = Depends(get_current_use
                 ],
             },
             error={"message": db_task.error} if db_task.error else None,
+            retry_info=retry_info,
+            fallback_chain=fallback_chain,
             created_at=db_task.created_at,
         )
 
@@ -302,6 +339,12 @@ async def list_tasks(
 
     for db_task in db_tasks:
         workflow_state = await _task_scoped_workflow_state(UUID(db_task.id), current_user)
+        # Extract retry and fallback context from task result
+        retry_info = None
+        fallback_chain = None
+        if db_task.result and isinstance(db_task.result, dict):
+            retry_info = db_task.result.get("retry_info")
+            fallback_chain = db_task.result.get("fallback_chain")
         all_tasks.append(TaskStatusResponse(
             task_id=UUID(db_task.id),
             status=_safe_task_status(db_task.status),
@@ -322,6 +365,8 @@ async def list_tasks(
                 ],
             },
             error={"message": db_task.error} if db_task.error else None,
+            retry_info=retry_info,
+            fallback_chain=fallback_chain,
             created_at=db_task.created_at
         ))
 
