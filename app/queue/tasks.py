@@ -6,10 +6,15 @@ from ..config.settings import settings
 from ..logs.logger import logger
 from ..agents.types import TaskStatus
 from ..runtime.runtime import AgentRuntime
+from ..orchestrator.errors import ErrorType, ErrorCode, UnrecoverableError, AgentOSError
 
 redis_url = settings.REDIS_URL
 if not redis_url:
-    raise RuntimeError("REDIS_URL is required for Celery")
+    raise UnrecoverableError(
+        "REDIS_URL is required for Celery",
+        ErrorType.SYSTEM_ERROR,
+        ErrorCode.INTERNAL_ERROR
+    )
 
 celery_app = Celery(
     "agent_os",
@@ -159,9 +164,10 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
         runtime = await _ensure_runtime_initialized()
         worker = runtime.get("core_planner")
         if not worker:
-            raise RuntimeError(
-                "Agent core_planner not found in runtime. "
-                "Ensure AgentRuntime.initialize() was called at startup."
+            raise UnrecoverableError(
+                "Agent core_planner not found in runtime. Ensure AgentRuntime.initialize() was called at startup.",
+                ErrorType.SYSTEM_ERROR,
+                ErrorCode.INTERNAL_ERROR
             )
         logger.info("Runtime verified: core_planner available")
 
@@ -205,14 +211,16 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
             return result
         except asyncio.TimeoutError:
             error_msg = f"Task timed out after {task_timeout}s"
-            logger.error(f"[execute_task] {error_msg}")
+            logger.error(error_msg, task_id=task_id)
             await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=error_msg)
             await event_bus.publish(
                 f"task:{task_id}",
                 Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": error_msg, "reason": "timeout"}, source="celery"),
             )
-            raise RuntimeError(error_msg)
+            # Re-raise as UnrecoverableError for consistent handling
+            raise UnrecoverableError(error_msg, ErrorType.SYSTEM_ERROR, ErrorCode.TASK_QUEUE_UNAVAILABLE)
         except Exception as exc:
+            logger.log_error(exc, task_id=task_id)
             await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
             await event_bus.publish(
                 f"task:{task_id}",
