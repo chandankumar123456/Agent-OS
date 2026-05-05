@@ -1,7 +1,8 @@
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, BrainCircuit, BarChart3, Wrench, Settings, LogOut, Terminal, Waypoints, GitBranch, MessageSquare, BookOpen } from 'lucide-react';
+import { LayoutDashboard, BrainCircuit, BarChart3, Wrench, Settings, LogOut, Terminal, Waypoints, GitBranch, MessageSquare, BookOpen, Sun, Moon } from 'lucide-react';
 import { motion, useScroll, useSpring } from 'framer-motion';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../contexts/ThemeContext';
 import { HelpWidget } from './Onboarding/HelpWidget';
 
 import { navItemInteractions, pageTransition } from '../lib/animations';
@@ -9,8 +10,9 @@ import { navItemInteractions, pageTransition } from '../lib/animations';
 const Layout = () => {
  const navigate = useNavigate();
  const location = useLocation();
- const { logout, user } = useAuth();
- const { scrollYProgress } = useScroll();
+  const { logout, user } = useAuth();
+  const { theme, toggleTheme } = useTheme();
+  const { scrollYProgress } = useScroll();
  const scaleX = useSpring(scrollYProgress, { stiffness: 100, damping: 30, restDelta: 0.001 });
 
  const navItems = [
@@ -59,8 +61,16 @@ const Layout = () => {
    </nav>
   </div>
 
-  <div className="px-4">
-   <div className="flex items-center gap-3 px-4 py-3 mb-4 text-sm text-black border-4 border-outline bg-white shadow-pixel">
+   <div className="px-4">
+    <motion.button
+    {...navItemInteractions}
+    onClick={toggleTheme}
+    className="flex items-center gap-3 px-4 py-3 mb-4 w-full text-left text-white hover:text-white hover:bg-white/10 border-4 border-transparent hover:border-outline font-pixel text-[10px] uppercase"
+    >
+    {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+    {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+    </motion.button>
+    <div className="flex items-center gap-3 px-4 py-3 mb-4 text-sm text-black border-4 border-outline bg-white shadow-pixel">
    <div className="w-8 h-8 border-4 border-outline bg-accent-pink flex items-center justify-center text-black font-pixel text-[10px]">
     {user?.email?.charAt(0).toUpperCase() || 'U'}
    </div>
