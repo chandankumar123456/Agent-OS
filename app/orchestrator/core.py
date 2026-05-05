@@ -99,27 +99,46 @@ class Orchestrator:
 
         return context.context
 
-    async def _validate_input(self, query: str, config: Dict[str, Any]) -> bool:
+    async def _validate_input(self, query: str, config: Dict[str, Any], mode: str = "task") -> None:
+        """Validate task input through guardrails. Raises UnrecoverableError on rejection."""
         try:
-            validation_result = await guardrails.validator.validate({"query": query, "config": config})
-            if not validation_result.valid:
-                logger.warning(f"Input validation failed: {validation_result.errors}")
-                return False
-            return True
+            from ..guardrails.validator import InputValidator
+            InputValidator.validate_request(query, config, mode)
+        except UnrecoverableError:
+            raise
         except Exception as e:
-            logger.warning(f"Guardrails validation error: {e}")
-            return False
+            raise UnrecoverableError(
+                f"Guardrails validation error: {e}",
+                error_type=ErrorType.VALIDATION_ERROR,
+                code=ErrorCode.GUARDRAIL_VIOLATION,
+                context={"raw_error": str(e)},
+                http_status=422
+            ) from e
 
-    async def _validate_output(self, output: Dict[str, Any]) -> bool:
+    async def _validate_output(self, output: Dict[str, Any]) -> None:
+        """Validate agent output through guardrails. Raises UnrecoverableError on rejection."""
         try:
             is_valid = await guardrails.verify_output(output)
             if not is_valid:
-                logger.warning("Output validation failed")
-                return False
-            return True
+                logger.warning("Output validation rejected", output_keys=list(output.keys()))
+                raise UnrecoverableError(
+                    "Output validation rejected by guardrails",
+                    error_type=ErrorType.VALIDATION_ERROR,
+                    code=ErrorCode.GUARDRAIL_VIOLATION,
+                    context={"output_keys": list(output.keys())},
+                    http_status=422
+                )
+        except UnrecoverableError:
+            raise
         except Exception as e:
             logger.warning(f"Output guardrails error: {e}")
-            return False
+            raise UnrecoverableError(
+                f"Output guardrails internal error: {e}",
+                error_type=ErrorType.VALIDATION_ERROR,
+                code=ErrorCode.INTERNAL_ERROR,
+                context={"raw_error": str(e)},
+                http_status=500
+            ) from e
 
     async def _execute_with_retry(self, agent, input_data: AgentInput, role: Optional[str] = None) -> AgentOutput:
         async def _execute(target_agent):
@@ -225,6 +244,20 @@ class Orchestrator:
             user_id = "system"
         config = config or {}
         mode = config.get("mode", "task")
+
+        # ── Input Guardrails Gate ──────────────────────────────────────
+        try:
+            await self._validate_input(query, config, mode)
+        except UnrecoverableError as guard_err:
+            logger.warning(f"Task rejected by guardrails: {guard_err.message}", task_id=str(task_id))
+            return AgentOutput(
+                task_id=task_id,
+                step_id=uuid4(),
+                status=AgentStatus.FAILURE,
+                error_type=guard_err.error_type.value,
+                error_message=guard_err.message,
+                recoverable=False,
+            )
 
         # Try LangGraph execution first
         try:
