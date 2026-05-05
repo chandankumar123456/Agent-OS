@@ -2,6 +2,7 @@ import asyncio
 import os
 from typing import Dict, Any, List, Optional
 from ..logs.logger import logger
+from ..orchestrator.errors import AgentOSError, UnrecoverableError, ErrorCode, ErrorType
 from .worker import AgentWorker
 from .factory import AgentFactory
 from .pool import AgentPool
@@ -27,6 +28,10 @@ class AgentRuntime:
             cls._instance._init_lock = asyncio.Lock()
             cls._instance._register_locks: Dict[str, asyncio.Lock] = {}
             cls._instance._init_mutex_value = None
+            from ..orchestrator.errors import UnrecoverableError, ErrorCode, ErrorType
+            cls._UnrecoverableError = UnrecoverableError
+            cls._ErrorCode = ErrorCode
+            cls._ErrorType = ErrorType
         return cls._instance
 
     async def initialize(self):
@@ -237,7 +242,11 @@ class AgentRuntime:
         from ..memory.long_term import agent_repo
         versioned = await agent_repo.get_version(agent_key, version)
         if not versioned:
-            raise ValueError(f"Version {version} not found for agent {agent_key}")
+            raise UnrecoverableError(
+                f"Version {version} not found for agent {agent_key}",
+                error_type=ErrorType.VALIDATION_ERROR,
+                code=ErrorCode.AGENT_NOT_FOUND
+            )
         config = {
             "name": versioned.name,
             "role": versioned.role,
