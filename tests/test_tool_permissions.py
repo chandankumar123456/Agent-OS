@@ -79,11 +79,11 @@ class TestRBACIntegration:
         assert result.allowed is True
 
     @pytest.mark.asyncio
-    async def test_admin_can_use_all_tools(self, perms):
+    async def test_system_can_use_all_tools(self, perms):
         result = await perms.check_permission(
             "shell__execute_command",
             agent_id="agent-1",
-            agent_role=AgentRole.ADMIN,
+            agent_role=AgentRole.SYSTEM,
         )
         assert result.allowed is True
 
@@ -297,16 +297,17 @@ class TestGetRolePermissions:
 
     def test_planner_permissions(self, perms):
         prefixes = perms.get_role_permissions(AgentRole.PLANNER)
-        assert "filesystem" in prefixes
-        assert "cloud_api" in prefixes
-        assert "shell" not in prefixes
+        assert "filesystem__read" in prefixes
+        assert "cloud_api__search" in prefixes
+        assert "shell__" not in prefixes
 
     def test_executor_permissions(self, perms):
         prefixes = perms.get_role_permissions(AgentRole.EXECUTOR)
-        assert "shell" in prefixes
-        assert "filesystem" in prefixes
+        assert "shell__" in prefixes
+        assert "filesystem__" in prefixes
 
-    def test_unknown_role(self, perms):
-        # ADMIN should have all permissions
-        prefixes = perms.get_role_permissions(AgentRole.ADMIN)
-        assert len(prefixes) > 5  # Admin has broad access
+    def test_system_role_permissions(self, perms):
+        # SYSTEM should have wildcard access
+        prefixes = perms.get_role_permissions(AgentRole.SYSTEM)
+        assert "*" in prefixes
+        assert len(prefixes) == 1

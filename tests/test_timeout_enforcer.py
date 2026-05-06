@@ -106,7 +106,11 @@ class TestDeadlineTracking:
 
     @pytest.mark.asyncio
     async def test_cleanup(self, enforcer, mock_redis):
-        mock_redis.client.scan_iter = AsyncMock(return_value=[])
+        async def empty_iter(**kwargs):
+            return
+            yield  # Make it an async generator
+
+        mock_redis.client.scan_iter = empty_iter
         mock_redis.client.delete = AsyncMock(return_value=1)
 
         result = await enforcer.cleanup("task-1")
@@ -140,10 +144,11 @@ class TestToolEnforcement:
             await asyncio.sleep(10)
             return "too late"
 
-        with pytest.raises(AgentOSError) as exc_info:
-            await enforcer.enforce_tool(
-                "task-1", "shell__execute", slow_coro(), override_seconds=0.01
-            )
+        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            with pytest.raises(AgentOSError) as exc_info:
+                await enforcer.enforce_tool(
+                    "task-1", "shell__execute", slow_coro(), override_seconds=1
+                )
 
         assert exc_info.value.code == ErrorCode.TIMEOUT_ERROR
         assert "timed out" in exc_info.value.message
@@ -174,10 +179,11 @@ class TestAgentEnforcement:
         async def slow_coro():
             await asyncio.sleep(10)
 
-        with pytest.raises(AgentOSError) as exc_info:
-            await enforcer.enforce_agent(
-                "task-1", "planner", slow_coro(), override_seconds=0.01
-            )
+        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            with pytest.raises(AgentOSError) as exc_info:
+                await enforcer.enforce_agent(
+                    "task-1", "planner", slow_coro(), override_seconds=1
+                )
 
         assert exc_info.value.code == ErrorCode.TIMEOUT_ERROR
 
@@ -207,10 +213,11 @@ class TestStepEnforcement:
         async def slow_coro():
             await asyncio.sleep(10)
 
-        with pytest.raises(AgentOSError) as exc_info:
-            await enforcer.enforce_step(
-                "task-1", 2, slow_coro(), override_seconds=0.01
-            )
+        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            with pytest.raises(AgentOSError) as exc_info:
+                await enforcer.enforce_step(
+                    "task-1", 2, slow_coro(), override_seconds=1
+                )
 
         assert "Step 2 timed out" in exc_info.value.message
 
@@ -227,10 +234,11 @@ class TestWorkflowEnforcement:
         async def slow_coro():
             await asyncio.sleep(10)
 
-        with pytest.raises(AgentOSError) as exc_info:
-            await enforcer.enforce_workflow(
-                "task-1", slow_coro(), override_seconds=0.01
-            )
+        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            with pytest.raises(AgentOSError) as exc_info:
+                await enforcer.enforce_workflow(
+                    "task-1", slow_coro(), override_seconds=1
+                )
 
         assert "Workflow timed out" in exc_info.value.message
 

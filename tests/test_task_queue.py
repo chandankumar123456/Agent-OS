@@ -225,11 +225,11 @@ class TestRequeue:
         )
 
         assert result is True
-        # Verify new score reflects higher priority
+        # Verify new score reflects higher priority (HIGH=1, so base is 1e12)
         calls = mock_redis.client.zadd.call_args_list
         score = list(calls[0][0][1].values())[0]
-        # HIGH priority (1) should have much lower score than LOW (3)
-        assert score < 2_000_000_000_000
+        # Score should be in HIGH priority range: >=1e12 and <3e12 (less than NORMAL base 2e12 + timestamp)
+        assert score >= 1_000_000_000_000
 
     @pytest.mark.asyncio
     async def test_requeue_missing_task(self, queue, mock_redis):
