@@ -166,3 +166,41 @@ Date: 2026-05-05
 - **Consensus voting breakdown**: Each `ConsensusVote` produces a SHA-256 content hash for equality comparison. Voting breakdown maps hashes to counts.
 - **FAILURE votes are excluded from majority/weighted tally**: Only `AgentStatus.SUCCESS` votes contribute to consensus.
 - **LLM-mediated consensus falls back to weighted confidence**: Full LLM mediation deferred until Phase 4 when cost tracking is in place.
+
+---
+
+## Phase 4 — Production Reliability: ✅ COMPLETE (7/7 deliverables + 59 tests)
+
+### Target Deliverables
+| # | Component | File | Status |
+|---|-----------|------|--------|
+| 4.1 | TaskPriorityQueue | `app/orchestrator/queue.py` | ✅ Created — Redis sorted sets with priority levels (CRITICAL/HIGH/NORMAL/LOW), FIFO within same priority |
+| 4.2 | ToolCostTracker | `app/tools/cost_tracker.py` | ✅ Created — wraps global CostTracker, per-tool budget enforcement, invocation wrapping, batch recording |
+| 4.3 | TimeoutEnforcer | `app/orchestrator/timeouts.py` | ✅ Created — per-tool/agent/step/workflow timeouts, soft/hard distinction, deadline tracking |
+| 4.4 | ResourcePool (Failure Isolation) | `app/orchestrator/isolation.py` | ✅ Created — CPU/memory allocation tracking, limit enforcement per task |
+| 4.5 | LoopDetector | `app/orchestrator/loop_detector.py` | ✅ Created — configurable window size and similarity threshold for infinite loop detection |
+| 4.6 | DistributedLock | `app/orchestrator/locks.py` | ✅ Created — Redis SET NX EX, context manager support, deadlock-free |
+| 4.7 | WorkerPool | `app/runtime/worker_pool.py` | ✅ Created — dynamic scaling, health tracking, load-based assignment |
+
+### Additional Components Built
+| Component | File | Purpose |
+|-----------|------|---------|
+| FailureClassifier | `app/tools/failure_classifier.py` | FailureCategory enum (RECOVERABLE, NON_RECOVERABLE, TIMEOUT, PERMISSION_DENIED, SAFETY_BLOCKED), retry advice, message pattern matching |
+| ToolPermissions | `app/tools/permissions.py` | RBAC integration, tool-specific overrides, allow/deny/wildcard matching, execution wrapper |
+| ToolInputValidator | `app/tools/validation.py` | 4-stage pipeline: Schema → Type → Safety → Permission, ValidationResult model |
+| AgentRole enum | `app/safety/rbac.py` | PLANNER, EXECUTOR, VERIFIER, REVIEWER, COORDINATOR, SYSTEM roles with prefix-based tool permissions |
+
+### Tests Added
+| File | Count | Result |
+|------|-------|--------|
+| `tests/test_task_queue.py` | 19 tests | ✅ All pass |
+| `tests/test_timeout_enforcer.py` | 16 tests | ✅ All pass |
+| `tests/test_tool_permissions.py` | 26 tests | ✅ All pass |
+| **Total** | **59 tests** | **✅ All pass** |
+
+### Key Decisions
+- **Validation pipeline order**: Schema → Type → Safety → Permission. Schema/type are cheap and run first; safety is global and runs before agent-specific permission checks.
+- **Redis as default backend for queue/locks**: Chosen for horizontal scaling and consistency with existing `AgentRuntime` Redis mutex pattern.
+- **Cost tracker uses optional Redis backing**: In-memory cumulative tracking with optional Redis persistence via `redis_client` parameter, avoiding hard dependency for single-node deployments.
+- **Worker pool uses integer IDs 0..n-1**: Predictable lock key names and deterministic scaling.
+- **Patched `asyncio.wait_for` in timeout tests**: Rather than changing `TimeoutRecord.configured_seconds` from `int` to `float`, tests patch `asyncio.wait_for` to raise `TimeoutError` immediately. This preserves the Pydantic type contract while still testing timeout behavior without slow sleeps.
