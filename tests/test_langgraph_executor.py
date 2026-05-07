@@ -39,21 +39,29 @@ async def test_executor_node_invokes_tool_when_llm_requests_it(mock_obs_bus):
         mock_llm.complete_json = AsyncMock(side_effect=mock_llm_responses)
         mock_get_llm.return_value = mock_llm
 
-        with patch("app.langgraph.nodes.tool_registry") as mock_registry:
-            mock_registry.discover_mcp_tools = AsyncMock()
-            mock_registry.list_tools = MagicMock(return_value=[
+        with patch("app.langgraph.nodes.tool_grounding_layer") as mock_grounding:
+            mock_grounding.filter_tools_for_step = MagicMock(return_value=[
                 {
                     "name": "filesystem__write_file",
                     "description": "Write a file",
                     "parameters": {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
                 }
             ])
-            mock_registry.get = MagicMock(return_value=AsyncMock())
-            mock_tool_output = AsyncMock()
-            mock_tool_output.success = True
-            mock_tool_output.result = {"output": "File written: /tmp/test.txt"}
-            mock_tool_output.error = None
-            mock_registry.execute = AsyncMock(return_value=mock_tool_output)
+            with patch("app.langgraph.nodes.tool_registry") as mock_registry:
+                mock_registry.discover_mcp_tools = AsyncMock()
+                mock_registry.list_tools = MagicMock(return_value=[
+                    {
+                        "name": "filesystem__write_file",
+                        "description": "Write a file",
+                        "parameters": {"properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]},
+                    }
+                ])
+                mock_registry.get = MagicMock(return_value=AsyncMock())
+                mock_tool_output = AsyncMock()
+                mock_tool_output.success = True
+                mock_tool_output.result = {"output": "File written: /tmp/test.txt"}
+                mock_tool_output.error = None
+                mock_registry.execute = AsyncMock(return_value=mock_tool_output)
 
             with patch("app.langgraph.nodes.recovery_engine") as mock_recovery:
                 mock_decision = MagicMock()
