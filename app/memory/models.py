@@ -463,3 +463,228 @@ class DeploymentModel(Base):
     status = Column(String(20), default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# ============================================================================
+# SECTION 5: DATA & STATE DESIGN - Extended Models
+# ============================================================================
+
+class CheckpointMetadataModel(Base):
+    """Checkpoint metadata for chain traversal and replay.
+    
+    Extends the base CheckpointModel with rich metadata about
+    which node, step, and decision context was active.
+    """
+    __tablename__ = "checkpoint_metadata"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    checkpoint_id = Column(String(100), nullable=False, index=True)
+    thread_id = Column(String(100), nullable=False, index=True)
+    task_id = Column(String(36), nullable=False, index=True)
+    
+    # Node and step information
+    node_name = Column(String(100), nullable=False)  # planner_node, executor_node, etc.
+    step_index = Column(Integer, nullable=True)  # Current step in plan
+    step_type = Column(String(50), nullable=True)  # Type of step being executed
+    
+    # Decision context
+    decision_context = Column(JSON, nullable=True)  # Why this checkpoint was saved
+    decision_reason = Column(Text, nullable=True)  # Human-readable reason
+    
+    # Chain navigation
+    parent_checkpoint_id = Column(String(100), nullable=True, index=True)
+    child_checkpoint_ids = Column(JSON, default=list)  # List of child checkpoint IDs
+    
+    # Execution context
+    agent_id = Column(String(36), nullable=True)  # Which agent was active
+    tool_calls = Column(JSON, default=list)  # Tool calls made at this point
+    recovery_attempts = Column(Integer, default=0)  # Number of recovery attempts
+    
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    metadata_json = Column("metadata", JSON, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("checkpoint_id", "thread_id", name="uq_checkpoint_metadata"),
+    )
+
+
+class UserMemoryProfileModel(Base):
+    """User-level memory profile for cross-task knowledge retrieval.
+    
+    Stores learned patterns, preferences, and historical context
+    that persists across multiple tasks for a user.
+    """
+    __tablename__ = "user_memory_profiles"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    user_id = Column(String(36), nullable=False, unique=True, index=True)
+    
+    # Profile content
+    learned_patterns = Column(JSON, default=list)  # List of learned patterns
+    preferences = Column(JSON, default=dict)  # User preferences
+    common_tasks = Column(JSON, default=list)  # Frequently executed task types
+    recent_context = Column(JSON, default=list)  # Recent task summaries
+    
+    # Cross-task knowledge
+    knowledge_entries = Column(JSON, default=list)  # Key-value knowledge pairs
+    error_patterns = Column(JSON, default=list)  # Known error patterns and solutions
+    success_strategies = Column(JSON, default=list)  # What worked well
+    
+    # Pruning and management
+    last_pruned_at = Column(DateTime, nullable=True)
+    entry_count = Column(Integer, default=0)
+    profile_size_bytes = Column(Integer, default=0)
+    
+    # Metadata
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ArtifactModel(Base):
+    """Artifact storage metadata.
+    
+    Tracks artifacts produced by agents during task execution.
+    Actual content stored in filesystem/S3; this is the metadata.
+    """
+    __tablename__ = "artifacts"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    artifact_id = Column(String(100), unique=True, nullable=False, index=True)
+    
+    # Ownership
+    task_id = Column(String(36), nullable=False, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    
+    # Artifact details
+    artifact_type = Column(String(50), nullable=False)  # file, image, document, etc.
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    mime_type = Column(String(100), nullable=True)
+    
+    # Storage
+    storage_backend = Column(String(50), default="filesystem")  # filesystem, s3, etc.
+    uri = Column(String(500), nullable=False)  # Full path/URL to artifact
+    size_bytes = Column(Integer, nullable=True)
+    checksum = Column(String(64), nullable=True)  # SHA-256 checksum
+    
+    # Metadata
+    tags = Column(JSON, default=list)
+    metadata_json = Column("metadata", JSON, nullable=True)  # Custom metadata
+    
+    # Lifecycle
+    retention_days = Column(Integer, default=90)
+    archived_at = Column(DateTime, nullable=True)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AuditModel(Base):
+    """Complete audit trail for compliance.
+    
+    Immutable record of all significant actions in the system.
+    """
+    __tablename__ = "audit_log"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    audit_id = Column(String(100), unique=True, nullable=False, index=True)
+    
+    # Event details
+    event_type = Column(String(50), nullable=False, index=True)  # task_start, tool_call, approval, etc.
+    event_action = Column(String(100), nullable=False)  # Specific action taken
+    
+    # Actors
+    user_id = Column(String(36), nullable=True, index=True)  # Who triggered it
+    task_id = Column(String(36), nullable=True, index=True)
+    agent_id = Column(String(36), nullable=True, index=True)
+    session_id = Column(String(100), nullable=True, index=True)
+    
+    # Context
+    resource_type = Column(String(50), nullable=True)  # task, tool, agent, etc.
+    resource_id = Column(String(100), nullable=True)
+    
+    # Data (immutable record)
+    request_data = Column(JSON, nullable=True)  # Input/request
+    response_data = Column(JSON, nullable=True)  # Output/response
+    
+    # Outcome
+    status = Column(String(20), nullable=False)  # success, failure, denied
+    error_message = Column(Text, nullable=True)
+    
+    # Security
+    ip_address = Column(String(45), nullable=True)  # IPv6 compatible
+    user_agent = Column(String(500), nullable=True)
+    
+    # Timestamp (separate from created_at for potential clock skew handling)
+    event_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Tamper-evident (optional - for high-security deployments)
+    previous_audit_hash = Column(String(64), nullable=True)  # Chain of custody
+    audit_hash = Column(String(64), nullable=True)  # Hash of this record
+
+
+class AgentStateTransitionModel(Base):
+    """Agent lifecycle state transitions.
+    
+    Tracks agents through their lifecycle: CREATED → REGISTERED → ACTIVE → EXECUTING → IDLE → DECOMMISSIONED
+    """
+    __tablename__ = "agent_state_transitions"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    agent_id = Column(String(36), nullable=False, index=True)
+    
+    # State transition
+    from_state = Column(String(50), nullable=False)
+    to_state = Column(String(50), nullable=False)
+    
+    # Context
+    triggered_by = Column(String(100), nullable=False)  # Component that triggered
+    reason = Column(Text, nullable=True)  # Human-readable reason
+    context = Column(JSON, nullable=True)  # Additional context
+    
+    # Timestamps
+    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class TaskQueueEntryModel(Base):
+    """Task queue entries for priority-based scheduling.
+    
+    Tasks waiting to be executed with priority and scheduling info.
+    """
+    __tablename__ = "task_queue"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    task_id = Column(String(36), nullable=False, unique=True, index=True)
+    user_id = Column(String(36), nullable=False, index=True)
+    
+    # Queue position
+    priority = Column(String(20), default="normal")  # critical, high, normal, low
+    priority_score = Column(Float, default=0.0)  # Computed priority score
+    queue_position = Column(Integer, nullable=True)
+    
+    # Scheduling
+    scheduled_at = Column(DateTime, nullable=True)  # When to execute (future scheduling)
+    enqueue_time = Column(DateTime, default=datetime.utcnow)
+    expected_start_time = Column(DateTime, nullable=True)
+    
+    # Status
+    status = Column(String(20), default="queued")  # queued, processing, completed, failed
+    worker_id = Column(String(100), nullable=True)  # Assigned worker
+    
+    # Execution constraints
+    required_capabilities = Column(JSON, default=list)
+    excluded_workers = Column(JSON, default=list)
+    
+    # Timeouts
+    timeout_seconds = Column(Integer, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+    
+    # Metadata
+    retry_count = Column(Integer, default=0)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
