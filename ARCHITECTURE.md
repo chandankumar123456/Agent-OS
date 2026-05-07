@@ -235,3 +235,53 @@ python validate_fixes.py                     # Validation suite
 | GET | `/health` | Public | Health check |
 | GET | `/health/ready` | Public | Readiness probe |
 | GET | `/health/metrics` | Public | Prometheus metrics |
+
+---
+
+## Execution Flow Design
+
+Complete task lifecycle with state transitions, triggers, data requirements, and failure modes.
+
+### State Machine
+
+```
+PENDING → PLANNING → EXECUTING → VERIFYING → AWAITING_APPROVAL → COMPLETED
+   ↓          ↓           ↓           ↓              ↓
+FAILED ←─── FAILED ←─── FAILED ←─── FAILED ←───── REJECTED
+```
+
+### State Transitions
+
+| From | To | Trigger | Required Data | Failure Mode |
+|------|-----|---------|---------------|--------------|
+| PENDING | PLANNING | Orchestrator accepts task | task_id, user_id, query, config, trace_id | Validation failure → FAILED |
+| PLANNING | EXECUTING | Planner generates plan | plan (list of steps), current_step_index=0 | Planning timeout → FAILED |
+| EXECUTING | VERIFYING | All steps executed | steps (list), step_results (dict), tool_calls (list) | Step failure → retry → FAILED after max retries |
+| VERIFYING | AWAITING_APPROVAL | Verification passes + approval required | verified=true, verification_notes, approval_mode | Verification fails → replan or FAILED |
+| VERIFYING | COMPLETED | Verification passes + no approval required | verified=true, verification_notes, result | Verification fails → replan or FAILED |
+| AWAITING_APPROVAL | COMPLETED | User approves | approved=true, approval_reason | User rejects → REJECTED |
+| AWAITING_APPROVAL | REJECTED | User rejects | approved=false, approval_reason | Timeout → FAILED |
+| Any | FAILED | Unrecoverable error | error (str), error_type, recovery_context | N/A |
+
+### Existing Code Paths
+
+**Action V1 Fast Path:**
+- Entry: `app/orchestrator/core.py` → `app/action_v1/runner.py`
+- Flow: Selector → DeterministicExecutor → DeterministicVerifier → Result
+- States: PENDING → EXECUTING → VERIFYING → COMPLETED (skips PLANNING and AWAITING_APPROVAL for simple tasks)
+- Failure: Falls back to LangGraph full path
+
+**LangGraph Full Path:**
+- Entry: `app/orchestrator/core.py` → `app/orchestrator/task_runner.py` → `app/langgraph/graphs.py`
+- Flow: planner_node → executor_node → verifier_node → approval_node (optional) → summarizer_node
+- States: PENDING → PLANNING → EXECUTING → VERIFYING → AWAITING_APPROVAL → COMPLETED
+- Failure: Checkpoint recovery → retry → legacy fallback
+
+### Failure Modes at Each Transition
+
+- **PENDING → PLANNING:** Input validation failure, guardrails block, resource unavailable → FAILED with error context
+- **PLANNING → EXECUTING:** Planning timeout, plan generation failure, no feasible plan → FAILED with planning error
+- **EXECUTING → VERIFYING:** Tool failure (retryable → retry, fatal → FAILED), step timeout, infinite loop detected → FAILED
+- **VERIFYING → AWAITING_APPROVAL:** Verification failure → replan (autonomous mode) or FAILED (task mode)
+- **AWAITING_APPROVAL → COMPLETED:** Approval timeout → FAILED, user rejection → REJECTED
+- **Any → FAILED:** Unrecoverable error, system crash, resource exhaustion → FAILED with recovery context for resume
