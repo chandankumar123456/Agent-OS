@@ -19,6 +19,12 @@ from pydantic import BaseModel, Field, field_validator
 from ..logs.logger import logger
 from ..orchestrator.errors import AgentOSError, ErrorCode, ErrorType
 from ..agents.base import AgentRole
+from .agent_lifecycle import (
+    AgentLifecycleManager,
+    AgentState,
+    StateTransitionResult,
+    get_lifecycle_manager,
+)
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
