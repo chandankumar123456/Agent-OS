@@ -1,0 +1,22 @@
+[package]
+name = "desktop-automation"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "test-client"
+path = "src/bin/test_client.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+image = { workspace = true }
+windows = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+desktop-protocol = { path = "../desktop-protocol" }
