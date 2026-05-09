@@ -16,12 +16,24 @@ import (
 
 // Config holds application configuration from flags and environment
 type Config struct {
-	Host        string
-	Port        int
-	LogLevel    string
-	DataDir     string
-	Version     bool
-	Help        bool
+	Host                  string
+	Port                  int
+	LogLevel              string
+	DataDir               string
+	Version               bool
+	Help                  bool
+	PythonExecutorEnabled bool
+	PythonExecutorAddress string
+	PythonExecutorTimeout int
+	Update                UpdateConfig
+}
+
+// UpdateConfig holds auto-update configuration
+type UpdateConfig struct {
+	Enabled  bool
+	URL      string
+	Channel  string // "stable", "beta", "dev"
+	Interval string // e.g., "24h"
 }
 
 // PortStr returns the port as a string
@@ -49,6 +61,14 @@ func ParseConfig() *Config {
 	config.LogLevel = *logLevel
 	config.Version = *version
 	config.Help = *help
+
+	// Set default update config
+	config.Update = UpdateConfig{
+		Enabled:  true,
+		URL:      "https://releases.agentos.dev",
+		Channel:  "stable",
+		Interval: "24h",
+	}
 
 	// Determine data directory
 	if *dataDir == "" {
@@ -368,6 +388,9 @@ func main() {
 	// Stop supervisor services
 	if err := supervisor.stopPythonRuntime(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to stop Python runtime: %v\n", err)
+	}
+	if err := supervisor.stopPythonExecutor(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Failed to stop Python executor: %v\n", err)
 	}
 	if err := supervisor.stopMCPServers(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to stop MCP servers: %v\n", err)

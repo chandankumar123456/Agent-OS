@@ -1,12 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/AgentOS/supervisor/proto"
+	"github.com/AgentOS/supervisor/workers/grpcclient"
 )
 
 // ServerState represents the current state of the supervisor
@@ -14,6 +21,8 @@ type ServerState struct {
 	Running     bool        `json:"running"`
 	StartTime   time.Time   `json:"start_time"`
 	PythonReady bool        `json:"python_ready"`
+	GRPCReady   bool        `json:"grpc_ready"`
+	GRPCPort    int         `json:"grpc_port"`
 	MCPServers  []MCPStatus `json:"mcp_servers"`
 }
 
@@ -22,14 +31,14 @@ type MCPStatus struct {
 	Name     string `json:"name"`
 	Running  bool   `json:"running"`
 	Port     int    `json:"port"`
-	LastPing string   `json:"last_ping"`
+	LastPing string `json:"last_ping"`
 }
 
 // HealthResponse represents the health check response
 type HealthResponse struct {
-	Status     string    `json:"status"`
-	Timestamp  time.Time `json:"timestamp"`
-	Version    string    `json:"version"`
+	Status     string            `json:"status"`
+	Timestamp  time.Time         `json:"timestamp"`
+	Version    string            `json:"version"`
 	Components []ComponentStatus `json:"components"`
 }
 
@@ -45,10 +54,21 @@ type Supervisor struct {
 	mu          sync.RWMutex
 	state       ServerState
 	pythonCmd   *exec.Cmd
+	grpcCmd     *exec.Cmd
+	executorCmd *exec.Cmd // Python executor process
 	mcpServers  map[string]*MCPStatus
 	config      *Config
 	db          *DB
 	agentStore  *AgentSessionStore
+	grpcClient  GRPCClient // gRPC client for worker pool management
+}
+
+// GRPCClient interface for gRPC operations (allows mocking)
+type GRPCClient interface {
+	// Using only the available proto types
+	ExecuteTask(ctx context.Context, req *proto.TaskRequest) (*proto.TaskResponse, error)
+	HealthCheck(ctx context.Context) error
+	GetMetrics() grpcclient.Metrics
 }
 
 // NewSupervisor creates a new supervisor instance
@@ -68,6 +88,28 @@ func (s *Supervisor) SetDB(db *DB) {
 	s.db = db
 }
 
+// SetGRPCClient sets the gRPC client for worker pool management
+func (s *Supervisor) SetGRPCClient(client GRPCClient) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.grpcClient = client
+}
+
+func (s *Supervisor) projectRoot() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	if _, err := os.Stat(filepath.Join(wd, "app")); err == nil {
+		return wd
+	}
+	parent := filepath.Dir(wd)
+	if _, err := os.Stat(filepath.Join(parent, "app")); err == nil {
+		return parent
+	}
+	return ""
+}
+
 // Start starts the supervisor and its services
 func (s *Supervisor) Start() error {
 	s.mu.Lock()
@@ -76,6 +118,16 @@ func (s *Supervisor) Start() error {
 	// Start Python runtime
 	if err := s.startPythonRuntime(); err != nil {
 		log.Printf("Warning: Failed to start Python runtime: %v", err)
+	}
+
+	// Start gRPC server
+	if err := s.startGRPCServer(); err != nil {
+		log.Printf("Warning: Failed to start gRPC server: %v", err)
+	}
+
+	// Start Python executor
+	if err := s.startPythonExecutor(); err != nil {
+		log.Printf("Warning: Failed to start Python executor: %v", err)
 	}
 
 	// Start MCP servers
@@ -101,6 +153,9 @@ func (s *Supervisor) startPythonRuntime() error {
 		"--port", pythonPort,
 		"--reload",
 	)
+	if root := s.projectRoot(); root != "" {
+		cmd.Dir = root
+	}
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
@@ -120,6 +175,57 @@ func (s *Supervisor) stopPythonRuntime() error {
 		return s.pythonCmd.Process.Kill()
 	}
 	return nil
+}
+
+// startGRPCServer starts the gRPC desktop automation server
+func (s *Supervisor) startGRPCServer() error {
+	// Check if Python is available (gRPC server is Python-based)
+	pythonPath, err := exec.LookPath("python")
+	if err != nil {
+		return err
+	}
+
+	grpcPort := 50051
+	cmd := exec.Command(pythonPath, "-m", "app.desktop.grpc_server")
+	cmd.Env = append(os.Environ(), "GRPC_PORT=50051")
+	if root := s.projectRoot(); root != "" {
+		cmd.Dir = root
+	}
+
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	s.grpcCmd = cmd
+	s.state.GRPCReady = true
+	s.state.GRPCPort = grpcPort
+
+	log.Printf("gRPC desktop automation server started on port %d", grpcPort)
+	return nil
+}
+
+// stopGRPCServer stops the gRPC desktop automation server
+func (s *Supervisor) stopGRPCServer() error {
+	if s.grpcCmd != nil && s.grpcCmd.Process != nil {
+		if err := s.grpcCmd.Process.Kill(); err != nil {
+			return err
+		}
+		s.state.GRPCReady = false
+		log.Printf("gRPC server stopped")
+	}
+	return nil
+}
+
+// isGRPCHealthy checks if the gRPC server is responsive
+func (s *Supervisor) isGRPCHealthy() bool {
+	if !s.state.GRPCReady || s.grpcCmd == nil || s.grpcCmd.Process == nil {
+		return false
+	}
+	if s.grpcCmd.ProcessState != nil && s.grpcCmd.ProcessState.Exited() {
+		return false
+	}
+	return true
 }
 
 // startMCPServers starts all MCP servers
@@ -160,10 +266,76 @@ func (s *Supervisor) stopMCPServers() error {
 	return nil
 }
 
+// startPythonExecutor starts the Python executor server
+func (s *Supervisor) startPythonExecutor() error {
+	if !s.config.PythonExecutorEnabled {
+		log.Printf("Python executor disabled, skipping startup")
+		return nil
+	}
+
+	// Check if Python is available
+	pythonPath, err := exec.LookPath("python")
+	if err != nil {
+		return fmt.Errorf("python not found: %w", err)
+	}
+
+	// Start Python executor as goroutine
+	go func() {
+		cmd := exec.Command(pythonPath, "-m", "app.workers.executor_server")
+		cmd.Env = append(os.Environ(),
+			fmt.Sprintf("EXECUTOR_ADDRESS=%s", s.config.PythonExecutorAddress),
+			fmt.Sprintf("EXECUTOR_TIMEOUT=%d", s.config.PythonExecutorTimeout),
+		)
+		if root := s.projectRoot(); root != "" {
+			cmd.Dir = root
+		}
+
+		// Store command reference
+		s.mu.Lock()
+		s.executorCmd = cmd
+		s.mu.Unlock()
+
+		// Start the command
+		if err := cmd.Start(); err != nil {
+			log.Printf("Failed to start Python executor: %v", err)
+			return
+		}
+
+		log.Printf("Python executor started on %s", s.config.PythonExecutorAddress)
+
+		// Wait for process to complete (or be killed)
+		if err := cmd.Wait(); err != nil {
+			log.Printf("Python executor exited: %v", err)
+		}
+	}()
+
+	// Wait 2 seconds for readiness
+	time.Sleep(2 * time.Second)
+
+	return nil
+}
+
+// stopPythonExecutor stops the Python executor server
+func (s *Supervisor) stopPythonExecutor() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.executorCmd != nil && s.executorCmd.Process != nil {
+		if err := s.executorCmd.Process.Kill(); err != nil {
+			return fmt.Errorf("failed to kill Python executor: %w", err)
+		}
+		log.Printf("Python executor stopped")
+	}
+	return nil
+}
+
 // GetHealth returns the current health status
 func (s *Supervisor) GetHealth() HealthResponse {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	grpcStatus := boolToStatus(s.isGRPCHealthy())
+	grpcMessage := boolToMessage(s.isGRPCHealthy(), "gRPC server not running")
 
 	components := []ComponentStatus{
 		{
@@ -175,9 +347,14 @@ func (s *Supervisor) GetHealth() HealthResponse {
 			Status: "ready",
 		},
 		{
-			Name:   "python_runtime",
-			Status: boolToStatus(s.state.PythonReady),
+			Name:    "python_runtime",
+			Status:  boolToStatus(s.state.PythonReady),
 			Message: boolToMessage(s.state.PythonReady, "Python runtime not started"),
+		},
+		{
+			Name:    "grpc_server",
+			Status:  grpcStatus,
+			Message: grpcMessage,
 		},
 	}
 
@@ -190,9 +367,9 @@ func (s *Supervisor) GetHealth() HealthResponse {
 	}
 
 	return HealthResponse{
-		Status:    "healthy",
-		Timestamp: time.Now(),
-		Version:   "0.1.0",
+		Status:     "healthy",
+		Timestamp:  time.Now(),
+		Version:    "0.1.0",
 		Components: components,
 	}
 }
@@ -225,12 +402,14 @@ func (s *Supervisor) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	defer s.mu.RUnlock()
 
 	response := map[string]interface{}{
-		"running":        s.state.Running,
-		"start_time":     s.state.StartTime,
-		"python_ready":   s.state.PythonReady,
-		"python_port":    8000,
+		"running":         s.state.Running,
+		"start_time":      s.state.StartTime,
+		"python_ready":    s.state.PythonReady,
+		"python_port":     8000,
+		"grpc_ready":      s.isGRPCHealthy(),
+		"grpc_port":       s.state.GRPCPort,
 		"supervisor_port": s.config.Port,
-		"mcp_servers":    s.mcpServers,
+		"mcp_servers":     s.mcpServers,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -278,6 +457,236 @@ func (s *Supervisor) HandleStopPython(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "Python runtime stopped"})
 }
 
+// HandleStartGRPC handles starting the gRPC server
+func (s *Supervisor) HandleStartGRPC(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.isGRPCHealthy() {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"message": "gRPC server already running"})
+		return
+	}
+
+	if err := s.startGRPCServer(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": "gRPC server started",
+		"port":    s.state.GRPCPort,
+	})
+}
+
+// HandleStopGRPC handles stopping the gRPC server
+func (s *Supervisor) HandleStopGRPC(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.isGRPCHealthy() {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"message": "gRPC server not running"})
+		return
+	}
+
+	if err := s.stopGRPCServer(); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	s.state.GRPCReady = false
+	json.NewEncoder(w).Encode(map[string]string{"message": "gRPC server stopped"})
+}
+
+// HandleGRPCHealth handles gRPC health check requests
+func (s *Supervisor) HandleGRPCHealth(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	healthy := s.isGRPCHealthy()
+	status := "healthy"
+	if !healthy {
+		status = "unhealthy"
+	}
+
+	response := map[string]interface{}{
+		"status":     status,
+		"grpc_ready": healthy,
+		"grpc_port":  s.state.GRPCPort,
+		"timestamp":  time.Now(),
+	}
+
+	if !healthy {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// HandleWorkerPoolStatus handles GET /api/v1/workers/status
+func (s *Supervisor) HandleWorkerPoolStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	s.mu.RLock()
+	client := s.grpcClient
+	s.mu.RUnlock()
+
+	if client == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "gRPC client not initialized"})
+		return
+	}
+
+	// Stub response - proto types not yet available
+	response := map[string]interface{}{
+		"active_workers": 0,
+		"queued_tasks":   0,
+		"utilization":    0.0,
+		"timestamp":      time.Now().Unix(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// HandleWorkerPoolScale handles POST /api/v1/workers/scale
+func (s *Supervisor) HandleWorkerPoolScale(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	s.mu.RLock()
+	client := s.grpcClient
+	s.mu.RUnlock()
+
+	if client == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "gRPC client not initialized"})
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		WorkerCount int32 `json:"worker_count"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	if req.WorkerCount <= 0 {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "worker_count must be positive"})
+		return
+	}
+
+	// Stub response - proto types not yet available
+	response := map[string]interface{}{
+		"worker_count": req.WorkerCount,
+		"success":      true,
+		"message":      "Worker pool scaling request accepted (stub)",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// HandleWorkerHealth handles GET /api/v1/workers/{id}/health
+func (s *Supervisor) HandleWorkerHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	s.mu.RLock()
+	client := s.grpcClient
+	s.mu.RUnlock()
+
+	if client == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "gRPC client not initialized"})
+		return
+	}
+
+	// Extract worker ID from URL path /api/v1/workers/{id}/health
+	path := r.URL.Path
+	parts := splitPath(path)
+	var workerID string
+	if len(parts) >= 4 {
+		workerID = parts[2]
+	}
+
+	if workerID == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "worker ID is required"})
+		return
+	}
+
+	// Stub response - proto types not yet available
+	response := map[string]interface{}{
+		"worker_id":     workerID,
+		"healthy":       true,
+		"last_heartbeat": time.Now().Unix(),
+		"message":       "Worker health check (stub)",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// HandleWorkerMetrics handles GET /api/v1/workers/metrics
+func (s *Supervisor) HandleWorkerMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		json.NewEncoder(w).Encode(map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	s.mu.RLock()
+	client := s.grpcClient
+	s.mu.RUnlock()
+
+	if client == nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]string{"error": "gRPC client not initialized"})
+		return
+	}
+
+	// Get local client metrics (not a gRPC call - returns accumulated metrics)
+	metrics := client.GetMetrics()
+
+	// Calculate average latency and success rate
+	var avgLatency float64
+	var successRate float64
+	if metrics.TotalRequests > 0 {
+		avgLatency = float64(metrics.TotalLatency.Milliseconds()) / float64(metrics.TotalRequests)
+		successRate = float64(metrics.SuccessfulRequests) / float64(metrics.TotalRequests) * 100
+	}
+
+	response := map[string]interface{}{
+		"total_requests":       metrics.TotalRequests,
+		"successful_requests":  metrics.SuccessfulRequests,
+		"failed_requests":      metrics.FailedRequests,
+		"average_latency_ms":   avgLatency,
+		"success_rate_percent": successRate,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // ServeHTTP starts the HTTP server
 func (s *Supervisor) ServeHTTP(config *Config) error {
 	mux := http.NewServeMux()
@@ -287,16 +696,35 @@ func (s *Supervisor) ServeHTTP(config *Config) error {
 	mux.HandleFunc("/healthz", s.HandleHealth) // k8s style
 	mux.HandleFunc("/status", s.HandleStatus)
 
-	// Lifecycle management endpoints
+	// Lifecycle management endpoints - Python
 	mux.HandleFunc("/api/v1/python/start", s.HandleStartPython)
 	mux.HandleFunc("/api/v1/python/stop", s.HandleStopPython)
+
+	// Worker pool management endpoints
+	mux.HandleFunc("/api/v1/workers/status", s.HandleWorkerPoolStatus)
+	mux.HandleFunc("/api/v1/workers/scale", s.HandleWorkerPoolScale)
+	mux.HandleFunc("/api/v1/workers/metrics", s.HandleWorkerMetrics)
+	mux.HandleFunc("/api/v1/workers/", s.HandleWorkerHealth) // Handles /api/v1/workers/{id}/health
+
+	// Lifecycle management endpoints - gRPC
+	mux.HandleFunc("/api/v1/grpc/start", s.HandleStartGRPC)
+	mux.HandleFunc("/api/v1/grpc/stop", s.HandleStopGRPC)
+	mux.HandleFunc("/api/v1/grpc/health", s.HandleGRPCHealth)
 
 	// Agent session endpoints
 	mux.HandleFunc("/api/v1/agents", s.HandleListSessions)
 	mux.HandleFunc("/api/v1/agents/", s.HandleAgentSession)
 
+	// Worker pool management endpoints
+	mux.HandleFunc("/api/v1/workers/status", s.HandleWorkerPoolStatus)
+	mux.HandleFunc("/api/v1/workers/scale", s.HandleWorkerPoolScale)
+	mux.HandleFunc("/api/v1/workers/metrics", s.HandleWorkerMetrics)
+	mux.HandleFunc("/api/v1/workers/", s.HandleWorkerHealth)
+
 	addr := config.Host + ":" + config.PortStr()
 	log.Printf("Supervisor HTTP server starting on %s", addr)
+	log.Printf("gRPC management endpoints: /api/v1/grpc/start, /api/v1/grpc/stop, /api/v1/grpc/health")
+	log.Printf("Worker pool endpoints: /api/v1/workers/status, /api/v1/workers/scale, /api/v1/workers/metrics, /api/v1/workers/{id}/health")
 
 	return http.ListenAndServe(addr, mux)
 }
