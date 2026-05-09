@@ -1,7 +1,12 @@
 """LangGraph state definitions for AgentOS."""
 from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from datetime import datetime
-from langgraph.graph.message import add_messages
+# LangGraph 1.x: add_messages is in langgraph.graph.message
+try:
+    from langgraph.graph.message import add_messages
+except ImportError:
+    # Fallback for older versions (pre-1.x)
+    from langgraph.prebuilt import add_messages
 from langchain_core.messages import BaseMessage
 
 
