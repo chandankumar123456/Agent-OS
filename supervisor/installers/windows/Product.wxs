@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!-- Define product and package -->
+  <Product Id="*"
+           Name="AgentOS"
+           Language="1033"
+           Version="0.1.0"
+           Manufacturer="AgentOS Team"
+           UpgradeCode="a1b2c3d4-e5f6-7890-abcd-ef1234567890">
+    
+    <Package InstallerVersion="200"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Platform="x64"
+             Description="AgentOS Supervisor - Local-native runtime for AI agents"
+             Comments="AgentOS Supervisor v0.1.0" />
+    
+    <!-- Media -->
+    <Media Id="1" Cabinet="agentos.cab" EmbedCab="yes" />
+    
+    <!-- Major upgrade -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of AgentOS is already installed." />
+    
+    <!-- Launch conditions -->
+    <Condition Message="AgentOS requires Windows 10 or later.">
+      <![CDATA[Installed OR (VersionNT >= 603)]]>
+    </Condition>
+    
+    <!-- Include fragments -->
+    <Icon Id="AgentOSIcon.exe" SourceFile="$(var.SourceDir)\..\..\..\assets\icons\agentos.ico" />
+    
+    <!-- Features -->
+    <Feature Id="ProductFeature" Title="AgentOS" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentRef Id="ApplicationShortcut" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+    
+    <!-- UI -->
+    <UIRef Id="WixUI_InstallDir" />
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLFOLDER" />
+    
+    <!-- License -->
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.SourceDir)\LICENSE.rtf" />
+    
+    <!-- Custom actions -->
+    <CustomAction Id="SetInstallPath" Property="INSTALLFOLDER" Value="[ProgramFiles64Folder]AgentOS" Execute="firstSequence" />
+    
+    <InstallExecuteSequence>
+      <Custom Action="SetInstallPath" Before="CostInitialize">NOT Installed</Custom>
+    </InstallExecuteSequence>
+    
+  </Product>
+</Wix>

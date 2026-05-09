@@ -1,0 +1,141 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  
+  <!-- Directory structure -->
+  <Fragment>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <!-- Program Files -->
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="AgentOS">
+          <Directory Id="BINDIR" Name="bin" />
+          <Directory Id="CONFIGDIR" Name="config" />
+          <Directory Id="DATADIR" Name="data" />
+        </Directory>
+      </Directory>
+      
+      <!-- Start Menu -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="AgentOS">
+          <Directory Id="ApplicationUtilitiesFolder" Name="Tools" />
+        </Directory>
+      </Directory>
+      
+      <!-- Desktop -->
+      <Directory Id="DesktopFolder" />
+    </Directory>
+  </Fragment>
+  
+  <!-- Components -->
+  <Fragment>
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      
+      <!-- Main executable -->
+      <Component Id="CMP_SupervisorExe" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678901">
+        <File Id="FIL_SupervisorExe" 
+              Source="$(var.SourceDir)\..\..\supervisor.exe" 
+              KeyPath="yes">
+          <Shortcut Id="SupervisorExeShortcut"
+                    Directory="ApplicationProgramsFolder"
+                    Name="AgentOS Supervisor"
+                    Description="AgentOS Supervisor - Local-native runtime for AI agents"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AgentOSIcon.exe"
+                    IconIndex="0" />
+        </File>
+      </Component>
+      
+      <!-- CLI executable -->
+      <Component Id="CMP_CliExe" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678902">
+        <File Id="FIL_CliExe" 
+              Source="$(var.SourceDir)\..\..\..\cli\target\release\agent.exe" 
+              KeyPath="yes">
+          <Shortcut Id="CliExeShortcut"
+                    Directory="ApplicationProgramsFolder"
+                    Name="AgentOS CLI"
+                    Description="AgentOS Command Line Interface"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AgentOSIcon.exe"
+                    IconIndex="0" />
+        </File>
+      </Component>
+      
+      <!-- TUI executable -->
+      <Component Id="CMP_TuiExe" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678903">
+        <File Id="FIL_TuiExe" 
+              Source="$(var.SourceDir)\..\..\..\tui\target\release\agent-tui.exe" 
+              KeyPath="yes">
+          <Shortcut Id="TuiExeShortcut"
+                    Directory="ApplicationProgramsFolder"
+                    Name="AgentOS TUI"
+                    Description="AgentOS Terminal User Interface"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="AgentOSIcon.exe"
+                    IconIndex="0" />
+        </File>
+      </Component>
+      
+      <!-- Default config file -->
+      <Component Id="CMP_DefaultConfig" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678904">
+        <File Id="FIL_DefaultConfig" 
+              Source="$(var.SourceDir)\..\..\config\default.yaml" 
+              KeyPath="yes" />
+      </Component>
+      
+      <!-- Create data directory -->
+      <Component Id="CMP_DataDir" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678905">
+        <CreateFolder Directory="DATADIR" />
+        <RemoveFolder Id="RemoveDataDir" Directory="DATADIR" On="uninstall" />
+      </Component>
+      
+      <!-- Environment variable -->
+      <Component Id="CMP_Environment" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678906">
+        <Environment Id="AGENTOS_HOME" 
+                     Name="AGENTOS_HOME" 
+                     Value="[INSTALLFOLDER]" 
+                     Permanent="no" 
+                     Part="last" 
+                     Action="set" 
+                     System="yes" />
+        <Environment Id="AGENTOS_PATH" 
+                     Name="PATH" 
+                     Value="[BINDIR]" 
+                     Permanent="no" 
+                     Part="last" 
+                     Action="set" 
+                     System="yes" />
+      </Component>
+      
+    </ComponentGroup>
+    
+    <!-- Desktop shortcut -->
+    <Component Id="ApplicationShortcut" Directory="DesktopFolder" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678907">
+      <Shortcut Id="ApplicationDesktopShortcut"
+                Name="AgentOS"
+                Description="AgentOS Supervisor"
+                Target="[#FIL_SupervisorExe]"
+                WorkingDirectory="INSTALLFOLDER"
+                Icon="AgentOSIcon.exe"
+                IconIndex="0" />
+      <RemoveFolder Id="RemoveDesktopFolder" Directory="DesktopFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" 
+                     Key="Software\AgentOS\AgentOS" 
+                     Name="desktop" 
+                     Type="integer" 
+                     Value="1" 
+                     KeyPath="yes" />
+    </Component>
+    
+    <!-- Start Menu shortcut group -->
+    <Component Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Guid="b1c2d3e4-f5a6-7890-bcde-f12345678908">
+      <RemoveFolder Id="ApplicationProgramsFolder" On="uninstall" />
+      <RegistryValue Root="HKCU" 
+                     Key="Software\AgentOS\AgentOS" 
+                     Name="startmenu" 
+                     Type="integer" 
+                     Value="1" 
+                     KeyPath="yes" />
+    </Component>
+    
+  </Fragment>
+  
+</Wix>
