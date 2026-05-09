@@ -51,16 +51,18 @@ type ComponentStatus struct {
 
 // Supervisor holds the supervisor state and services
 type Supervisor struct {
-	mu          sync.RWMutex
-	state       ServerState
-	pythonCmd   *exec.Cmd
-	grpcCmd     *exec.Cmd
-	executorCmd *exec.Cmd // Python executor process
-	mcpServers  map[string]*MCPStatus
-	config      *Config
-	db          *DB
-	agentStore  *AgentSessionStore
-	grpcClient  GRPCClient // gRPC client for worker pool management
+	mu             sync.RWMutex
+	state          ServerState
+	pythonCmd      *exec.Cmd
+	grpcCmd        *exec.Cmd
+	executorCmd    *exec.Cmd // Python executor process
+	mcpServers     map[string]*MCPStatus
+	config         *Config
+	db             *DB
+	agentStore     *AgentSessionStore
+	grpcClient     GRPCClient // gRPC client for worker pool management
+	runtimeServer  *RuntimeServer  // gRPC runtime server
+	checkpointServer *CheckpointServer // gRPC checkpoint server
 }
 
 // GRPCClient interface for gRPC operations (allows mocking)
@@ -95,6 +97,13 @@ func (s *Supervisor) SetGRPCClient(client GRPCClient) {
 	s.grpcClient = client
 }
 
+// SetCheckpointServer sets the checkpoint server
+func (s *Supervisor) SetCheckpointServer(server *CheckpointServer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.checkpointServer = server
+}
+
 func (s *Supervisor) projectRoot() string {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -123,6 +132,11 @@ func (s *Supervisor) Start() error {
 	// Start gRPC server
 	if err := s.startGRPCServer(); err != nil {
 		log.Printf("Warning: Failed to start gRPC server: %v", err)
+	}
+
+	// Start checkpoint gRPC server
+	if err := s.startCheckpointGRPCServer(); err != nil {
+		log.Printf("Warning: Failed to start checkpoint gRPC server: %v", err)
 	}
 
 	// Start Python executor
@@ -215,6 +229,44 @@ func (s *Supervisor) stopGRPCServer() error {
 		log.Printf("gRPC server stopped")
 	}
 	return nil
+}
+
+// startCheckpointGRPCServer starts the checkpoint gRPC server
+func (s *Supervisor) startCheckpointGRPCServer() error {
+	if s.checkpointServer == nil {
+		return fmt.Errorf("checkpoint server not initialized")
+	}
+
+	checkpointPort := 50052
+	if err := s.checkpointServer.StartGRPC(checkpointPort); err != nil {
+		return fmt.Errorf("failed to start checkpoint gRPC server: %w", err)
+	}
+
+	s.state.Running = true
+	log.Printf("Checkpoint gRPC server started on port %d", checkpointPort)
+	return nil
+}
+
+// stopCheckpointGRPCServer stops the checkpoint gRPC server
+func (s *Supervisor) stopCheckpointGRPCServer() error {
+	if s.checkpointServer != nil {
+		if err := s.checkpointServer.StopGRPC(); err != nil {
+			return err
+		}
+		log.Printf("Checkpoint gRPC server stopped")
+	}
+	return nil
+}
+
+// isCheckpointGRPCHealthy checks if the checkpoint gRPC server is responsive
+func (s *Supervisor) isCheckpointGRPCHealthy() bool {
+	if s.checkpointServer == nil || s.checkpointServer.cmd == nil || s.checkpointServer.cmd.Process == nil {
+		return false
+	}
+	if s.checkpointServer.cmd.ProcessState != nil && s.checkpointServer.cmd.ProcessState.Exited() {
+		return false
+	}
+	return true
 }
 
 // isGRPCHealthy checks if the gRPC server is responsive
