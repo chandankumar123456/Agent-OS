@@ -114,6 +114,8 @@ pillow
 pytest-asyncio>=0.23.0,<1.0.0
 pytest
 psutil
+grpcio>=1.62.0
+grpcio-tools>=1.62.0
 asyncio-throttle
 pytesseract
 comtypes
