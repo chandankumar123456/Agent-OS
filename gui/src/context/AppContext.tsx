@@ -1,0 +1,105 @@
+import { createContext, useContext, useState, ReactNode } from 'react'
+
+interface Task {
+  id: string
+  query: string
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  createdAt: string
+  updatedAt: string
+  steps: TaskStep[]
+}
+
+interface TaskStep {
+  id: string
+  description: string
+  status: 'pending' | 'running' | 'completed' | 'failed'
+  result?: string
+}
+
+interface AppState {
+  tasks: Task[]
+  selectedTask: Task | null
+  activeTasks: number
+  completedTasks: number
+  failedTasks: number
+}
+
+interface AppContextType {
+  state: AppState
+  setSelectedTask: (task: Task | null) => void
+  refreshTasks: () => Promise<void>
+}
+
+const defaultState: AppState = {
+  tasks: [],
+  selectedTask: null,
+  activeTasks: 0,
+  completedTasks: 0,
+  failedTasks: 0,
+}
+
+const AppContext = createContext<AppContextType | undefined>(undefined)
+
+export function AppProvider({ children }: { children: ReactNode }) {
+  const [state, setState] = useState<AppState>(defaultState)
+
+  const setSelectedTask = (task: Task | null) => {
+    setState(prev => ({ ...prev, selectedTask: task }))
+  }
+
+  const refreshTasks = async () => {
+    // TODO: Implement actual API call to get tasks
+    // For now, use mock data
+    const mockTasks: Task[] = [
+      {
+        id: 'task-1',
+        query: 'Open Chrome and search for rust tutorials',
+        status: 'running',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        steps: [
+          { id: 'step-1', description: 'Focus Chrome window', status: 'completed' },
+          { id: 'step-2', description: 'Click on address bar', status: 'running' },
+        ],
+      },
+      {
+        id: 'task-2',
+        query: 'Create a text file with hello world',
+        status: 'completed',
+        createdAt: new Date(Date.now() - 3600000).toISOString(),
+        updatedAt: new Date(Date.now() - 3500000).toISOString(),
+        steps: [
+          { id: 'step-1', description: 'Open Notepad', status: 'completed' },
+          { id: 'step-2', description: 'Type hello world', status: 'completed' },
+          { id: 'step-3', description: 'Save file', status: 'completed' },
+        ],
+      },
+    ]
+
+    const activeTasks = mockTasks.filter(t => t.status === 'running').length
+    const completedTasks = mockTasks.filter(t => t.status === 'completed').length
+    const failedTasks = mockTasks.filter(t => t.status === 'failed').length
+
+    setState(prev => ({
+      ...prev,
+      tasks: mockTasks,
+      activeTasks,
+      completedTasks,
+      failedTasks,
+    }))
+  }
+
+  return (
+    <AppContext.Provider value={{ state, setSelectedTask, refreshTasks }}>
+      {children}
+    </AppContext.Provider>
+  )
+}
+
+export function useApp() {
+  const context = useContext(AppContext)
+  if (!context) {
+    throw new Error('useApp must be used within AppProvider')
+  }
+  return context
+}
