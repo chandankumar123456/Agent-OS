@@ -6,9 +6,14 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from contextlib import AsyncExitStack
 
-from mcp import ClientSession, StdioServerParameters
+# Use explicit import to avoid conflict with local app.mcp package
+import mcp as mcp_package
 from mcp.client.stdio import stdio_client
 from mcp.types import CallToolResult
+
+# Re-export for backward compatibility
+ClientSession = mcp_package.ClientSession
+StdioServerParameters = mcp_package.StdioServerParameters
 
 from ..logs.logger import logger
 
