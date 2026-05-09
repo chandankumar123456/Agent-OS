@@ -19,9 +19,8 @@ import json
 from typing import Generator, Any
 from contextlib import contextmanager
 
-# Import protobuf modules
-import worker_pb2
-import worker_pb2_grpc
+# Import protobuf modules from app.proto package
+from app.proto import worker_pb2, worker_pb2_grpc
 
 # gRPC imports
 import grpc
