@@ -238,6 +238,17 @@ production-automation-failure-report.md
 .opencode/
 .agents/
 .claude/
-thoughts/
 .worktrees/
 skills-lock.json
+
+# Rust build artifacts
+desktop/target/
+desktop-automation/target/
+*.exe
+
+# Temporary progress files
+PHASE_2_PROGRESS.md
+STATUS.md
+
+# Old workspace directory
+workspace/
