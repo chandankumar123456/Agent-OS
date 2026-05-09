@@ -238,6 +238,25 @@ func (db *DB) Migrate() error {
 		)
 		`,
 
+		// Checkpoints table for LangGraph state persistence
+		`
+		CREATE TABLE IF NOT EXISTS checkpoints (
+			id TEXT PRIMARY KEY,
+			thread_id TEXT NOT NULL,
+			checkpoint_ns INTEGER NOT NULL,
+			checkpoint_type TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			state_blob BLOB,
+			channel_values BLOB,
+			pending_sends BLOB,
+			parent_ids TEXT,
+			metadata TEXT,
+			task_id TEXT,
+			foreign key (thread_id) references agent_sessions(id)
+		)
+		`,
+
 		// Indexes for performance
 		`
 		CREATE INDEX IF NOT EXISTS idx_agent_sessions_agent_id ON agent_sessions(agent_id)
@@ -253,6 +272,12 @@ func (db *DB) Migrate() error {
 		`,
 		`
 		CREATE INDEX IF NOT EXISTS idx_actions_status ON actions(status)
+		`,
+		`
+		CREATE INDEX IF NOT EXISTS idx_checkpoints_thread_id ON checkpoints(thread_id)
+		`,
+		`
+		CREATE INDEX IF NOT EXISTS idx_checkpoints_checkpoint_ns ON checkpoints(checkpoint_ns)
 		`,
 	}
 
@@ -353,6 +378,10 @@ func main() {
 	// Create supervisor instance
 	supervisor := NewSupervisor(config)
 	supervisor.SetDB(dbConn)
+
+	// Initialize checkpoint server
+	checkpointServer := NewCheckpointServer(dbConn, logger)
+	supervisor.SetCheckpointServer(checkpointServer)
 
 	// Initialize agent session store
 	if err := supervisor.InitializeAgentStore(); err != nil {
