@@ -119,8 +119,8 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
                 image = BytesIO(request.image_data)
                 
                 # Parse using hybrid vision parser
-                parser = HybridVisionParser(dpi_scaling=True)
-                result = parser.parse_image(image)
+                parser = HybridVisionParser()
+                result = parser.parse_screenshot(image)
                 
                 response = desktop_pb2.OcrScreenResponse(
                     text=result.get("text", ""),
@@ -143,30 +143,26 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
         try:
             session = self._get_or_create_session("window_find")
             
-            # Get windows from registry
-            windows = session.window_registry.get_windows()
+            # Get windows from registry - use find_by_title for efficient lookup
+            matched_ref = session.window_registry.find_by_title(request.title)
             
-            # Find matching window
-            matched_window = None
-            for window in windows:
-                title = window.get("title", "")
-                if request.partial_match:
-                    if request.title.lower() in title.lower():
-                        matched_window = window
-                        break
-                else:
-                    if title.lower() == request.title.lower():
-                        matched_window = window
+            # If not found and partial_match is enabled, try to find by iterating
+            if matched_ref is None and request.partial_match:
+                for ref in session.window_registry._registry.values():
+                    if request.title.lower() in ref.title.lower():
+                        matched_ref = ref
                         break
             
-            if matched_window:
+            if matched_ref:
+                # WindowRef has hwnd, not left/top/right/bottom - use 0 for position
+                # as WindowRef doesn't track window position
                 response = desktop_pb2.FindWindowResponse(
-                    window_id=matched_window.get("hwnd", ""),
-                    title=matched_window.get("title", ""),
-                    x=matched_window.get("left", 0),
-                    y=matched_window.get("top", 0),
-                    width=matched_window.get("right", 0) - matched_window.get("left", 0),
-                    height=matched_window.get("bottom", 0) - matched_window.get("top", 0),
+                    window_id=str(matched_ref.hwnd) if matched_ref.hwnd else "",
+                    title=matched_ref.title,
+                    x=0,
+                    y=0,
+                    width=0,
+                    height=0,
                     found=True
                 )
             else:
@@ -242,13 +238,13 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
             # Capture current screen state
             screenshot = session.desktop_session.screenshot() if session.desktop_session else None
             
-            # Get window list
-            windows = session.window_registry.get_windows()
+            # Get window list from registry
+            windows = list(session.window_registry._registry.values())
             
             # Perform OCR on screen if requested
             text_content = ""
             if request.include_text:
-                parser = HybridVisionParser(dpi_scaling=True)
+                parser = HybridVisionParser()
                 if screenshot:
                     buffered = BytesIO()
                     screenshot.save(buffered, format="PNG")
@@ -270,12 +266,12 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
                 window_count=len(windows),
                 windows=[
                     desktop_pb2.WindowInfo(
-                        id=w.get("hwnd", ""),
-                        title=w.get("title", ""),
-                        x=w.get("left", 0),
-                        y=w.get("top", 0),
-                        width=w.get("right", 0) - w.get("left", 0),
-                        height=w.get("bottom", 0) - w.get("top", 0)
+                        id=str(w.hwnd) if w.hwnd else "",
+                        title=w.title if w.title else "",
+                        x=0,
+                        y=0,
+                        width=0,
+                        height=0
                     )
                     for w in windows[:10]  # Limit to first 10 windows
                 ],
@@ -301,7 +297,7 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
             
             if session.last_observation:
                 # Generate action based on observation
-                action = desktop_pb2.DecideResponse.Action(
+                action = desktop_pb2.Action(
                     action_type="click",
                     target="window",
                     x=100,
@@ -309,7 +305,7 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
                     confidence=0.8
                 )
             else:
-                action = desktop_pb2.DecideResponse.Action(
+                action = desktop_pb2.Action(
                     action_type="none",
                     target="none",
                     confidence=0.0
@@ -431,9 +427,7 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
             if request.session_id in self.sessions:
                 session = self.sessions.pop(request.session_id)
                 
-                # Cleanup desktop session
-                if session.desktop_session:
-                    session.desktop_session.cleanup()
+                # Desktop session cleanup not available - session will be garbage collected
                 
                 self.logger.info(f"Closed desktop session: {request.session_id}")
             
