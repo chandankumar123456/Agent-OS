@@ -252,3 +252,6 @@ STATUS.md
 
 # Old workspace directory
 workspace/
+
+# Duplicate directory (already in desktop/desktop-automation/)
+/desktop-automation/
