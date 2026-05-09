@@ -7,6 +7,9 @@ from .api import api_router
 from .api.routes.health import router as health_router
 
 from .logs.logger import logger
+
+# gRPC mode support
+from .proto.grpc_client import GRPCClient, GRPCClientConfig
 from .memory.long_term import db
 from .memory.short_term import redis_client
 from .migrations.runner import run_pending_migrations
@@ -24,7 +27,8 @@ from .orchestrator.errors import AgentOSError, ErrorCode
 async def _check_dependencies() -> None:
     if not settings.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is required but not set")
-    if not settings.REDIS_URL:
+    # Skip Redis check in gRPC mode (supervisor handles Redis)
+    if settings.RUNTIME_MODE.lower() != "grpc" and not settings.REDIS_URL:
         raise RuntimeError("REDIS_URL is required but not set")
     if not settings.OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is required but not set")
@@ -76,7 +80,13 @@ async def lifespan(app: FastAPI):
         runtime = AgentRuntime()
         await runtime.initialize()
         app.state.runtime = runtime
-        logger.info("AgentRuntime initialized")
+        
+        # Log runtime mode for debugging
+        if hasattr(runtime, 'is_grpc_mode') and runtime.is_grpc_mode():
+            logger.info("AgentRuntime initialized in gRPC mode")
+        else:
+            logger.info("AgentRuntime initialized in HTTP mode")
+        
         initialized.append("runtime")
     except Exception as e:
         logger.error(f"AgentRuntime initialization failed: {e}")
@@ -114,6 +124,28 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"MCP tool discovery failed at startup: {e}")
 
+    # Initialize gRPC client if in grpc mode
+    if settings.RUNTIME_MODE.lower() == "grpc":
+        try:
+            grpc_config = GRPCClientConfig(
+                host=settings.GRPC_HOST,
+                port=settings.GRPC_PORT,
+                connection_timeout=settings.GRPC_CONNECTION_TIMEOUT,
+                keepalive_timeout=settings.GRPC_KEEPALIVE_TIMEOUT,
+                max_send_message_length=settings.GRPC_MAX_MESSAGE_LENGTH_MB * 1024 * 1024,
+                max_receive_message_length=settings.GRPC_MAX_MESSAGE_LENGTH_MB * 1024 * 1024,
+            )
+            grpc_client = GRPCClient(config=grpc_config)
+            await grpc_client.connect()
+            app.state.grpc_client = grpc_client
+            initialized.append("grpc_client")
+            logger.info(f"gRPC client initialized in {settings.RUNTIME_MODE} mode")
+        except Exception as e:
+            logger.error(f"gRPC client initialization failed: {e}")
+            raise RuntimeError(f"gRPC client initialization failed: {e}") from e
+    else:
+        logger.info(f"Running in HTTP mode (RUNTIME_MODE={settings.RUNTIME_MODE})")
+
     yield
 
     if "mcp_servers" in initialized:
@@ -142,6 +174,13 @@ async def lifespan(app: FastAPI):
             await app.state.runtime.shutdown_all()
         except Exception as e:
             logger.error(f"AgentRuntime shutdown failed: {e}")
+
+    if "grpc_client" in initialized:
+        try:
+            await app.state.grpc_client.close()
+            logger.info("gRPC client closed")
+        except Exception as e:
+            logger.error(f"gRPC client close failed: {e}")
 
     if "db" in initialized:
         try:
