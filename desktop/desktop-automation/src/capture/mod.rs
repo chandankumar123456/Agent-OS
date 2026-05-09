@@ -192,6 +192,31 @@ impl GdiCapture {
     }
 }
 
+/// Capture a region of the screen
+/// Convenience function for gRPC server use
+pub fn capture_region(x: i32, y: i32, width: i32, height: i32) -> Result<Vec<u8>, CaptureError> {
+    let mut capture = DxgiCapture::new(0)?;
+    let region = Rect {
+        x,
+        y,
+        width: width as u32,
+        height: height as u32,
+    };
+    
+    let frame = capture.capture_region(region)?;
+    
+    // Encode to PNG
+    let img = image::RgbaImage::from_raw(frame.width, frame.height, frame.data)
+        .ok_or(CaptureError::FrameAcquisitionError("Failed to create image".to_string()))?;
+    
+    // Use VecEncoder to encode to a buffer
+    let mut png_data = Vec::new();
+    img.write_into(&mut png_data, image::ImageFormat::Png)
+        .map_err(|e| CaptureError::FrameAcquisitionError(format!("Failed to encode PNG: {}", e)))?;
+    
+    Ok(png_data)
+}
+
 /// Utility functions for screen capture
 pub mod utils {
     use super::*;
