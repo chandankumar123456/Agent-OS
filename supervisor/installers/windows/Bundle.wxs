@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi"
+     xmlns:bal="http://schemas.microsoft.com/wix/BalExtension">
+  
+  <!-- Bundle definition for bootstrapper -->
+  <Bundle Name="AgentOS"
+          Version="$(var.Version)"
+          Manufacturer="AgentOS Team"
+          UpgradeCode="b0c1d2e3-f4a5-6789-b0c1-d2e3f4a5b678"
+          Compressed="yes"
+          IconSourceFile="$(var.SourceDir)..\..\..\assets\icons\agentos.ico"
+          DisableModify="no"
+          DisableRepair="yes">
+    
+    <!-- Bootstrapper application -->
+    <BootstrapperApplicationRef Id="WixStandardBootstrapperApplication.RtfLicense">
+      <WixStandardBootstrapperApplication
+          LicenseFile="$(var.SourceDir)LICENSE.rtf"
+          SuppressOptionsUI="no"
+          SuppressRepair="yes"
+          Theme="hyperlinkLicense" />
+    </BootstrapperApplicationRef>
+    
+    <!-- Chain with MSI package -->
+    <Chain>
+      <PackageGroupRef Id="ProductPackage" />
+    </Chain>
+    
+  </Bundle>
+  
+  <!-- Fragment for package group -->
+  <Fragment>
+    <PackageGroup Id="ProductPackage">
+      <MsiPackage Id="AgentOSMsi"
+                  SourceFile="$(var.ProductOutputPath)"
+                  DownloadUrl="$(var.UpdateURL)/releases/v$(var.Version)/AgentOS-v$(var.Version).msi"
+                  DetectCondition="WIX_IS_INSTALLED"
+                  PerMachine="yes"
+                  Vital="yes"
+                  DisplayInternalUI="no" />
+    </PackageGroup>
+  </Fragment>
+  
+</Wix>
