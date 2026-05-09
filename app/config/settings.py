@@ -37,6 +37,14 @@ class Settings(BaseSettings):
     MAX_ACTIVE_TASKS_PER_USER: int = 5
     MAX_TASK_EXECUTION_ATTEMPTS: int = 3
 
+    # Runtime communication mode: "http" (FastAPI) or "grpc" (gRPC to supervisor)
+    RUNTIME_MODE: str = "http"
+    GRPC_HOST: str = "localhost"
+    GRPC_PORT: int = 50051
+    GRPC_CONNECTION_TIMEOUT: float = 5.0
+    GRPC_KEEPALIVE_TIMEOUT: int = 60
+    GRPC_MAX_MESSAGE_LENGTH_MB: int = 50
+
     SECRET_KEY: str = ""
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
@@ -87,7 +95,8 @@ class Settings(BaseSettings):
     def validate_required_urls(self) -> "Settings":
         if not self.DATABASE_URL:
             raise ValueError("DATABASE_URL is required")
-        if not self.REDIS_URL:
+        # Skip Redis check in gRPC mode (supervisor handles Redis)
+        if self.RUNTIME_MODE.lower() != "grpc" and not self.REDIS_URL:
             raise ValueError("REDIS_URL is required")
         enabled = [p.strip().lower() for p in self.ENABLED_PROVIDERS.split(",") if p.strip()]
         if "openai" in enabled and not self.OPENAI_API_KEY:
