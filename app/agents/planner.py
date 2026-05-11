@@ -1,6 +1,5 @@
 import os
 import platform
-import re
 
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
 from uuid import uuid4
@@ -10,46 +9,8 @@ from ..logs.logger import logger
 from ..tools.grounding import tool_grounding_layer
 from ..tools.registry import tool_registry
 from ..workflows.decomposer import workflow_decomposer
-
-
-def _get_desktop_path() -> str:
-    """Return the user's Desktop absolute path for the current OS."""
-    home = os.path.expanduser("~")
-    if platform.system() == "Windows":
-        user_desktop = os.path.join(home, "Desktop")
-        if os.path.isdir(user_desktop):
-            return user_desktop
-        public_desktop = os.path.join(os.path.dirname(home), "Public", "Desktop")
-        if os.path.isdir(public_desktop):
-            return public_desktop
-        return user_desktop
-    elif platform.system() == "Darwin":
-        return os.path.join(home, "Desktop")
-    else:
-        return os.path.join(home, "Desktop")
-
-
-def _normalize_paths_in_text(text: str, home_path: str, desktop_path: str) -> str:
-    """Replace common hallucinated Unix paths with actual OS paths."""
-    if not text:
-        return text
-
-    # Use replacement functions to avoid regex backreference interpretation issues
-    # with Windows backslashes in the replacement string.
-    def repl_desktop(m):
-        return desktop_path + os.sep
-
-    def repl_home(m):
-        return home_path + os.sep
-
-    # Replace /home/$USER/Desktop/ and /home/name/Desktop/ with desktop_path
-    text = re.sub(r"/home/[^/]+/Desktop/", repl_desktop, text)
-    # Replace /home/$USER/ and /home/name/ with home_path
-    text = re.sub(r"/home/[^/]+/", repl_home, text)
-    # Replace ~/ with home_path/
-    text = re.sub(r"~/", repl_home, text)
-
-    return text
+from ..utils.paths import get_desktop_path as _get_desktop_path
+from ..utils.paths import normalize_paths_in_text as _normalize_paths_in_text
 
 
 PLANNER_PROMPT = """You are a workflow planner for Agent-OS. Your task is to generate a VALID execution plan as a directed acyclic graph (DAG).
