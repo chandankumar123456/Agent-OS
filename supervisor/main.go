@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/AgentOS/supervisor/logger"
 
@@ -192,6 +195,28 @@ func (db *DB) Path() string {
 	return db.path
 }
 
+// GetSystemState retrieves a value from the system_state table
+func (db *DB) GetSystemState(key string) (string, error) {
+	var value string
+	err := db.conn.QueryRow(`SELECT value FROM system_state WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+// SetSystemState stores a value in the system_state table
+func (db *DB) SetSystemState(key, value string) error {
+	_, err := db.conn.Exec(
+		`INSERT INTO system_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+		key, value,
+	)
+	return err
+}
+
 // Migrate runs database migrations
 func (db *DB) Migrate() error {
 	// Create tables if they don't exist
@@ -234,6 +259,40 @@ func (db *DB) Migrate() error {
 		CREATE TABLE IF NOT EXISTS system_state (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+		`,
+
+		// Agent configurations table (for AgentBuilder page)
+		`
+		CREATE TABLE IF NOT EXISTS agent_configs (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			role TEXT NOT NULL DEFAULT 'assistant',
+			system_prompt TEXT,
+			model TEXT,
+			temperature REAL DEFAULT 0.7,
+			max_tokens INTEGER DEFAULT 2048,
+			tools TEXT DEFAULT '[]',
+			status TEXT NOT NULL DEFAULT 'active',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+		`,
+
+		// Tool definitions table (for Tools page)
+		`
+		CREATE TABLE IF NOT EXISTS tool_definitions (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			description TEXT NOT NULL DEFAULT '',
+			category TEXT NOT NULL DEFAULT 'general',
+			type TEXT NOT NULL DEFAULT 'builtin',
+			status TEXT NOT NULL DEFAULT 'available',
+			parameters_schema TEXT DEFAULT '{}',
+			tags TEXT DEFAULT '[]',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)
 		`,
@@ -285,6 +344,45 @@ func (db *DB) Migrate() error {
 		_, err := db.conn.Exec(query)
 		if err != nil {
 			return fmt.Errorf("failed to execute migration: %w", err)
+		}
+	}
+
+	// Seed default agent configs if table is empty
+	var agentCount int
+	err := db.conn.QueryRow(`SELECT COUNT(*) FROM agent_configs`).Scan(&agentCount)
+	if err == nil && agentCount == 0 {
+		defaultAgents := []string{
+			`INSERT INTO agent_configs (id, name, description, role, status) VALUES ('web-researcher', 'Web Researcher', 'Searches the web for information and summarizes findings', 'researcher', 'active')`,
+			`INSERT INTO agent_configs (id, name, description, role, tools, status) VALUES ('file-organizer', 'File Organizer', 'Organizes files based on content analysis and naming patterns', 'organizer', '["read_file","write_file","execute_command"]', 'active')`,
+			`INSERT INTO agent_configs (id, name, description, role, tools, status) VALUES ('desktop-automator', 'Desktop Automator', 'Performs desktop automation tasks like clicks and typing', 'automator', '["screenshot","click_element","type_text"]', 'active')`,
+			`INSERT INTO agent_configs (id, name, description, role, tools, status) VALUES ('code-assistant', 'Code Assistant', 'Writes and reviews code with best practices', 'developer', '["read_file","write_file","execute_command","execute_python"]', 'active')`,
+			`INSERT INTO agent_configs (id, name, description, role, tools, status) VALUES ('document-analyst', 'Document Analyst', 'Parses and analyzes PDF, DOCX, and other documents', 'analyst', '["read_file","parse_document","search_web"]', 'active')`,
+		}
+		for _, q := range defaultAgents {
+			db.conn.Exec(q)
+		}
+	}
+
+	// Seed default tool definitions if table is empty
+	var toolCount int
+	err = db.conn.QueryRow(`SELECT COUNT(*) FROM tool_definitions`).Scan(&toolCount)
+	if err == nil && toolCount == 0 {
+		defaultTools := []string{
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('read-file', 'Read File', 'Read contents of a file from the filesystem', 'Filesystem', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('write-file', 'Write File', 'Write content to a file on the filesystem', 'Filesystem', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('execute-command', 'Execute Command', 'Run shell commands on the host system', 'Shell', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('search-web', 'Search Web', 'Search the web using DuckDuckGo search engine', 'Cloud API', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('navigate-browser', 'Navigate Browser', 'Navigate to a URL in the browser environment', 'Browser', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('take-screenshot', 'Screenshot', 'Take a screenshot of the current desktop', 'Desktop', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('click-element', 'Click Element', 'Click at specific screen coordinates', 'Desktop', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('type-text', 'Type Text', 'Type text at the current cursor position', 'Desktop', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('parse-document', 'Parse Document', 'Parse PDF, DOCX, and TXT files for content extraction', 'Document', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('execute-python', 'Execute Python', 'Execute Python code in a sandboxed environment', 'Code', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('list-windows', 'List Windows', 'Enumerate all visible windows on the desktop', 'Desktop', 'builtin')`,
+			`INSERT INTO tool_definitions (id, name, description, category, type) VALUES ('focus-window', 'Focus Window', 'Bring a window to focus by title', 'Desktop', 'builtin')`,
+		}
+		for _, q := range defaultTools {
+			db.conn.Exec(q)
 		}
 	}
 
@@ -375,13 +473,62 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize crypto manager and ensure TLS certs exist
+	cryptoMgr := NewCryptoManager(config.DataDir)
+	if err := cryptoMgr.EnsureCertsExist(); err != nil {
+		logger.Errorf("Failed to initialize TLS certificates: %v", err)
+		os.Exit(1)
+	}
+	logger.Info("TLS certificates initialized")
+
+	// Ensure API key exists
+	apiKey, err := dbConn.GetSystemState("api_key")
+	if err != nil || apiKey == "" {
+		apiKey, err = GenerateAPIKey()
+		if err != nil {
+			logger.Errorf("Failed to generate API key: %v", err)
+			os.Exit(1)
+		}
+		if err := dbConn.SetSystemState("api_key", apiKey); err != nil {
+			logger.Errorf("Failed to store API key: %v", err)
+			os.Exit(1)
+		}
+		logger.Info("Generated new API key for local auth")
+	} else {
+		logger.Info("Loaded existing API key")
+	}
+
 	// Create supervisor instance
 	supervisor := NewSupervisor(config)
 	supervisor.SetDB(dbConn)
+	supervisor.SetCryptoManager(cryptoMgr)
+	supervisor.SetAPIKey(apiKey)
 
-	// Initialize checkpoint server
+	// Initialize runtime server
+	runtimeServer := NewRuntimeServer(dbConn, logger)
+	supervisor.SetRuntimeServer(runtimeServer)
+
+	// Initialize checkpoint server with TLS + auth
 	checkpointServer := NewCheckpointServer(dbConn, logger)
+	checkpointServer.SetAuthKey(apiKey)
 	supervisor.SetCheckpointServer(checkpointServer)
+
+	// Initialize updater
+	updater := NewUpdater(config)
+	supervisor.SetUpdater(updater)
+
+	// Initialize event hub for WebSocket events
+	eventHub := NewEventHub()
+	supervisor.SetEventHub(eventHub)
+
+	// Wire runtime server events to event hub
+	runtimeServer.SetEventHandler(func(eventType string, taskID string, status string, query string, errMsg string) {
+		if errMsg != "" {
+			eventHub.EmitTaskError(taskID, status, errMsg)
+		} else {
+			eventHub.EmitTaskEvent(eventType, taskID, status, query)
+		}
+	})
 
 	// Initialize agent session store
 	if err := supervisor.InitializeAgentStore(); err != nil {
@@ -404,7 +551,7 @@ func main() {
 
 	// Start HTTP server in goroutine
 	go func() {
-		if err := supervisor.ServeHTTP(config); err != nil {
+		if err := supervisor.ServeHTTP(config); err != nil && err != http.ErrServerClosed {
 			fmt.Fprintf(os.Stderr, "HTTP server failed: %v\n", err)
 			os.Exit(1)
 		}
@@ -414,15 +561,12 @@ func main() {
 	<-sigChan
 	fmt.Println("\nShutdown signal received, cleaning up...")
 
-	// Stop supervisor services
-	if err := supervisor.stopPythonRuntime(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to stop Python runtime: %v\n", err)
-	}
-	if err := supervisor.stopPythonExecutor(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to stop Python executor: %v\n", err)
-	}
-	if err := supervisor.stopMCPServers(); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: Failed to stop MCP servers: %v\n", err)
+	// Graceful shutdown with 30-second timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := supervisor.Shutdown(shutdownCtx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: Shutdown error: %v\n", err)
 	}
 
 	fmt.Println("Shutdown complete")
