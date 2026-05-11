@@ -92,6 +92,17 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_required_urls(self) -> "Settings":
+        # Check for default credentials in non-test/non-development environments
+        env = os.environ.get("AGENTOS_ENV", "").lower()
+        if self.POSTGRES_PASSWORD == "agentos" and env not in ("test", "development"):
+            import warnings
+            warnings.warn(
+                "Using default PostgreSQL password. Set POSTGRES_PASSWORD to a secure value in production.",
+                UserWarning,
+            )
+        # In test mode, skip strict validation to allow isolated unit tests
+        if env == "test":
+            return self
         if not self.DATABASE_URL:
             raise ValueError("DATABASE_URL is required")
         # Skip Redis check in gRPC mode (supervisor handles Redis)
