@@ -1,7 +1,7 @@
 import asyncio
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from ..memory.short_term import redis_client
 from ..logs.logger import logger
 
@@ -57,7 +57,7 @@ class HorizontalScalingCoordinator:
                 data = {
                     "instance_id": instance_id,
                     "capabilities": capabilities,
-                    "last_heartbeat": datetime.utcnow().isoformat(),
+                    "last_heartbeat": datetime.now(timezone.utc).isoformat(),
                     "active_tasks": 0,
                     "healthy": True
                 }
@@ -91,7 +91,7 @@ class HorizontalScalingCoordinator:
                 data = {
                     "instance_id": self._local_instance_id,
                     "capabilities": self._local_capabilities,
-                    "last_heartbeat": datetime.utcnow().isoformat(),
+                    "last_heartbeat": datetime.now(timezone.utc).isoformat(),
                     "active_tasks": 0,
                     "healthy": True
                 }
@@ -119,7 +119,7 @@ class HorizontalScalingCoordinator:
         return {
             "instances": instances,
             "instance_count": len(instances),
-            "timestamp": datetime.utcnow().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
 
     async def assign_task(self, task_id: str, required_capabilities: List[str] = None) -> Optional[str]:
