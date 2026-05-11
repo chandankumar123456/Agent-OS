@@ -3,7 +3,7 @@
 Reconstructs task execution from stored checkpoints and traces,
 validates replay fidelity, and detects divergences.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
@@ -71,7 +71,7 @@ class ExecutionReplayService:
         Returns:
             ReplayResult with replay log and divergence info.
         """
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         replay_id = str(uuid4())
         result = ReplayResult(
             replay_id=replay_id,
@@ -115,7 +115,7 @@ class ExecutionReplayService:
             result.final_state = step.output_state
             step_index += 1
 
-        duration = (datetime.utcnow() - start_time).total_seconds() * 1000
+        duration = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         result.duration_ms = round(duration, 2)
         result.success = result.divergence_count == 0
 
