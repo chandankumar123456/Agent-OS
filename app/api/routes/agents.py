@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from ...api.deps import get_current_user
 from ...memory.long_term import agent_repo
 from ...logs.logger import logger
@@ -61,7 +61,7 @@ def _to_response(agent_id: str, config: Dict[str, Any]) -> AgentConfigResponse:
         name=config["name"],
         role=config["role"],
         status=config.get("status", "active"),
-        created_at=config.get("created_at", datetime.utcnow()),
+        created_at=config.get("created_at", datetime.now(timezone.utc)),
         system_prompt=config.get("system_prompt"),
         model=config.get("model"),
         temperature=config.get("temperature", 0.7),
@@ -144,7 +144,7 @@ async def create_agent(config: AgentConfig, current_user: object = Depends(get_c
         "name": config.name,
         "role": config.role,
         "status": "active",
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
         "system_prompt": config.system_prompt,
         "model": config.model,
         "temperature": config.temperature,
@@ -173,7 +173,7 @@ async def update_agent(agent_id: str, config: AgentConfig, current_user: object 
         "name": config.name,
         "role": config.role,
         "status": "active",
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
         "system_prompt": config.system_prompt,
         "model": config.model,
         "temperature": config.temperature,
@@ -197,7 +197,7 @@ async def create_agent_version(agent_id: str, config: AgentConfig, current_user:
     agent = await agent_repo.get_by_agent_key(agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
-    version = config.version or f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+    version = config.version or f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     try:
         v = await agent_repo.create_version(
             agent_key=agent_id,
