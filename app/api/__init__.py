@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from .routes import tasks, auth, tools, agents, config, workflows, onboarding, analytics, chat, providers, knowledge, events, workspaces, api_keys, deployments, observability
+from .routes import tasks, auth, tools, agents, config, workflows, onboarding, analytics, chat, providers, knowledge, events, workspaces, api_keys, deployments, observability, desktop
 from ..logs.metrics import metrics_collector
 
 api_router = APIRouter()
@@ -19,6 +19,7 @@ api_router.include_router(workspaces.router)
 api_router.include_router(api_keys.router)
 api_router.include_router(deployments.router)
 api_router.include_router(observability.router)
+api_router.include_router(desktop.router)
 
 
 @api_router.get("/metrics")
