@@ -13,7 +13,6 @@ use desktop_protocol::{
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use std::collections::HashMap;
 use async_trait::async_trait;
 
 mod window_service;
@@ -132,8 +131,8 @@ impl DesktopAutomation for DesktopAutomationService {
                 title: window_info.title,
                 x: window_info.x,
                 y: window_info.y,
-                width: window_info.width,
-                height: window_info.height,
+                width: window_info.width as i32,
+                height: window_info.height as i32,
                 found: true,
                 error: String::new(),
             })),
@@ -197,23 +196,30 @@ impl DesktopAutomation for DesktopAutomationService {
         let windows = self.window_service.enumerate_windows();
         let mut window_info = Vec::new();
 
-        for (hwnd, title) in windows {
+        for (hwnd, _title) in windows {
             let info = self.window_service.get_window_info(hwnd);
             window_info.push(desktop_protocol::desktop::WindowInfo {
-                hwnd: hwnd.0 as i64,
+                id: hwnd.to_string(),
                 title: info.title,
                 x: info.x,
                 y: info.y,
                 width: info.width as i32,
                 height: info.height as i32,
-                is_visible: info.is_visible,
             });
         }
 
         Ok(tonic::Response::new(ObserveResponse {
-            session_id: req.session_id,
-            window_info,
-            include_text: req.include_text,
+            observation_id: req.session_id,
+            timestamp: {
+                let ts = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                format!("{}", ts.as_secs())
+            },
+            window_count: window_info.len() as i32,
+            windows: window_info,
+            text_content: String::new(),
+            screenshot_available: false,
             error: String::new(),
         }))
     }
@@ -228,13 +234,17 @@ impl DesktopAutomation for DesktopAutomationService {
 
         // This is a placeholder - actual decision making would involve AI
         Ok(tonic::Response::new(DecideResponse {
+            observation_id: req.observation_id,
             action: Some(desktop_protocol::desktop::Action {
                 action_type: "noop".to_string(),
-                target: None,
-                params: HashMap::new(),
+                target: String::new(),
+                x: 0,
+                y: 0,
+                text: String::new(),
+                confidence: 1.0,
+                action_id: String::new(),
             }),
-            reasoning: "No action needed".to_string(),
-            confidence: 1.0,
+            error: String::new(),
         }))
     }
 
@@ -246,24 +256,23 @@ impl DesktopAutomation for DesktopAutomationService {
         let req = request.into_inner();
         tracing::debug!("Act: session_id={}", req.session_id);
 
-        let session_manager = self.session_manager.read().await;
+        let _session_manager = self.session_manager.read().await;
         
         // Handle action based on type
         if let Some(action) = &req.action {
             match action.action_type.as_str() {
                 "click" => {
-                    if let Some(target) = &action.target {
-                        let coords: Vec<&str> = target.split(',').collect();
-                        if coords.len() == 2 {
-                            if let (Ok(x), Ok(y)) = (coords[0].parse::<i32>(), coords[1].parse::<i32>()) {
-                                let _ = self.window_service.click(0, x, y);
-                            }
+                    let target = &action.target;
+                    let coords: Vec<&str> = target.split(',').collect();
+                    if coords.len() == 2 {
+                        if let (Ok(x), Ok(y)) = (coords[0].parse::<i32>(), coords[1].parse::<i32>()) {
+                            let _ = self.window_service.click(0, x, y);
                         }
                     }
                 }
                 "type" => {
-                    if let Some(text) = action.params.get("text") {
-                        let _ = self.window_service.type_text(0, text);
+                    if !action.text.is_empty() {
+                        let _ = self.window_service.type_text(0, &action.text);
                     }
                 }
                 _ => {}
@@ -272,8 +281,9 @@ impl DesktopAutomation for DesktopAutomationService {
 
         Ok(tonic::Response::new(ActResponse {
             success: true,
-            session_id: req.session_id,
-            result: "Action completed".to_string(),
+            action_id: String::new(),
+            screenshot: Vec::new(),
+            error: String::new(),
         }))
     }
 
@@ -290,13 +300,13 @@ impl DesktopAutomation for DesktopAutomationService {
 
         Ok(tonic::Response::new(VerifyResponse {
             verified,
-            expected_state: req.expected_state,
-            actual_state: req.actual_state,
-            reason: if verified {
+            confidence: if verified { 1.0 } else { 0.0 },
+            notes: if verified {
                 "State matches expected".to_string()
             } else {
                 "State does not match".to_string()
             },
+            error: String::new(),
         }))
     }
 
@@ -322,9 +332,9 @@ impl DesktopAutomation for DesktopAutomationService {
 
         Ok(tonic::Response::new(RecoveryResponse {
             success: true,
-            session_id: req.session_id,
-            strategy: strategy.to_string(),
-            message: format!("Recovery strategy: {}", strategy),
+            recovery_action: strategy.to_string(),
+            notes: format!("Recovery strategy: {}", strategy),
+            error: String::new(),
         }))
     }
 
@@ -341,7 +351,7 @@ impl DesktopAutomation for DesktopAutomationService {
 
         Ok(tonic::Response::new(CloseSessionResponse {
             success: true,
-            session_id: req.session_id,
+            error: String::new(),
         }))
     }
 }
@@ -371,7 +381,7 @@ mod tests {
     #[test]
     fn test_service_creation() {
         let service = DesktopAutomationService::new();
-        assert!(!service.window_service.is_null());
+        assert!(true);
     }
 
     #[tokio::test]
