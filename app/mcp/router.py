@@ -1,5 +1,5 @@
 from typing import Dict, Any, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from ..logs.logger import logger
 from .bus import MCPBus, MemoryMCPBus
 from .message import MCPMessage
@@ -49,7 +49,7 @@ class MessageRouter:
                     "message_id": str(message.message_id),
                     "original_sender": message.sender_agent,
                     "original_receiver": message.receiver_agent,
-                    "routed_at": datetime.utcnow().isoformat(),
+                    "routed_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
         except Exception as e:
