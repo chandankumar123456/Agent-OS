@@ -1,7 +1,6 @@
 import json
 import os
 import platform
-import re
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
 from uuid import uuid4
 from typing import List, Dict, Any, Optional
@@ -14,114 +13,8 @@ from ..environments.desktop_env import DesktopSessionManager
 from ..environments.execution_stabilizer import ActionStabilizer
 from ..environments.window_registry import WindowRegistry
 from ..desktop.goal_loop import DesktopGoalLoop
-
-
-def _get_desktop_path() -> str:
-    """Return the user's Desktop absolute path for the current OS."""
-    home = os.path.expanduser("~")
-    if platform.system() == "Windows":
-        # Try user's personal Desktop first, fall back to Public Desktop
-        user_desktop = os.path.join(home, "Desktop")
-        if os.path.isdir(user_desktop):
-            return user_desktop
-        public_desktop = os.path.join(os.path.dirname(home), "Public", "Desktop")
-        if os.path.isdir(public_desktop):
-            return public_desktop
-        return os.path.join(home, "Desktop")
-    elif platform.system() == "Darwin":
-        return os.path.join(home, "Desktop")
-    else:
-        return os.path.join(home, "Desktop")
-
-
-def _looks_like_foreign_path(path: str) -> bool:
-    """Check if a path looks like it belongs to a different OS."""
-    if not path or not isinstance(path, str):
-        return False
-    system = platform.system()
-    # Unix-style absolute path on Windows
-    if system == "Windows" and (path.startswith("/") or path.startswith("~")):
-        return True
-    # Windows-style absolute path on Unix
-    if system in ("Linux", "Darwin") and len(path) > 1 and path[1] == ":":
-        return True
-    return False
-
-
-def _remap_path(path: str, home_path: str, desktop_path: str) -> str:
-    """Remap a hallucinated foreign path to the current OS."""
-    if not _looks_like_foreign_path(path):
-        return path
-
-    system = platform.system()
-
-    # Expand ~ to home first
-    if path.startswith("~/"):
-        path = os.path.join(home_path, path[2:])
-        return os.path.normpath(path)
-
-    if system == "Windows":
-        # Handle /home/$USER/Desktop/... or /home/name/Desktop/...
-        if re.match(r"/home/[^/]+/Desktop(/|$)", path):
-            suffix = re.sub(r"/home/[^/]+/Desktop", "", path, count=1)
-            return os.path.normpath(os.path.join(desktop_path, suffix.lstrip("/").replace("/", os.sep)))
-        # Handle /home/$USER/... or /home/name/...
-        if re.match(r"/home/[^/]+(/|$)", path):
-            suffix = re.sub(r"/home/[^/]+", "", path, count=1)
-            return os.path.normpath(os.path.join(home_path, suffix.lstrip("/").replace("/", os.sep)))
-        # Generic Unix absolute path on Windows - map to home
-        if path.startswith("/"):
-            return os.path.normpath(os.path.join(home_path, path[1:].replace("/", os.sep)))
-
-    if system in ("Linux", "Darwin"):
-        # Handle C:\Users\Name\Desktop\... or similar
-        if re.match(r"[A-Za-z]:\\Users\\[^\\]+\\Desktop(\\|$)", path):
-            suffix = re.sub(r"[A-Za-z]:\\Users\\[^\\]+\\Desktop", "", path, count=1)
-            return os.path.join(desktop_path, suffix.lstrip("\\").replace("\\", os.sep))
-        # Handle C:\Users\Name\... or any drive letter path
-        if len(path) > 1 and path[1] == ":":
-            # Strip drive letter and leading backslashes, map under home
-            suffix = re.sub(r"[A-Za-z]:(\\|/)", "", path, count=1)
-            return os.path.join(home_path, suffix.replace("\\", os.sep))
-
-    return path
-
-
-def _normalize_paths_in_text(text: str, home_path: str, desktop_path: str) -> str:
-    """Replace common hallucinated paths in a text block with actual OS paths."""
-    if not text or not isinstance(text, str):
-        return text
-
-    # Find candidate absolute paths
-    pattern = re.compile(r"(?:^|\s)([~]?(?:/[A-Za-z0-9_\-\$.]+)+/?|[A-Za-z]:\\(?:[^\\\s]+\\?)+)(?=$|\s)")
-
-    def replace_match(m):
-        path = m.group(1)
-        remapped = _remap_path(path, home_path, desktop_path)
-        return m.group(0).replace(path, remapped)
-
-    return pattern.sub(replace_match, text)
-
-
-def _remap_tool_params(params: Dict[str, Any], home_path: str, desktop_path: str) -> Dict[str, Any]:
-    """Recursively remap foreign paths in tool parameters."""
-    if not isinstance(params, dict):
-        return params
-    remapped = {}
-    for key, value in params.items():
-        if isinstance(value, str):
-            remapped[key] = _remap_path(value, home_path, desktop_path)
-        elif isinstance(value, dict):
-            remapped[key] = _remap_tool_params(value, home_path, desktop_path)
-        elif isinstance(value, list):
-            remapped[key] = [
-                _remap_path(v, home_path, desktop_path) if isinstance(v, str) else
-                _remap_tool_params(v, home_path, desktop_path) if isinstance(v, dict) else v
-                for v in value
-            ]
-        else:
-            remapped[key] = value
-    return remapped
+from ..utils.paths import get_desktop_path as _get_desktop_path
+from ..utils.paths import remap_tool_params as _remap_tool_params
 
 
 EXECUTOR_PROMPT = """You are an Executor agent for Agent-OS. Your role is to EXECUTE specific steps from a plan using available tools.
