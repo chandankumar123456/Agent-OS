@@ -115,7 +115,9 @@ pytest-asyncio>=0.23.0,<1.0.0
 pytest
 psutil
 grpcio>=1.62.0
-grpcio-tools>=1.62.0
+# grpcio-tools is a dev dependency for regenerating protobufs
+# Install separately when needed: pip install grpcio-tools
+protobuf>=6.31.1
 asyncio-throttle
 pytesseract
 comtypes
