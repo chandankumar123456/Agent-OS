@@ -3,7 +3,7 @@
 Acts as the central state source by resolving conflicts between
 Redis cache and PostgreSQL, with configurable consistency levels.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -95,7 +95,7 @@ class MemoryConsistencyLayer:
             ConsistentState reflecting the written state.
         """
         level = level or self.default_level
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         state["_last_updated"] = now
 
         if level == ConsistencyLevel.STRONG:
