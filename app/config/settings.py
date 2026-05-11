@@ -1,5 +1,4 @@
 import os
-import secrets
 from pydantic_settings import BaseSettings
 from pydantic import field_validator, model_validator, ConfigDict
 from typing import Optional
@@ -115,4 +114,43 @@ class Settings(BaseSettings):
     model_config = ConfigDict(env_file=".env", case_sensitive=False)
 
 
-settings = Settings()
+_settings_instance: Optional[Settings] = None
+
+def get_settings() -> Settings:
+    """Get the global Settings instance (lazy-loaded).
+
+    This function ensures Settings validation happens on FIRST ACCESS,
+    not at module import time. This prevents the REDIS_URL validation
+    race condition when RUNTIME_MODE is set after import but before use.
+
+    In gRPC/desktop mode, set AGENTOS_RUNTIME_MODE=grpc (or RUNTIME_MODE=grpc)
+    BEFORE calling get_settings() to bypass the REDIS_URL requirement.
+    """
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Settings()
+    return _settings_instance
+
+
+class _LazySettings:
+    """Lazy proxy for Settings that delays validation until first attribute access.
+
+    This allows imports like ``from app.config.settings import settings``
+    to succeed even when environment variables haven't been set yet.
+    Validation only runs when an actual setting is accessed.
+    """
+
+    def __getattr__(self, name: str):
+        return getattr(get_settings(), name)
+
+    def __setattr__(self, name: str, value):
+        setattr(get_settings(), name, value)
+
+    def __getitem__(self, key: str):
+        return getattr(get_settings(), key)
+
+
+# Module-level proxy that defers Settings() construction until first use.
+# This solves the REDIS_URL validation race: as long as RUNTIME_MODE is set
+# before any code reads a setting (not before the import), it will work.
+settings: Settings = _LazySettings()  # type: ignore[assignment]
