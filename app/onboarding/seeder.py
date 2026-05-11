@@ -1,5 +1,5 @@
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from ..memory.long_term import db
 from ..memory.models import (
     WorkflowModel,
@@ -89,8 +89,8 @@ async def seed_example_data(user_id: str):
                         "summary": "Multi-agent orchestration enables scalable, fault-tolerant systems by distributing tasks across specialized agents.",
                         "key_benefits": ["scalability", "fault_tolerance", "specialization", "parallelism"]
                     },
-                    created_at=datetime.utcnow(),
-                    updated_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
                 )
                 session.add(task)
                 await session.commit()
@@ -104,7 +104,7 @@ async def seed_example_data(user_id: str):
                     status="completed",
                     input_data={"query": "Research multi-agent orchestration benefits"},
                     output_data={"plan": ["research", "synthesize", "present"]},
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
                 )
                 step2 = StepModel(
                     id=str(uuid4()),
@@ -115,7 +115,7 @@ async def seed_example_data(user_id: str):
                     depends_on=[step1.id],
                     input_data={"plan": ["research", "synthesize", "present"]},
                     output_data={"findings": ["scalability", "fault_tolerance"]},
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
                 )
                 session.add(step1)
                 session.add(step2)
@@ -129,7 +129,7 @@ async def seed_example_data(user_id: str):
                     user_id=user_id,
                     trace_id=trace_id,
                     status="completed",
-                    created_at=datetime.utcnow(),
+                    created_at=datetime.now(timezone.utc),
                 )
                 session.add(trace)
                 await session.commit()
@@ -144,8 +144,8 @@ async def seed_example_data(user_id: str):
                     status="completed",
                     input_data={"query": "Research multi-agent orchestration benefits"},
                     output_data={"plan": ["research", "synthesize", "present"]},
-                    started_at=datetime.utcnow(),
-                    finished_at=datetime.utcnow(),
+                    started_at=datetime.now(timezone.utc),
+                    finished_at=datetime.now(timezone.utc),
                 )
                 node_trace2 = NodeTraceModel(
                     id=str(uuid4()),
@@ -156,8 +156,8 @@ async def seed_example_data(user_id: str):
                     status="completed",
                     input_data={"plan": ["research", "synthesize", "present"]},
                     output_data={"findings": ["scalability", "fault_tolerance"]},
-                    started_at=datetime.utcnow(),
-                    finished_at=datetime.utcnow(),
+                    started_at=datetime.now(timezone.utc),
+                    finished_at=datetime.now(timezone.utc),
                 )
                 session.add(node_trace1)
                 session.add(node_trace2)
@@ -171,8 +171,8 @@ async def seed_example_data(user_id: str):
                     operation="plan_task",
                     agent_name="planner",
                     status="completed",
-                    start_time=datetime.utcnow(),
-                    end_time=datetime.utcnow(),
+                    start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc),
                 )
                 span2 = SpanModel(
                     id=str(uuid4()),
@@ -181,8 +181,8 @@ async def seed_example_data(user_id: str):
                     operation="execute_research",
                     agent_name="executor",
                     status="completed",
-                    start_time=datetime.utcnow(),
-                    end_time=datetime.utcnow(),
+                    start_time=datetime.now(timezone.utc),
+                    end_time=datetime.now(timezone.utc),
                 )
                 session.add(span1)
                 session.add(span2)
