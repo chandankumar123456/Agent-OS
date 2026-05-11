@@ -5,7 +5,7 @@ and aborts after a configurable threshold to prevent runaway tasks.
 """
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -21,7 +21,7 @@ class LoopFingerprint(BaseModel):
     step_number: int = 0
     action: str = ""
     state_hash: str = ""
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class LoopDetectionResult(BaseModel):
@@ -119,7 +119,7 @@ class InfiniteLoopDetector:
                 "fingerprint": fingerprint,
                 "step": step_number,
                 "action": action,
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             })
             await redis_client.client.lpush(history_key, entry)
             await redis_client.client.ltrim(history_key, 0, self.history_window - 1)
