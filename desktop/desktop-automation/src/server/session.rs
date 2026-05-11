@@ -49,8 +49,9 @@ impl SessionManager {
             state: SessionState::Active,
             metadata: HashMap::new(),
         };
+        let key = session_id.clone();
         self.sessions.insert(session_id, session);
-        self.sessions.get(&session_id).unwrap()
+        self.sessions.get(&key).unwrap()
     }
 
     /// Get a session by ID
