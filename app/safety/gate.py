@@ -5,6 +5,9 @@ from typing import List, Dict, Any
 
 from .models import ActionSeverity
 from .approval_store import approval_store
+from ..logs.logger import logger
+from ..observability.bus import observability_bus
+from ..observability.models import ObservabilityEventType
 
 
 _CREDENTIAL_PATTERNS = [
@@ -93,6 +96,28 @@ class SafetyGate:
         """Classify a single tool invocation by severity."""
         # Always block forbidden tools (exact + prefix match)
         if self._is_forbidden(tool_name):
+            # Emit audit event for blocked action
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    task_id = params.get("_task_id", "unknown")
+                    asyncio.ensure_future(
+                        observability_bus.emit_safe(
+                            ObservabilityEventType.SAFETY_CHECK,
+                            task_id=task_id,
+                            payload={
+                                "tool": tool_name,
+                                "params": {k: v for k, v in params.items() if not k.startswith("_")},
+                                "severity": "irreversible",
+                                "action": "blocked",
+                                "query_preview": query[:200],
+                            },
+                            source="safety_gate",
+                        )
+                    )
+            except Exception as e:
+                logger.warning(f"Failed to emit safety audit event: {e}")
             return ActionSeverity.IRREVERSIBLE
 
         # Check if full-trust mode applies
