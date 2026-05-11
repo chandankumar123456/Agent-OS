@@ -997,38 +997,53 @@ class DesktopSession:
                             }
                         )
             elif sys.platform.startswith("linux"):
-                result = subprocess.run(
-                    ["wmctrl", "-l"],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
+                try:
+                    result = subprocess.run(
+                        ["wmctrl", "-l"],
+                        capture_output=True,
+                        text=True,
+                        timeout=5.0,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"DesktopSession[{self.task_id}]: wmctrl timed out")
+                    result = None
+                if result and result.returncode == 0:
                     for line in result.stdout.splitlines():
                         parts = line.split(None, 3)
                         if len(parts) >= 4:
                             windows.append({"title": parts[3]})
                 else:
-                    result = subprocess.run(
-                        ["xdotool", "search", "--onlyvisible", "--name", ".*", "getwindowname"],
-                        capture_output=True,
-                        text=True,
-                    )
-                    if result.returncode == 0:
+                    try:
+                        result = subprocess.run(
+                            ["xdotool", "search", "--onlyvisible", "--name", ".*", "getwindowname"],
+                            capture_output=True,
+                            text=True,
+                            timeout=5.0,
+                        )
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"DesktopSession[{self.task_id}]: xdotool timed out")
+                        result = None
+                    if result and result.returncode == 0:
                         for title in result.stdout.splitlines():
                             if title:
                                 windows.append({"title": title})
             elif sys.platform == "darwin":
-                result = subprocess.run(
-                    [
-                        "osascript",
-                        "-e",
-                        'tell application "System Events" to get name of every window of '
-                        '(get processes whose visible is true)',
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode == 0:
+                try:
+                    result = subprocess.run(
+                        [
+                            "osascript",
+                            "-e",
+                            'tell application "System Events" to get name of every window of '
+                            '(get processes whose visible is true)',
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=10.0,
+                    )
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"DesktopSession[{self.task_id}]: osascript timed out")
+                    result = None
+                if result and result.returncode == 0:
                     for title in result.stdout.split(","):
                         t = title.strip()
                         if t:
