@@ -5,7 +5,7 @@ and scales based on queue depth and load factor.
 """
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -30,8 +30,8 @@ class WorkerInfo(BaseModel):
     """Information about a worker."""
     worker_id: str
     status: WorkerStatus
-    registered_at: datetime = Field(default_factory=datetime.utcnow)
-    last_heartbeat: datetime = Field(default_factory=datetime.utcnow)
+    registered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    last_heartbeat: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     tasks_completed: int = 0
     tasks_failed: int = 0
     current_task_id: Optional[str] = None
@@ -129,7 +129,7 @@ class WorkerPoolManager:
 
             import json
             info = WorkerInfo(**json.loads(value))
-            info.last_heartbeat = datetime.utcnow()
+            info.last_heartbeat = datetime.now(timezone.utc)
             if status:
                 info.status = status
 
@@ -255,7 +255,7 @@ class WorkerPoolManager:
         unhealthy = []
         try:
             workers = await self.list_workers()
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             for info in workers:
                 last_heartbeat = info.last_heartbeat
                 if isinstance(last_heartbeat, str):
