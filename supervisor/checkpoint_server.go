@@ -4,42 +4,53 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 	"time"
 
-	"github.com/AgentOS/supervisor/proto"
+	"github.com/AgentOS/supervisor/logger"
+	cp "github.com/AgentOS/supervisor/proto/checkpoint"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // CheckpointServer implements the CheckpointServiceServer interface
 type CheckpointServer struct {
-	proto.UnimplementedCheckpointServiceServer
+	cp.UnimplementedCheckpointServiceServer
 	mu            sync.RWMutex
-	checkpoints   map[string]*proto.Checkpoint
-	checkpointSub map[string]chan *proto.CheckpointEvent
+	checkpoints   map[string]*cp.Checkpoint
+	checkpointSub map[string]chan *cp.CheckpointEvent
 	db            *DB
-	logger        *log.Logger
+	logger        *logger.Logger
 	grpcServer    *grpc.Server
+	running       bool
 	port          int
+	authKey       string // API key for local auth
+}
+
+// SetAuthKey sets the API key for gRPC auth
+func (s *CheckpointServer) SetAuthKey(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.authKey = key
 }
 
 // NewCheckpointServer creates a new checkpoint server
-func NewCheckpointServer(db *DB, logger *log.Logger) *CheckpointServer {
+func NewCheckpointServer(db *DB, logger *logger.Logger) *CheckpointServer {
 	return &CheckpointServer{
-		checkpoints:   make(map[string]*proto.Checkpoint),
-		checkpointSub: make(map[string]chan *proto.CheckpointEvent),
+		checkpoints:   make(map[string]*cp.Checkpoint),
+		checkpointSub: make(map[string]chan *cp.CheckpointEvent),
 		db:            db,
 		logger:        logger,
 	}
 }
 
 // SaveCheckpoint saves a checkpoint to the database
-func (s *CheckpointServer) SaveCheckpoint(ctx context.Context, req *proto.SaveCheckpointRequest) (*proto.SaveCheckpointResponse, error) {
+func (s *CheckpointServer) SaveCheckpoint(ctx context.Context, req *cp.SaveCheckpointRequest) (*cp.SaveCheckpointResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -47,7 +58,7 @@ func (s *CheckpointServer) SaveCheckpoint(ctx context.Context, req *proto.SaveCh
 	checkpointID := fmt.Sprintf("checkpoint_%d", time.Now().UnixNano())
 
 	// Create checkpoint
-	checkpoint := &proto.Checkpoint{
+	checkpoint := &cp.Checkpoint{
 		Id:             checkpointID,
 		ThreadId:       req.ThreadId,
 		CheckpointNs:   time.Now().UnixNano(),
@@ -66,10 +77,10 @@ func (s *CheckpointServer) SaveCheckpoint(ctx context.Context, req *proto.SaveCh
 	s.checkpoints[checkpointID] = checkpoint
 
 	// Create event
-	event := &proto.CheckpointEvent{
+	event := &cp.CheckpointEvent{
 		CheckpointId: checkpointID,
 		ThreadId:     req.ThreadId,
-		EventType:    proto.CheckpointEventType_CHECKPOINT_EVENT_CREATED,
+		EventType:    cp.CheckpointEventType_CHECKPOINT_EVENT_CREATED,
 		Timestamp:    timestamppb.Now(),
 		Checkpoint:   checkpoint,
 	}
@@ -85,17 +96,17 @@ func (s *CheckpointServer) SaveCheckpoint(ctx context.Context, req *proto.SaveCh
 
 	// Save to database
 	if err := s.saveCheckpointToDB(checkpoint); err != nil {
-		s.logger.Printf("Warning: Failed to save checkpoint to database: %v", err)
+		s.logger.Infof("Warning: Failed to save checkpoint to database: %v", err)
 	}
 
-	return &proto.SaveCheckpointResponse{
+	return &cp.SaveCheckpointResponse{
 		Success:      true,
 		CheckpointId: checkpointID,
 	}, nil
 }
 
 // GetCheckpoint retrieves a checkpoint by ID
-func (s *CheckpointServer) GetCheckpoint(ctx context.Context, req *proto.GetCheckpointRequest) (*proto.GetCheckpointResponse, error) {
+func (s *CheckpointServer) GetCheckpoint(ctx context.Context, req *cp.GetCheckpointRequest) (*cp.GetCheckpointResponse, error) {
 	s.mu.RLock()
 	checkpoint, ok := s.checkpoints[req.CheckpointId]
 	s.mu.RUnlock()
@@ -106,27 +117,27 @@ func (s *CheckpointServer) GetCheckpoint(ctx context.Context, req *proto.GetChec
 		if err != nil {
 			return nil, status.Error(codes.NotFound, "checkpoint not found")
 		}
-		return &proto.GetCheckpointResponse{
+		return &cp.GetCheckpointResponse{
 			Success:  true,
 			Checkpoint: checkpoint,
 		}, nil
 	}
 
-	return &proto.GetCheckpointResponse{
+	return &cp.GetCheckpointResponse{
 		Success:    true,
 		Checkpoint: checkpoint,
 	}, nil
 }
 
 // ListCheckpoints lists checkpoints for a thread with pagination
-func (s *CheckpointServer) ListCheckpoints(ctx context.Context, req *proto.ListCheckpointsRequest) (*proto.ListCheckpointsResponse, error) {
+func (s *CheckpointServer) ListCheckpoints(ctx context.Context, req *cp.ListCheckpointsRequest) (*cp.ListCheckpointsResponse, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var checkpoints []*proto.Checkpoint
-	for _, cp := range s.checkpoints {
-		if cp.ThreadId == req.ThreadId {
-			checkpoints = append(checkpoints, cp)
+	var checkpoints []*cp.Checkpoint
+	for _, ckpt := range s.checkpoints {
+		if ckpt.ThreadId == req.ThreadId {
+			checkpoints = append(checkpoints, ckpt)
 		}
 	}
 
@@ -142,7 +153,7 @@ func (s *CheckpointServer) ListCheckpoints(ctx context.Context, req *proto.ListC
 	// Apply pagination
 	start := int(req.Offset)
 	if start >= len(checkpoints) {
-		checkpoints = []*proto.Checkpoint{}
+		checkpoints = []*cp.Checkpoint{}
 	} else {
 		end := start + int(req.Limit)
 		if end > len(checkpoints) {
@@ -151,7 +162,7 @@ func (s *CheckpointServer) ListCheckpoints(ctx context.Context, req *proto.ListC
 		checkpoints = checkpoints[start:end]
 	}
 
-	return &proto.ListCheckpointsResponse{
+	return &cp.ListCheckpointsResponse{
 		Success:     true,
 		Checkpoints: checkpoints,
 		TotalCount:  int32(len(checkpoints)),
@@ -159,17 +170,17 @@ func (s *CheckpointServer) ListCheckpoints(ctx context.Context, req *proto.ListC
 }
 
 // GetLatestCheckpoint gets the most recent checkpoint for a thread
-func (s *CheckpointServer) GetLatestCheckpoint(ctx context.Context, req *proto.GetLatestCheckpointRequest) (*proto.GetCheckpointResponse, error) {
+func (s *CheckpointServer) GetLatestCheckpoint(ctx context.Context, req *cp.GetLatestCheckpointRequest) (*cp.GetCheckpointResponse, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var latestCheckpoint *proto.Checkpoint
+	var latestCheckpoint *cp.Checkpoint
 	var latestTime int64 = -1
 
-	for _, cp := range s.checkpoints {
-		if cp.ThreadId == req.ThreadId && cp.CheckpointNs > latestTime {
-			latestTime = cp.CheckpointNs
-			latestCheckpoint = cp
+	for _, ckpt := range s.checkpoints {
+		if ckpt.ThreadId == req.ThreadId && ckpt.CheckpointNs > latestTime {
+			latestTime = ckpt.CheckpointNs
+			latestCheckpoint = ckpt
 		}
 	}
 
@@ -182,14 +193,14 @@ func (s *CheckpointServer) GetLatestCheckpoint(ctx context.Context, req *proto.G
 		latestCheckpoint = checkpoints[0]
 	}
 
-	return &proto.GetCheckpointResponse{
+	return &cp.GetCheckpointResponse{
 		Success:    true,
 		Checkpoint: latestCheckpoint,
 	}, nil
 }
 
 // CleanupCheckpoints removes old checkpoints
-func (s *CheckpointServer) CleanupCheckpoints(ctx context.Context, req *proto.CleanupCheckpointsRequest) (*proto.CleanupCheckpointsResponse, error) {
+func (s *CheckpointServer) CleanupCheckpoints(ctx context.Context, req *cp.CleanupCheckpointsRequest) (*cp.CleanupCheckpointsResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -218,7 +229,7 @@ func (s *CheckpointServer) CleanupCheckpoints(ctx context.Context, req *proto.Cl
 	// Keep N most recent checkpoints
 	if req.KeepCount > 0 {
 		// Sort by timestamp
-		var sorted []*proto.Checkpoint
+		var sorted []*cp.Checkpoint
 		for _, id := range toDelete {
 			if cp, ok := s.checkpoints[id]; ok {
 				sorted = append(sorted, cp)
@@ -234,8 +245,8 @@ func (s *CheckpointServer) CleanupCheckpoints(ctx context.Context, req *proto.Cl
 
 		// Keep only the most recent ones
 		if len(sorted) > int(req.KeepCount) {
-			for _, cp := range sorted[:len(sorted)-int(req.KeepCount)] {
-				toDelete = append(toDelete, cp.Id)
+			for _, ckpt := range sorted[:len(sorted)-int(req.KeepCount)] {
+				toDelete = append(toDelete, ckpt.Id)
 			}
 		}
 	}
@@ -250,9 +261,9 @@ func (s *CheckpointServer) CleanupCheckpoints(ctx context.Context, req *proto.Cl
 	}
 
 	// Log cleanup
-	s.logger.Printf("Checkpoint cleanup: deleted %d checkpoints", deletedCount)
+	s.logger.Infof("Checkpoint cleanup: deleted %d checkpoints", deletedCount)
 
-	return &proto.CleanupCheckpointsResponse{
+	return &cp.CleanupCheckpointsResponse{
 		Success:     true,
 		DeletedCount: deletedCount,
 		DeletedIds:  deletedIDs,
@@ -260,11 +271,11 @@ func (s *CheckpointServer) CleanupCheckpoints(ctx context.Context, req *proto.Cl
 }
 
 // SubscribeCheckpoints subscribes to checkpoint events for a thread
-func (s *CheckpointServer) SubscribeCheckpoints(req *proto.SubscribeCheckpointsRequest, stream proto.CheckpointService_SubscribeCheckpointsServer) error {
+func (s *CheckpointServer) SubscribeCheckpoints(req *cp.SubscribeCheckpointsRequest, stream cp.CheckpointService_SubscribeCheckpointsServer) error {
 	s.mu.Lock()
 
 	// Create event channel for this subscription
-	eventChan := make(chan *proto.CheckpointEvent, 100)
+	eventChan := make(chan *cp.CheckpointEvent, 100)
 	threadID := req.ThreadId
 	if threadID == "" {
 		threadID = "all" // Subscribe to all threads
@@ -274,14 +285,14 @@ func (s *CheckpointServer) SubscribeCheckpoints(req *proto.SubscribeCheckpointsR
 	// Send historical events if requested
 	if req.IncludeHistory {
 		s.mu.RLock()
-		for _, cp := range s.checkpoints {
-			if req.ThreadId == "" || cp.ThreadId == req.ThreadId {
-				event := &proto.CheckpointEvent{
-					CheckpointId: cp.Id,
-					ThreadId:     cp.ThreadId,
-					EventType:    proto.CheckpointEventType_CHECKPOINT_EVENT_CREATED,
-					Timestamp:    cp.CreatedAt,
-					Checkpoint:   cp,
+		for _, ckpt := range s.checkpoints {
+			if req.ThreadId == "" || ckpt.ThreadId == req.ThreadId {
+				event := &cp.CheckpointEvent{
+					CheckpointId: ckpt.Id,
+					ThreadId:     ckpt.ThreadId,
+					EventType:    cp.CheckpointEventType_CHECKPOINT_EVENT_CREATED,
+					Timestamp:    ckpt.CreatedAt,
+					Checkpoint:   ckpt,
 				}
 				if err := stream.Send(event); err != nil {
 					s.mu.RUnlock()
@@ -319,22 +330,22 @@ func (s *CheckpointServer) SubscribeCheckpoints(req *proto.SubscribeCheckpointsR
 }
 
 // HealthCheck returns the health status of the checkpoint server
-func (s *CheckpointServer) HealthCheck(ctx context.Context, req *proto.CheckpointHealthRequest) (*proto.CheckpointHealthResponse, error) {
+func (s *CheckpointServer) HealthCheck(ctx context.Context, req *cp.CheckpointHealthRequest) (*cp.CheckpointHealthResponse, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	// Calculate statistics
 	totalCheckpoints := int64(len(s.checkpoints))
 	var totalSizeBytes int64
-	for _, cp := range s.checkpoints {
-		totalSizeBytes += int64(len(cp.StateBlob) + len(cp.ChannelValues) + len(cp.PendingSends))
+	for _, ckpt := range s.checkpoints {
+		totalSizeBytes += int64(len(ckpt.StateBlob) + len(ckpt.ChannelValues) + len(ckpt.PendingSends))
 	}
 
-	return &proto.CheckpointHealthResponse{
+	return &cp.CheckpointHealthResponse{
 		Healthy:          true,
 		TotalCheckpoints: totalCheckpoints,
 		TotalSizeBytes:   totalSizeBytes,
-		MigrationStatus: &proto.MigrationStatus{
+		MigrationStatus: &cp.MigrationStatus{
 			CurrentVersion:      "1.0.0",
 			AppliedMigrations:   []string{"initial_schema"},
 			PendingMigrations:   []string{},
@@ -344,7 +355,7 @@ func (s *CheckpointServer) HealthCheck(ctx context.Context, req *proto.Checkpoin
 }
 
 // saveCheckpointToDB saves a checkpoint to the database
-func (s *CheckpointServer) saveCheckpointToDB(cp *proto.Checkpoint) error {
+func (s *CheckpointServer) saveCheckpointToDB(cp *cp.Checkpoint) error {
 	// Serialize checkpoint metadata to JSON
 	metadataJSON, err := json.Marshal(map[string]interface{}{
 		"checkpoint_type": cp.CheckpointType.String(),
@@ -371,7 +382,7 @@ func (s *CheckpointServer) saveCheckpointToDB(cp *proto.Checkpoint) error {
 }
 
 // loadCheckpointFromDB loads a checkpoint from the database
-func (s *CheckpointServer) loadCheckpointFromDB(checkpointID string) (*proto.Checkpoint, error) {
+func (s *CheckpointServer) loadCheckpointFromDB(checkpointID string) (*cp.Checkpoint, error) {
 	var (
 		id, threadID, checkpointType, stateBlob, channelValues, pendingSends, parentIDs, metadata, taskID string
 		checkpointNs                                                                                       int64
@@ -402,7 +413,7 @@ func (s *CheckpointServer) loadCheckpointFromDB(checkpointID string) (*proto.Che
 		}
 	}
 
-	return &proto.Checkpoint{
+	return &cp.Checkpoint{
 		Id:             id,
 		ThreadId:       threadID,
 		CheckpointNs:   checkpointNs,
@@ -419,7 +430,7 @@ func (s *CheckpointServer) loadCheckpointFromDB(checkpointID string) (*proto.Che
 }
 
 // loadCheckpointsFromDB loads multiple checkpoints from the database
-func (s *CheckpointServer) loadCheckpointsFromDB(threadID string, limit int) ([]*proto.Checkpoint, error) {
+func (s *CheckpointServer) loadCheckpointsFromDB(threadID string, limit int) ([]*cp.Checkpoint, error) {
 	rows, err := s.db.conn.Query(
 		`SELECT id, thread_id, checkpoint_ns, checkpoint_type, created_at, updated_at, state_blob, channel_values, pending_sends, parent_ids, metadata, task_id
 		 FROM checkpoints WHERE thread_id = ? ORDER BY checkpoint_ns DESC LIMIT ?`,
@@ -430,7 +441,7 @@ func (s *CheckpointServer) loadCheckpointsFromDB(threadID string, limit int) ([]
 	}
 	defer rows.Close()
 
-	var checkpoints []*proto.Checkpoint
+	var checkpoints []*cp.Checkpoint
 	for rows.Next() {
 		var (
 			id, threadID, checkpointType, stateBlob, channelValues, pendingSends, parentIDs, metadata, taskID string
@@ -458,7 +469,7 @@ func (s *CheckpointServer) loadCheckpointsFromDB(threadID string, limit int) ([]
 			}
 		}
 
-		checkpoint := &proto.Checkpoint{
+		checkpoint := &cp.Checkpoint{
 			Id:             id,
 			ThreadId:       threadID,
 			CheckpointNs:   checkpointNs,
@@ -479,41 +490,71 @@ func (s *CheckpointServer) loadCheckpointsFromDB(threadID string, limit int) ([]
 }
 
 // convertCheckpointType converts string checkpoint type to protobuf CheckpointType
-func convertCheckpointType(checkpointType string) proto.CheckpointType {
+func convertCheckpointType(checkpointType string) cp.CheckpointType {
 	switch checkpointType {
 	case "CHECKPOINT_TYPE_LOCAL":
-		return proto.CheckpointType_CHECKPOINT_TYPE_LOCAL
+		return cp.CheckpointType_CHECKPOINT_TYPE_LOCAL
 	case "CHECKPOINT_TYPE_MEMORY":
-		return proto.CheckpointType_CHECKPOINT_TYPE_MEMORY
+		return cp.CheckpointType_CHECKPOINT_TYPE_MEMORY
 	default:
-		return proto.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
+		return cp.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED
 	}
 }
 
-// StartGRPC starts the gRPC server for the checkpoint service
-func (s *CheckpointServer) StartGRPC(port int) error {
+// StartGRPC starts the gRPC server for the checkpoint service with TLS + API key auth
+func (s *CheckpointServer) StartGRPC(port int, cryptoMgr *CryptoManager) error {
 	s.port = port
-	addr := fmt.Sprintf(":%d", port)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
 
-	// Create gRPC server
-	grpcServer := grpc.NewServer()
+	// Load TLS config
+	tlsConfig, err := cryptoMgr.GetServerTLSConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load TLS config: %w", err)
+	}
+	cred := credentials.NewTLS(tlsConfig)
+
+	// Create auth interceptor
+	authInterceptor := func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
+		md, ok := metadata.FromIncomingContext(ctx)
+		if !ok {
+			return nil, status.Error(codes.Unauthenticated, "missing metadata")
+		}
+		keys := md.Get("x-api-key")
+		if len(keys) == 0 || keys[0] != s.authKey {
+			return nil, status.Error(codes.Unauthenticated, "invalid API key")
+		}
+		return handler(ctx, req)
+	}
+
+	// Create gRPC server with TLS and auth
+	grpcServer := grpc.NewServer(
+		grpc.Creds(cred),
+		grpc.UnaryInterceptor(authInterceptor),
+	)
 
 	// Register checkpoint service
-	proto.RegisterCheckpointServiceServer(grpcServer, s)
+	cp.RegisterCheckpointServiceServer(grpcServer, s)
 
 	s.grpcServer = grpcServer
+	s.running = true
 
 	// Start gRPC server in goroutine
 	go func() {
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
-			s.logger.Printf("Failed to start checkpoint gRPC server on port %d: %v", port, err)
+			s.logger.Infof("Failed to start checkpoint gRPC server on port %d: %v", port, err)
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
 			return
 		}
-		s.logger.Printf("Checkpoint gRPC server starting on port %d", port)
+		s.logger.Infof("Checkpoint gRPC server starting on %s with TLS + auth", addr)
 		if err := grpcServer.Serve(listener); err != nil {
-			s.logger.Printf("Checkpoint gRPC server error: %v", err)
+			s.logger.Infof("Checkpoint gRPC server error: %v", err)
 		}
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
 	}()
 
 	// Wait for server to be ready
@@ -526,7 +567,8 @@ func (s *CheckpointServer) StartGRPC(port int) error {
 func (s *CheckpointServer) StopGRPC() error {
 	if s.grpcServer != nil {
 		s.grpcServer.GracefulStop()
-		s.logger.Printf("Checkpoint gRPC server stopped")
+		s.running = false
+		s.logger.Infof("Checkpoint gRPC server stopped")
 	}
 	return nil
 }
@@ -534,4 +576,11 @@ func (s *CheckpointServer) StopGRPC() error {
 // GetPort returns the gRPC server port
 func (s *CheckpointServer) GetPort() int {
 	return s.port
+}
+
+// IsHealthy returns whether the gRPC server is running
+func (s *CheckpointServer) IsHealthy() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.running
 }
