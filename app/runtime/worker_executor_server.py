@@ -14,9 +14,8 @@ from typing import Dict, Any
 import grpc
 from grpc import aio
 
-# Import protobuf modules
-import worker_pb2
-import worker_pb2_grpc
+# Import protobuf modules from canonical location
+from app.proto import worker_pb2, worker_pb2_grpc
 
 # Configure logging
 logging.basicConfig(
