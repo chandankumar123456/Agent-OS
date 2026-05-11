@@ -5,7 +5,6 @@ use anyhow::{Result, Context};
 
 pub const DEFAULT_SUPERVISOR_HOST: &str = "127.0.0.1";
 pub const DEFAULT_SUPERVISOR_PORT: u16 = 8080;
-pub const DEFAULT_DATA_DIR: &str = "~/.agentos";
 pub const DEFAULT_LOG_LEVEL: &str = "info";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
