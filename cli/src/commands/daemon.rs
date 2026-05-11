@@ -4,7 +4,7 @@ use anyhow::{Result, Context};
 use colored::*;
 use std::process::Command;
 
-pub async fn start(_config: &Config, background: bool, auto_start: bool) -> Result<()> {
+pub async fn start(_config: &Config, background: bool, _auto_start: bool) -> Result<()> {
     // Check if already running
     let client = ApiClient::new(_config);
     
