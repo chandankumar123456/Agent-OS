@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ...memory.long_term import db
 from ...memory.models import ChatSessionModel, ChatMessageModel
@@ -127,7 +127,7 @@ async def send_message(
         session.add(user_msg)
 
         # Update session timestamp
-        chat_session.updated_at = datetime.utcnow()
+        chat_session.updated_at = datetime.now(timezone.utc)
         await session.commit()
         await session.refresh(user_msg)
 
