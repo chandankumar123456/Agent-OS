@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ApprovalMode(str, Enum):
@@ -14,12 +14,12 @@ class ApprovalSession:
     task_id: str
     mode: ApprovalMode = ApprovalMode.STANDARD
     audit_log: List[Dict] = field(default_factory=list)
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
-    updated_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def log_action(self, tool_name: str, params: dict, auto_approved: bool, reason: str):
         self.audit_log.append({
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "tool_name": tool_name,
             "params": {k: v for k, v in params.items() if not k.startswith("_")},
             "auto_approved": auto_approved,
@@ -42,7 +42,7 @@ class ApprovalStore:
             self._sessions[task_id] = session
         else:
             session.mode = mode_enum
-            session.updated_at = datetime.utcnow().isoformat()
+            session.updated_at = datetime.now(timezone.utc).isoformat()
         return session
 
     def get_mode(self, task_id: str) -> ApprovalMode:
