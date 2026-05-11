@@ -1,8 +1,10 @@
 import asyncio
+import os
 import pytest
 from app.memory.redis_pubsub import RedisPubSubClient
 
 
+@pytest.mark.skipif(not os.environ.get("REDIS_URL"), reason="REDIS_URL not set")
 @pytest.mark.asyncio
 async def test_pubsub_connect_publish_subscribe():
     client = RedisPubSubClient()
@@ -24,6 +26,7 @@ async def test_pubsub_connect_publish_subscribe():
     assert received == ["hello"]
 
 
+@pytest.mark.skipif(not os.environ.get("REDIS_URL"), reason="REDIS_URL not set")
 @pytest.mark.asyncio
 async def test_pubsub_reconnect_after_dead_connection():
     client = RedisPubSubClient()
