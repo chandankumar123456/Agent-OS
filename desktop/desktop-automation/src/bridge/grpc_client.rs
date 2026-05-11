@@ -63,6 +63,7 @@ impl RetryConfig {
 }
 
 /// gRPC client for desktop automation with retry support
+#[derive(Clone)]
 pub struct DesktopGrpcClient {
     client: DesktopAutomationClient<Channel>,
     retry_config: RetryConfig,
