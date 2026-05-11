@@ -37,9 +37,6 @@ from ..logs.logger import logger
 from ..proto import runtime_pb2_grpc
 from ..proto import checkpoint_pb2_grpc
 from ..proto import worker_pb2_grpc
-from ..proto import runtime_pb2_grpc
-from ..proto import checkpoint_pb2_grpc
-from ..proto import worker_pb2_grpc
 
 
 @dataclass
