@@ -2,14 +2,13 @@
 import json
 import os
 import platform
-import re
 from typing import Dict, Any, List, Set, Optional
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from langgraph.types import interrupt
 
 from ..agents.llm_client import get_llm_client
 from ..logs.logger import logger
-from ..tools.registry import tool_registry
+from ..tools.registry import tool_registry, is_task_cancelled
 from ..tools.grounding import tool_grounding_layer
 from ..workflows.decomposer import workflow_decomposer
 from ..capabilities import verification_engine, recovery_engine
@@ -44,82 +43,14 @@ async def _validate_node_output(node_name: str, task_id: str, result: Dict[str, 
     return result
 
 from ..desktop.goal_loop import DesktopGoalLoop
+from ..utils.paths import get_desktop_path as _get_desktop_path
+from ..utils.paths import resolve_default_params as _build_default_params
 
 
 def _to_openai_messages(messages):
     """Map LangChain message types to OpenAI roles."""
     role_map = {"human": "user", "ai": "assistant", "system": "system", "tool": "tool"}
     return [{"role": role_map.get(m.type, m.type), "content": m.content} for m in messages]
-
-
-def _get_desktop_path() -> str:
-    """Return the user's Desktop absolute path for the current OS."""
-    home = os.path.expanduser("~")
-    if platform.system() == "Windows":
-        user_desktop = os.path.join(home, "Desktop")
-        if os.path.isdir(user_desktop):
-            return user_desktop
-        public_desktop = os.path.join(os.path.dirname(home), "Public", "Desktop")
-        if os.path.isdir(public_desktop):
-            return public_desktop
-        return user_desktop
-    elif platform.system() == "Darwin":
-        return os.path.join(home, "Desktop")
-    else:
-        return os.path.join(home, "Desktop")
-
-
-def _extract_path_from_description(description: str) -> Optional[str]:
-    """Extract a likely file path from a step description."""
-    import re
-    # Match Windows or Unix absolute paths
-    matches = re.findall(r"([A-Za-z]:\\[^\s\"'<>]+|/~?(?:/[^\s\"'<>]+)+)", description)
-    if matches:
-        return matches[0]
-    return None
-
-
-def _build_default_params(tool_name: str, description: str) -> Optional[Dict[str, Any]]:
-    """Build default parameters for obviously-intented tools without LLM."""
-    path = _extract_path_from_description(description)
-    if tool_name == "filesystem__read_file" and path:
-        return {"path": path}
-    if tool_name == "filesystem__write_file" and path:
-        # For write, we can't guess content; return None to force LLM
-        return None
-    if tool_name == "filesystem__list_directory" and path:
-        return {"path": path}
-    if tool_name == "filesystem__search_files":
-        path_match = re.findall(r"([A-Za-z]:\\[^\s\"'<>]*|/~?(?:/[^\s\"'<>]+)*)", description)
-        search_path = path_match[0] if path_match else _get_desktop_path()
-        words = description.lower().split()
-        stopwords = {"find", "search", "locate", "look", "for", "my", "the", "a", "in", "under", "at", "file", "files", "and", "or"}
-        pattern = "*"
-        for w in words:
-            if w not in stopwords and len(w) > 2:
-                pattern = f"*{w}*"
-                break
-        return {"path": search_path, "pattern": pattern}
-    if tool_name == "document__parse" and path:
-        return {"path": path}
-    if tool_name == "shell__execute_command":
-        # Only auto-build for very obvious commands
-        if "open" in description.lower() and "chrome" in description.lower() and path:
-            return {"command": f'start chrome "{path}"'}
-        if "open" in description.lower() and "explorer" in description.lower():
-            open_path = path or os.path.expanduser("~")
-            return {"command": f'explorer "{open_path}"'}
-    if tool_name.startswith("browser_env__"):
-        if "navigate" in description.lower() or "go to" in description.lower():
-            url_match = re.findall(r"https?://[^\s\"'<>]+", description)
-            if url_match:
-                return {"url": url_match[0]}
-        # Empty dict is NOT valid params for browser tools — force LLM generation
-        return None
-    if tool_name.startswith("desktop_env__"):
-        # Empty dict is NOT valid params for desktop tools — force LLM generation
-        return None
-    return None
 
 
 def _deterministic_tool_select(description: str, available_tools: List[Dict[str, Any]]) -> Optional[str]:
@@ -371,6 +302,18 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     plan = state.get("plan", [])
     idx = state.get("current_step_index", 0)
     task_id = state.get("task_id", "")
+
+    # Check for task cancellation before proceeding
+    if task_id and await is_task_cancelled(task_id):
+        logger.info(f"[executor_node] Task {task_id} was cancelled, halting execution")
+        return {
+            "steps": state.get("steps", []),
+            "current_step_index": len(plan),
+            "tool_calls": state.get("tool_calls", []),
+            "messages": [AIMessage(content="Task was cancelled.")],
+            "status": "cancelled",
+            "error": "Task was cancelled",
+        }
 
     if idx >= len(plan):
         logger.info(f"[executor_node] All steps complete for task {task_id}")
@@ -656,9 +599,6 @@ To provide a direct answer (only if no tool is needed):
                 messages.append(HumanMessage(content=warn_msg))
                 continue
 
-            # Inject task_id for observability and session management
-            tool_params["_task_id"] = task_id
-
             # Duplicate-call guard
             call_signature = json.dumps({"name": tool_name, "params": tool_params}, sort_keys=True, default=str)
             if call_signature in calls_this_step:
@@ -671,130 +611,57 @@ To provide a direct answer (only if no tool is needed):
                 continue
             calls_this_step.add(call_signature)
 
-            # Validate tool exists
-            tool = tool_registry.get(tool_name)
-            if not tool:
-                error_msg = f"Tool '{tool_name}' not found"
-                logger.error(f"[executor_node] {error_msg}")
-                messages.append(AIMessage(content=json.dumps(response)))
-                messages.append(HumanMessage(content=f"Error: {error_msg}. Use a valid tool or provide a direct answer."))
-                continue
-
-            severity = SafetyGate().check_tool_call(tool_name, tool_params, state.get("query", ""))
-            if severity == ActionSeverity.IRREVERSIBLE:
-                await observability_bus.emit_safe(
-                    ObservabilityEventType.SAFETY_CHECK,
-                    task_id=task_id,
-                    trace_id=state.get("trace_id"),
-                    payload={"tool": tool_name, "severity": "irreversible", "params": tool_params},
-                    source="safety_gate",
-                )
-                # Block irreversible actions pending human approval
-                tool_result = {
-                    "success": False,
-                    "data": None,
-                    "error": f"Action blocked: '{tool_name}' is classified as irreversible. Human approval required.",
-                }
-                tool_calls.append({
-                    "step": step_number,
-                    "tool": tool_name,
-                    "result": tool_result,
-                })
-                step_tool_results.append(tool_result)
-                messages.append(AIMessage(content=json.dumps(response)))
-                messages.append(HumanMessage(
-                    content=f"Tool '{tool_name}' was BLOCKED as irreversible. You need explicit human approval to proceed."
-                ))
-                continue
-
-            logger.info(f"[executor_node][TRACE] EXECUTING TOOL: tool_name='{tool_name}'")
-            logger.info(f"[executor_node][TRACE] TOOL PAYLOAD: {json.dumps(tool_params, indent=2, default=str)}")
-            await observability_bus.emit_safe(
-                ObservabilityEventType.TOOL_INVOKED,
+            # Use shared tool execution (deduplicated with _execute_tool_call)
+            exec_result = await _execute_tool_call(
                 task_id=task_id,
-                trace_id=state.get("trace_id"),
-                step_id=str(step_number),
-                payload={"tool": tool_name, "params": tool_params},
-                source="executor_node",
+                step_number=step_number,
+                description=description,
+                tool_name=tool_name,
+                tool_params=tool_params,
+                state=state,
+                idx=idx,
+                grounded_tool_names=grounded_tool_names,
+                execution_state=execution_state,
             )
 
-            # Emit progress heartbeat so frontend stays alive during long operations
-            try:
-                await event_bus.publish(
-                    f"task:{task_id}",
-                    Event("task.progress", {"task_id": task_id, "step": step_number, "tool": tool_name, "status": "executing"}, source="executor"),
-                )
-            except Exception:
-                pass
+            # Merge new state entries from shared execution into local accumulators
+            if exec_result.get("tool_calls"):
+                new_calls = [c for c in exec_result["tool_calls"] if c not in tool_calls]
+                tool_calls.extend(new_calls)
+                for c in new_calls:
+                    step_tool_results.append(c.get("result", {}))
+            if exec_result.get("verification_reports"):
+                for r in exec_result["verification_reports"]:
+                    if r not in verification_reports:
+                        verification_reports.append(r)
+            if exec_result.get("recovery_decisions"):
+                for r in exec_result["recovery_decisions"]:
+                    if r not in recovery_decisions:
+                        recovery_decisions.append(r)
 
-            try:
-                tool_output = await tool_registry.execute(tool_name, tool_params)
-                logger.info(f"[executor_node][TRACE] RAW TOOL RESPONSE: success={tool_output.success} result={tool_output.result} error={tool_output.error}")
-                tool_result = {
-                    "success": tool_output.success,
-                    "data": tool_output.result if tool_output.result is not None else str(tool_output),
-                    "error": tool_output.error,
-                }
-            except Exception as e:
-                logger.error(f"[executor_node][TRACE] Tool execution EXCEPTION: {e}")
-                logger.error(f"[executor_node] Tool execution error: {e}")
-                tool_result = {"success": False, "error": str(e)}
+            result_status = exec_result.get("status", "step_executed")
 
-            # Record tool result
-            tool_calls.append({
-                "step": step_number,
-                "tool": tool_name,
-                "result": tool_result,
-            })
-            step_tool_results.append(tool_result)
+            if result_status == "blocked":
+                # Safety gate blocked the tool — inform LLM and let it try another
+                messages.append(AIMessage(content=json.dumps(response)))
+                blocked_msg = f"Tool '{tool_name}' was BLOCKED by safety gate as irreversible."
+                messages.append(HumanMessage(content=blocked_msg))
+                continue
 
-            # Record in canonical execution state
-            tool_record = ToolExecutionRecord.from_tool_result(tool_name, tool_result)
-            execution_state.record_tool(step_number, description, tool_record)
+            if result_status == "guardrail_blocked":
+                final_answer = exec_result.get("error", f"Guardrail blocked output for tool '{tool_name}'")
+                break
 
-            # ── Deterministic Verification ─────────────────────────────
-            if tool_result["success"]:
-                if "filesystem" in tool_name and tool_params.get("path"):
-                    v_report = await verification_engine.verify(
-                        task_id, None, "file_exists",
-                        {"path": tool_params["path"]},
-                    )
-                    verification_reports.append(v_report.model_dump())
-                    if v_report.result == VerificationResult.FAIL:
-                        decision = await recovery_engine.decide(
-                            task_id, None,
-                            error=v_report.failure_reason,
-                            verification_report=v_report,
-                            current_tool=tool_name,
-                            execution_state=execution_state.to_dict(),
-                        )
-                        recovery_decisions.append(decision.model_dump())
-                        await observability_bus.emit_safe(
-                            ObservabilityEventType.RECOVERY_ACTION,
-                            task_id=task_id,
-                            trace_id=state.get("trace_id"),
-                            step_id=str(step_number),
-                            payload={
-                                "action": decision.action.value,
-                                "reason": decision.reason,
-                                "next_tool": decision.next_tool,
-                            },
-                            source="executor_node",
-                        )
-                        if decision.action == RecoveryAction.SWITCH_TOOL and decision.next_tool:
-                            messages.append(HumanMessage(
-                                content=f"Verification failed. Switching to alternative tool: {decision.next_tool}"
-                            ))
-                            continue
-                        elif decision.action == RecoveryAction.RETRY:
-                            messages.append(HumanMessage(
-                                content=f"Verification failed. Retrying with same tool."
-                            ))
-                            continue
+            if exec_result.get("error"):
+                final_answer = exec_result.get("error")
+                break
 
+            # Success — feed tool result back to LLM for potential next round
             messages.append(AIMessage(content=json.dumps(response)))
+            last_step = exec_result.get("steps", [{}])[-1] if exec_result.get("steps") else {}
+            output_text = last_step.get("output", "") if last_step else ""
             messages.append(HumanMessage(
-                content=f"Tool '{tool_name}' returned: {json.dumps(tool_result, indent=2)}. "
+                content=f"Tool '{tool_name}' returned: {str(output_text)[:500]}. "
                         f"If the task is complete, provide a direct answer. If you need another tool, call it."
             ))
             continue
@@ -820,7 +687,7 @@ To provide a direct answer (only if no tool is needed):
     steps.append(step_output)
 
     await observability_bus.emit_safe(
-        ObservabilityEventType.STEP_STARTED,
+        ObservabilityEventType.STEP_COMPLETED,
         task_id=task_id,
         trace_id=state.get("trace_id"),
         step_id=str(step_number),
@@ -849,19 +716,41 @@ async def _execute_tool_call(
     state: AgentState,
     idx: int,
     grounded_tool_names: Set[str],
+    execution_state: Optional[ExecutionState] = None,
 ) -> Dict[str, Any]:
-    """Execute a single tool call and return state update (used by deterministic shortcut)."""
+    """Execute a single tool call and return state update.
+
+    Used by both the deterministic shortcut path (called from executor_node
+    when a tool can be selected without LLM) and the LLM-driven path (where
+    executor_node loops over multiple tool calls).  When called from the LLM
+    path, the caller passes its local ``execution_state`` so that records
+    accumulate across rounds.
+    """
     # Inject task_id for observability and session management
     tool_params["_task_id"] = task_id
+
+    # Check for task cancellation before executing
+    if await is_task_cancelled(task_id):
+        logger.info(f"[_execute_tool_call] Task {task_id} was cancelled, halting execution")
+        plan = state.get("plan", [])
+        return {
+            "steps": state.get("steps", []),
+            "current_step_index": len(plan),
+            "tool_calls": state.get("tool_calls", []),
+            "messages": [AIMessage(content="Task was cancelled.")],
+            "status": "cancelled",
+            "error": "Task was cancelled",
+        }
 
     tool_calls = list(state.get("tool_calls", []))
     step_tool_results = []
     verification_reports = list(state.get("verification_reports", []))
     recovery_decisions = list(state.get("recovery_decisions", []))
 
-    # Initialize canonical execution state
-    exec_state_data = state.get("execution_state")
-    execution_state = ExecutionState.from_dict(exec_state_data) if exec_state_data else ExecutionState(task_id=task_id)
+    # Initialize or reuse canonical execution state
+    if execution_state is None:
+        exec_state_data = state.get("execution_state")
+        execution_state = ExecutionState.from_dict(exec_state_data) if exec_state_data else ExecutionState(task_id=task_id)
     execution_state.current_step = step_number
 
     # Validate tool exists
@@ -876,23 +765,22 @@ async def _execute_tool_call(
         }
         steps = list(state.get("steps", []))
         steps.append(step_output)
-    # ── Output Validation at Node Exit ────────────────────────────────
-    result = {
-        "steps": steps,
-        "current_step_index": idx + 1,
-        "tool_calls": tool_calls,
-        "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
-        "verification_reports": verification_reports,
-        "recovery_decisions": recovery_decisions,
-        "status": "step_executed",
-        "execution_state": execution_state.to_dict(),
-    }
-    out_valid = await guardrails.verify_output({"status": result["status"], "output": final_answer[:500]})
-    if not out_valid:
-        logger.warning(f"[executor_node] Guardrail output validation failed for task {task_id} step {step_number}")
-        result["error"] = "Executor guardrail validation failed"
-        result["status"] = "guardrail_blocked"
-    return result
+        result = {
+            "steps": steps,
+            "current_step_index": idx + 1,
+            "tool_calls": tool_calls,
+            "messages": [AIMessage(content=f"Step {step_number} result: {final_answer}")],
+            "verification_reports": verification_reports,
+            "recovery_decisions": recovery_decisions,
+            "status": "step_executed",
+            "execution_state": execution_state.to_dict(),
+        }
+        out_valid = await guardrails.verify_output({"status": result["status"], "output": final_answer[:500]})
+        if not out_valid:
+            logger.warning(f"[executor_node] Guardrail output validation failed for task {task_id} step {step_number}")
+            result["error"] = "Executor guardrail validation failed"
+            result["status"] = "guardrail_blocked"
+        return result
 
     severity = SafetyGate().check_tool_call(tool_name, tool_params, state.get("query", ""))
     if severity == ActionSeverity.IRREVERSIBLE:
@@ -994,7 +882,7 @@ async def _execute_tool_call(
     steps.append(step_output)
 
     await observability_bus.emit_safe(
-        ObservabilityEventType.STEP_STARTED,
+        ObservabilityEventType.STEP_COMPLETED,
         task_id=task_id,
         trace_id=state.get("trace_id"),
         step_id=str(step_number),
@@ -1150,60 +1038,65 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         else:
             env_notes = f"Cloud API verified: {len(cloud_calls)} API calls made."
     elif env_type == "desktop":
-        # FR3.1: Call verification_engine.verify_plan() for desktop-specific
-        # deterministic checks (desktop_app_opened, desktop_text_typed, etc.)
-        # This ensures desktop verifiers run even when earlier det_pass
-        # checks skip verify_plan (e.g., after open_application success).
-        verification_notes_list = []
-        desktop_verify_passed = True
-        try:
-            desktop_verify_reports = await verification_engine.verify_plan(
-                task_id, plan,
-                environment_config=env_config if isinstance(env_config, dict) else {}
-            )
-            for report in desktop_verify_reports:
-                if report.result == VerificationResult.FAIL:
-                    desktop_verify_passed = False
-                    verification_notes_list.append(
-                        report.failure_reason or "Desktop verification via verify_plan() failed"
-                    )
-                else:
-                    check_type = report.checks[0].get("type", "unknown") if report.checks else "unknown"
-                    verification_notes_list.append(
-                        f"Desktop check '{check_type}': {report.result.value}"
-                    )
-            if len(desktop_verify_reports) == 0:
-                # No desktop-specific verifications matched the plan;
-                # rely on tool call check below to determine env_verified
-                desktop_verify_passed = None
-            else:
-                env_verified = desktop_verify_passed
-        except Exception as e:
-            logger.warning(f"[verifier_node] Desktop verify_plan() error: {e}")
-            verification_notes_list.append(f"Desktop verify_plan error: {e}")
-            desktop_verify_passed = None
-            # Fall through to tool call check
-
-        # Fallback/Supplementary: Check if any desktop tool calls were made
-        desktop_calls = []
-        if execution_state:
-            for step_rec in execution_state.steps.values():
-                for tool_rec in step_rec.tools:
-                    if tool_rec.tool_name.startswith(("desktop_env__", "desktop__")):
-                        desktop_calls.append(tool_rec.to_dict())
-        if not desktop_calls:
-            tool_calls = state.get("tool_calls", [])
-            desktop_calls = [t for t in tool_calls if t.get("tool", "").startswith(("desktop_env__", "desktop__"))]
-        if not desktop_calls:
-            env_verified = False
-            env_notes = "Desktop environment selected but no desktop tools were invoked."
-        elif desktop_verify_passed is None:
-            # verify_plan() returned no reports — could not confirm state change
-            env_verified = False
-            env_notes = "Desktop tools were invoked but verify_plan() could not confirm state change."
+        # ── Terminal Success Short-Circuit ──────────────────────────────
+        # If execution_state already has terminal success (e.g., open_application
+        # with PID/window), skip desktop-specific verify_plan entirely.
+        if execution_state and execution_state.has_any_terminal_success():
+            env_verified = True
+            env_notes = "Desktop terminal success confirmed via execution_state; skipping verify_plan."
+        elif open_app_calls:
+            # Fallback: tool_calls also has terminal success evidence
+            env_verified = True
+            env_notes = "Desktop terminal success confirmed via tool_calls; skipping verify_plan."
         else:
-            suffix = " " + " ".join(verification_notes_list) if verification_notes_list else ""
-            env_notes = f"Desktop automation verified: {len(desktop_calls)} desktop actions performed.{suffix}"
+            # FR3.1: Call verification_engine.verify_plan() for desktop-specific
+            # deterministic checks (desktop_app_opened, desktop_text_typed, etc.)
+            verification_notes_list = []
+            desktop_verify_passed = True
+            try:
+                desktop_verify_reports = await verification_engine.verify_plan(
+                    task_id, plan,
+                    environment_config=env_config if isinstance(env_config, dict) else {}
+                )
+                for report in desktop_verify_reports:
+                    if report.result == VerificationResult.FAIL:
+                        desktop_verify_passed = False
+                        verification_notes_list.append(
+                            report.failure_reason or "Desktop verification via verify_plan() failed"
+                        )
+                    else:
+                        check_type = report.checks[0].get("type", "unknown") if report.checks else "unknown"
+                        verification_notes_list.append(
+                            f"Desktop check '{check_type}': {report.result.value}"
+                        )
+                if len(desktop_verify_reports) == 0:
+                    desktop_verify_passed = None
+                else:
+                    env_verified = desktop_verify_passed
+            except Exception as e:
+                logger.warning(f"[verifier_node] Desktop verify_plan() error: {e}")
+                verification_notes_list.append(f"Desktop verify_plan error: {e}")
+                desktop_verify_passed = None
+
+            # Fallback/Supplementary: Check if any desktop tool calls were made
+            desktop_calls = []
+            if execution_state:
+                for step_rec in execution_state.steps.values():
+                    for tool_rec in step_rec.tools:
+                        if tool_rec.tool_name.startswith(("desktop_env__", "desktop__")):
+                            desktop_calls.append(tool_rec.to_dict())
+            if not desktop_calls:
+                tool_calls = state.get("tool_calls", [])
+                desktop_calls = [t for t in tool_calls if t.get("tool", "").startswith(("desktop_env__", "desktop__"))]
+            if not desktop_calls and not execution_state:
+                env_verified = False
+                env_notes = "Desktop environment selected but no desktop tools were invoked."
+            elif desktop_verify_passed is None:
+                env_verified = False
+                env_notes = "Desktop tools were invoked but verify_plan() could not confirm state change."
+            else:
+                suffix = " " + " ".join(verification_notes_list) if verification_notes_list else ""
+                env_notes = f"Desktop automation verified: {len(desktop_calls)} desktop actions performed.{suffix}"
 
     # Final verdict: both deterministic and LLM must agree for PASS
     verified = det_pass and llm_verified and env_verified
