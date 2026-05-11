@@ -8,12 +8,12 @@ Filesystem: Direct MCP calls.
 from __future__ import annotations
 
 import os
-import platform
 from typing import Any, Dict, List, Optional
 
 from .models import Capability, ExecutionContext, ActionResult, ActionStatus
 from ..tools.registry import tool_registry
 from ..logs.logger import logger
+from ..utils.paths import get_desktop_path
 
 
 class DeterministicExecutor:
@@ -166,7 +166,7 @@ class DeterministicExecutor:
     async def _execute_filesystem(self, ctx: ExecutionContext) -> ActionResult:
         query = ctx.query.lower()
         steps: List[Dict[str, Any]] = []
-        desktop = self._get_desktop_path()
+        desktop = get_desktop_path()
 
         # Determine operation
         if "create" in query or "write" in query or "save" in query or "static page" in query:
@@ -253,7 +253,7 @@ class DeterministicExecutor:
         """Execute multi-step workflows by decomposing into sequential deterministic steps."""
         query = ctx.query.lower()
         steps: List[Dict[str, Any]] = []
-        desktop = self._get_desktop_path()
+        desktop = get_desktop_path()
 
         # Pattern: search → summarize → save file
         if "search" in query and ("summarize" in query or "save" in query or "create" in query):
@@ -383,13 +383,6 @@ class DeterministicExecutor:
         except Exception as e:
             logger.error(f"[ActionV1] Tool {name} failed: {e}")
             return {"success": False, "error": str(e)}
-
-    @staticmethod
-    def _get_desktop_path() -> str:
-        home = os.path.expanduser("~")
-        if platform.system() == "Windows":
-            return os.path.join(home, "Desktop")
-        return os.path.join(home, "Desktop")
 
     @staticmethod
     def _extract_after(text: str, keyword: str) -> Optional[str]:
