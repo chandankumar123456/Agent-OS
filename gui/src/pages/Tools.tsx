@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useApp } from '../context/AppContext'
+import { supervisorApi, type ToolDef } from '../api/supervisor'
 import { 
   Wrench, 
   Play, 
@@ -8,43 +10,60 @@ import {
   FileText,
   Globe,
   Monitor,
-  FolderOpen
+  FolderOpen,
+  RotateCcw,
+  RefreshCw
 } from 'lucide-react'
 
-interface Tool {
-  id: string
-  name: string
-  description: string
-  category: string
-  status: 'available' | 'unavailable' | 'error'
-  lastUsed: string | null
-}
-
-const tools: Tool[] = [
-  { id: '1', name: 'Read File', description: 'Read contents of a file', category: 'Filesystem', status: 'available', lastUsed: '2024-01-15' },
-  { id: '2', name: 'Write File', description: 'Write content to a file', category: 'Filesystem', status: 'available', lastUsed: '2024-01-14' },
-  { id: '3', name: 'Execute Command', description: 'Run shell commands', category: 'Shell', status: 'available', lastUsed: '2024-01-15' },
-  { id: '4', name: 'Search Web', description: 'Search the web using DuckDuckGo', category: 'Cloud API', status: 'available', lastUsed: null },
-  { id: '5', name: 'Navigate Browser', description: 'Navigate to a URL in browser', category: 'Browser', status: 'available', lastUsed: '2024-01-13' },
-  { id: '6', name: 'Screenshot', description: 'Take a screenshot', category: 'Desktop', status: 'available', lastUsed: '2024-01-15' },
-  { id: '7', name: 'Click Element', description: 'Click at screen coordinates', category: 'Desktop', status: 'available', lastUsed: null },
-  { id: '8', name: 'Type Text', description: 'Type text at current cursor', category: 'Desktop', status: 'available', lastUsed: null },
-  { id: '9', name: 'Parse Document', description: 'Parse PDF/DOCX/TXT files', category: 'Document', status: 'available', lastUsed: '2024-01-12' },
-  { id: '10', name: 'Execute Python', description: 'Execute Python code safely', category: 'Code', status: 'available', lastUsed: null },
-]
-
-const categories = ['All', 'Filesystem', 'Shell', 'Cloud API', 'Browser', 'Desktop', 'Document', 'Code']
-
 export function Tools() {
+  const { refreshTasks } = useApp()
+  const [tools, setTools] = useState<ToolDef[]>([])
+  const [categories, setCategories] = useState<string[]>(['All'])
   const [selectedCategory, setSelectedCategory] = useState('All')
   const [searchQuery, setSearchQuery] = useState('')
+  const [testingTool, setTestingTool] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  const fetchTools = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const [toolsData, catsData] = await Promise.all([
+        supervisorApi.listTools(selectedCategory === 'All' ? undefined : selectedCategory),
+        supervisorApi.listToolCategories(),
+      ])
+      setTools(toolsData)
+      setCategories(catsData)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load tools')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    fetchTools()
+  }, [selectedCategory])
 
   const filteredTools = tools.filter(tool => {
-    const matchesCategory = selectedCategory === 'All' || tool.category === selectedCategory
-    const matchesSearch = tool.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                          tool.description.toLowerCase().includes(searchQuery.toLowerCase())
-    return matchesCategory && matchesSearch
+    if (searchQuery === '') return true
+    const q = searchQuery.toLowerCase()
+    return tool.name.toLowerCase().includes(q) ||
+           tool.description.toLowerCase().includes(q)
   })
+
+  const handleTestTool = async (tool: ToolDef) => {
+    setTestingTool(tool.id)
+    try {
+      await supervisorApi.createTask(`Test tool: ${tool.name} (${tool.category}) - ${tool.description}`)
+      await refreshTasks()
+    } catch (error) {
+      console.error('Failed to test tool:', error)
+    } finally {
+      setTestingTool(null)
+    }
+  }
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
@@ -78,7 +97,12 @@ export function Tools() {
     <div className="h-full flex">
       {/* Sidebar */}
       <div className="w-64 border-r border-gray-800 p-4">
-        <h3 className="font-bold mb-4">Categories</h3>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold">Categories</h3>
+          <button onClick={fetchTools} disabled={loading} className="p-1 hover:bg-gray-800 rounded" title="Refresh">
+            <RefreshCw className={`w-4 h-4 text-gray-400 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
         <div className="space-y-1">
           {categories.map((category) => (
             <button
@@ -117,37 +141,67 @@ export function Tools() {
 
         {/* Tool grid */}
         <div className="flex-1 overflow-auto p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredTools.map((tool) => (
-              <div
-                key={tool.id}
-                className="bg-agentos-dark border border-gray-800 rounded-lg p-4 hover:border-agentos-primary/50 transition-colors"
-              >
-                <div className="flex items-start justify-between mb-3">
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-agentos-primary/10 rounded-lg text-agentos-primary">
-                      {getCategoryIcon(tool.category)}
+          {loading && tools.length === 0 ? (
+            <div className="flex items-center justify-center py-16 text-gray-500">
+              <RefreshCw className="w-6 h-6 animate-spin mr-3" />
+              Loading tools...
+            </div>
+          ) : error ? (
+            <div className="flex flex-col items-center justify-center py-16 text-red-400">
+              <AlertCircle className="w-10 h-10 mb-3" />
+              <p>{error}</p>
+              <button onClick={fetchTools} className="mt-3 text-sm text-agentos-primary hover:underline">
+                Retry
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredTools.map((tool) => (
+                <div
+                  key={tool.id}
+                  className="bg-agentos-dark border border-gray-800 rounded-lg p-4 hover:border-agentos-primary/50 transition-colors"
+                >
+                  <div className="flex items-start justify-between mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-agentos-primary/10 rounded-lg text-agentos-primary">
+                        {getCategoryIcon(tool.category)}
+                      </div>
+                      <div>
+                        <h3 className="font-medium text-white">{tool.name}</h3>
+                        <span className="text-xs text-gray-500">{tool.category}</span>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-medium text-white">{tool.name}</h3>
-                      <span className="text-xs text-gray-500">{tool.category}</span>
-                    </div>
+                    {getStatusIcon(tool.status)}
                   </div>
-                  {getStatusIcon(tool.status)}
+                  <p className="text-sm text-gray-400 mb-4">{tool.description}</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-gray-500">{tool.type}</span>
+                    <button
+                      onClick={() => handleTestTool(tool)}
+                      disabled={testingTool === tool.id}
+                      className="flex items-center gap-1 px-3 py-1.5 bg-agentos-primary/10 hover:bg-agentos-primary/20 disabled:bg-gray-800 disabled:cursor-not-allowed text-agentos-primary rounded-lg text-sm transition-colors"
+                    >
+                      {testingTool === tool.id ? (
+                        <RotateCcw className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Play className="w-3 h-3" />
+                      )}
+                      Test
+                    </button>
+                  </div>
                 </div>
-                <p className="text-sm text-gray-400 mb-4">{tool.description}</p>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-gray-500">
-                    {tool.lastUsed ? `Last used: ${tool.lastUsed}` : 'Never used'}
-                  </span>
-                  <button className="flex items-center gap-1 px-3 py-1.5 bg-agentos-primary/10 hover:bg-agentos-primary/20 text-agentos-primary rounded-lg text-sm transition-colors">
-                    <Play className="w-3 h-3" />
-                    Test
-                  </button>
+              ))}
+              {!loading && filteredTools.length === 0 && (
+                <div className="col-span-full flex flex-col items-center justify-center py-16 text-gray-500">
+                  <Wrench className="w-12 h-12 mb-3 opacity-50" />
+                  <p className="text-lg font-medium">No tools found</p>
+                  <p className="text-sm mt-1">
+                    {searchQuery ? 'Try a different search term' : 'No tools available in this category'}
+                  </p>
                 </div>
-              </div>
-            ))}
-          </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
