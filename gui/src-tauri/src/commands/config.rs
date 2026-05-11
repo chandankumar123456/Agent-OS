@@ -1,6 +1,6 @@
 use tauri::command;
 use serde::{Deserialize, Serialize};
-use crate::config::{AppConfig, DaemonConfig};
+use crate::config::AppConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConfigUpdate {
@@ -14,14 +14,13 @@ pub struct ConfigUpdate {
 
 #[command]
 pub fn get_config() -> Result<AppConfig, String> {
-    // TODO: Load from config file
-    Ok(AppConfig::default())
+    Ok(AppConfig::load())
 }
 
 #[command]
 pub fn set_config(update: ConfigUpdate) -> Result<AppConfig, String> {
-    let mut config = AppConfig::default();
-    
+    let mut config = AppConfig::load();
+
     if let Some(val) = update.auto_start_daemon {
         config.auto_start_daemon = val;
     }
@@ -40,8 +39,7 @@ pub fn set_config(update: ConfigUpdate) -> Result<AppConfig, String> {
     if let Some(port) = update.daemon_port {
         config.daemon.port = port;
     }
-    
-    // TODO: Save to config file
-    
+
+    config.save()?;
     Ok(config)
 }
