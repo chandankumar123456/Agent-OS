@@ -1,6 +1,6 @@
 from typing import Dict, Any, Optional, List
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from ..agents.types import TaskStatus
 
 
@@ -16,8 +16,8 @@ class TaskContext:
         self.context = {"query": query}
         self.result = None
         self.error = None
-        self.created_at = datetime.utcnow()
-        self.updated_at = datetime.utcnow()
+        self.created_at = datetime.now(timezone.utc)
+        self.updated_at = datetime.now(timezone.utc)
         self.current_step = 0
         self.trace_id = str(uuid4())
 
