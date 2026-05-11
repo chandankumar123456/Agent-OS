@@ -1,84 +1,46 @@
-# Task Plan: Rust TUI and Tauri GUI for AgentOS
+# AgentOS: Eliminate All Mock/Stub Data & Fix Remaining Issues
 
-## Goal
-Build complete Rust TUI (Terminal User Interface) and Tauri GUI implementations for AgentOS.
+**Goal:** Replace every mock, stub, and placeholder with real implementations. Complete removal of fake data.
 
-## Part 1: TUI (Terminal User Interface)
+**Phases (MUST complete each before moving to next):**
 
-### Phase 1.1: Create TUI Module
-- [ ] Create `cli/src/tui.rs` - Main TUI implementation with ratatui
-  - Real-time task monitoring
-  - Agent status display with tables
-  - Log viewer with scrollback
-  - Keyboard navigation
-  - Event handling
-  - UI components (task list, log view, status bar, help panel)
+---
 
-### Phase 1.2: Integrate TUI into CLI
-- [ ] Modify `cli/src/main.rs` - Add `agentos tui` subcommand
-- [ ] Update `cli/Cargo.toml` - Add ratatui dependencies
+## Phase 1: GUI — Replace All Mock Data With Real API Calls
+**Files:** `gui/src/pages/AgentBuilder.tsx`, `gui/src/pages/Tools.tsx`, `gui/src/pages/Chat.tsx`
+- [ ] AgentBuilder page: Replace hardcoded `AGENTS` array → call `supervisorApi` / `/api/v1/agents` endpoints
+- [ ] Tools page: Replace hardcoded `TOOLS` array → fetch from Supervisor or backend
+- [ ] Chat page: Show real streaming/progress instead of just task ID
 
-## Part 2: Tauri GUI
+## Phase 2: Supervisor — Add Missing Desktop REST Endpoints
+**Files:** `supervisor/server.go`, `supervisor/desktop_handlers.go` (new)
+- [ ] Add `/api/v1/desktop/screenshot` route
+- [ ] Add `/api/v1/desktop/click` route
+- [ ] Add `/api/v1/desktop/type` route
+- [ ] Add `/api/v1/desktop/focus` route
+- [ ] Add `/api/v1/desktop/windows` route
+- [ ] Add `/api/v1/desktop/find` route
 
-### Phase 2.1: Initialize Tauri Project
-- [ ] Create `gui/` directory structure
-- [ ] Create `gui/package.json` - Tauri + React setup
-- [ ] Create `gui/src-tauri/Cargo.toml` - Tauri dependencies
-- [ ] Create `gui/src-tauri/tauri.conf.json` - Tauri configuration
+## Phase 3: Backend — Fix All Python Stubs/Mocks
+**Files:** `app/workers/executor_server.py`, `supervisor/updater.go`
+- [ ] Replace all mock returns in executor_server with real LangGraph task execution
+- [ ] Implement SHA-256 checksum verification in updater
 
-### Phase 2.2: Tauri Rust Backend
-- [ ] Create `gui/src-tauri/src/main.rs` - Main Tauri entry point
-- [ ] Create `gui/src-tauri/src/tray.rs` - System tray integration
-  - Status icon updates
-  - Context menu (pause, resume, settings)
-  - Window management
+## Phase 4: Security — Wire TLS Into gRPC & Fix Redis Race
+**Files:** `supervisor/server.go`, `app/desktop/grpc_server.py`, `app/config/settings.py`
+- [ ] Wire `crypto.go` mTLS into checkpoint gRPC server
+- [ ] Add TLS to Python gRPC server
+- [ ] Fix Redis validation race at module import time
 
-### Phase 2.3: Frontend Integration
-- [ ] Create `gui/src/` - React frontend wrapper
-- [ ] Integrate existing frontend from `frontend/` directory
-- [ ] Configure build scripts for production
+## Phase 5: Rust — Replace Capture/OCR Stubs With Real Implementations
+**Files:** `desktop/desktop-automation/src/capture/mod.rs`, `desktop/desktop-automation/src/ocr/windows.rs`
+- [ ] Implement real DXGI screen capture (or delegate to Python gRPC)
+- [ ] Implement real OCR (WinRT or delegate to Python gRPC)
 
-## Files to Create/Modify
+---
 
-### TUI Files:
-1. `cli/src/tui.rs` (NEW)
-2. `cli/src/main.rs` (MODIFY - add tui command)
-3. `cli/Cargo.toml` (MODIFY - add ratatui deps)
-
-### Tauri GUI Files:
-1. `gui/package.json` (NEW)
-2. `gui/src-tauri/Cargo.toml` (NEW)
-3. `gui/src-tauri/tauri.conf.json` (NEW)
-4. `gui/src-tauri/src/main.rs` (NEW)
-5. `gui/src-tauri/src/tray.rs` (NEW)
-6. `gui/src-tauri/src/lib.rs` (NEW)
-7. `gui/src/main.tsx` (NEW)
-8. `gui/index.html` (NEW)
-9. `gui/vite.config.ts` (NEW)
-10. `gui/tsconfig.json` (NEW)
-
-## Dependencies
-
-### TUI (ratatui):
-- ratatui = "0.24"
-- crossterm = "0.27"
-- tokio = { version = "1.37", features = ["full"] }
-- reqwest = { version = "0.12", features = ["json"] }
-- serde = { version = "1.0", features = ["derive"] }
-- serde_json = "1.0"
-- chrono = "0.4"
-
-### Tauri:
-- tauri = { version = "1.6", features = ["system-tray"] }
-- tokio = { version = "1.37", features = ["full"] }
-- serde = { version = "1.0", features = ["derive"] }
-
-## Acceptance Criteria
-1. `agentos tui` launches working TUI
-2. TUI shows real-time task progress
-3. Tauri app builds and runs (`cargo tauri dev`)
-4. System tray shows agent status
-5. React frontend loads in Tauri window
-
-## Status
-**In Progress** - Starting implementation
+## Validation
+- Every page loads real data (no hardcoded arrays)
+- CLI desktop commands return real results (no 404)
+- All tests pass
+- No `TODO`, `FUTURE`, `MOCK`, `STUB`, `placeholder` in critical paths
