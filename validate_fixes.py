@@ -366,17 +366,16 @@ print("\n" + "="*70)
 print("SYSTEM 7: PLANNER PATH AWARENESS")
 print("="*70)
 
-from app.langgraph.nodes import _get_desktop_path
-from app.agents.executor import (
-    _get_desktop_path as _exec_desktop,
-    _remap_path,
-    _looks_like_foreign_path,
-    _remap_tool_params,
-    _normalize_paths_in_text,
+from app.utils.paths import (
+    get_desktop_path,
+    looks_like_foreign_path,
+    remap_path,
+    remap_tool_params,
+    normalize_paths_in_text,
 )
 
 # 7.1 Desktop path is OS-aware
-desktop = _get_desktop_path()
+desktop = get_desktop_path()
 report("7.1a Desktop path is absolute", os.path.isabs(desktop))
 report("7.1b Desktop path exists or is valid", isinstance(desktop, str) and len(desktop) > 0)
 if platform.system() == "Windows":
@@ -386,33 +385,33 @@ else:
 
 # 7.2 Foreign path detection
 report("7.2a Unix path on Windows is foreign",
-       platform.system() == "Windows" and _looks_like_foreign_path("/home/user/file.txt") or platform.system() != "Windows")
+       platform.system() == "Windows" and looks_like_foreign_path("/home/user/file.txt") or platform.system() != "Windows")
 report("7.2b Windows path on Unix is foreign",
-       platform.system() in ("Linux", "Darwin") and _looks_like_foreign_path("C:\\Users\\file.txt") or platform.system() not in ("Linux", "Darwin"))
-report("7.2c Native path not foreign", not _looks_like_foreign_path(desktop))
+       platform.system() in ("Linux", "Darwin") and looks_like_foreign_path("C:\\Users\\file.txt") or platform.system() not in ("Linux", "Darwin"))
+report("7.2c Native path not foreign", not looks_like_foreign_path(desktop))
 
 # 7.3 Path remapping
 home = os.path.expanduser("~")
 if platform.system() == "Windows":
-    remapped = _remap_path("/home/user/Desktop/report.txt", home, desktop)
+    remapped = remap_path("/home/user/Desktop/report.txt", home, desktop)
     report("7.3a Unix Desktop path remapped to Windows", desktop.replace("\\", "/") in remapped.replace("\\", "/"))
-    remapped2 = _remap_path("/home/user/Documents/file.txt", home, desktop)
+    remapped2 = remap_path("/home/user/Documents/file.txt", home, desktop)
     report("7.3b Unix home path remapped to Windows", home.replace("\\", "/") in remapped2.replace("\\", "/"))
 else:
-    remapped = _remap_path("C:\\Users\\John\\Desktop\\report.txt", home, desktop)
+    remapped = remap_path("C:\\Users\\John\\Desktop\\report.txt", home, desktop)
     report("7.3a Windows Desktop path remapped to Unix", desktop in remapped)
-    remapped2 = _remap_path("C:\\Users\\John\\Documents\\file.txt", home, desktop)
+    remapped2 = remap_path("C:\\Users\\John\\Documents\\file.txt", home, desktop)
     report("7.3b Windows home path remapped to Unix", home in remapped2)
 
 # 7.4 Tool parameter remapping
 params = {"path": "/home/user/Desktop/file.txt", "content": "hello"}
-remapped_params = _remap_tool_params(params, home, desktop)
+remapped_params = remap_tool_params(params, home, desktop)
 report("7.4a Tool params path remapped", remapped_params["path"] != "/home/user/Desktop/file.txt")
 report("7.4b Tool params content unchanged", remapped_params["content"] == "hello")
 
 # 7.5 Text normalization
 text = "Create a file at /home/user/Desktop/output.txt and /home/user/docs/readme.md"
-normalized = _normalize_paths_in_text(text, home, desktop)
+normalized = normalize_paths_in_text(text, home, desktop)
 report("7.5a Text paths normalized", normalized != text)
 
 # 7.6 Planner prompt includes OS info
@@ -426,7 +425,7 @@ report("7.6d Planner prompt OS-specific separators", "backslashes" in planner_co
 exec_code = open("app/agents/executor.py").read()
 report("7.7a Executor prompt has os_info", "os_info" in exec_code)
 report("7.7b Executor prompt has desktop_path", "desktop_path" in exec_code)
-report("7.7c Executor remaps tool params", "_remap_tool_params" in exec_code)
+report("7.7c Executor remaps tool params", "remap_tool_params" in exec_code)
 
 # =============================================================================
 # SUMMARY
