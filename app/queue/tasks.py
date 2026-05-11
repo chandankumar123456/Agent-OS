@@ -46,17 +46,17 @@ _worker_event_loop = None
 
 @worker_process_init.connect
 def on_worker_process_init(**kwargs):
-    """Initialize AgentRuntime in each Celery worker child process.
+    """Initialize event loop policy in each Celery worker child process.
 
     worker_process_init fires inside every forked child process,
-    ensuring the runtime is available in the correct event loop.
+    ensuring proper event loop configuration. Actual connections
+    and runtime initialization happen lazily when execute_task() runs.
     """
     global _worker_event_loop
 
     # Windows: Force ProactorEventLoop to support asyncio subprocess (required by Playwright)
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-        logger.info("Celery worker: set WindowsProactorEventLoopPolicy for subprocess support")
 
     try:
         # Use the existing loop if available (e.g. solo pool), otherwise create one
@@ -66,43 +66,10 @@ def on_worker_process_init(**kwargs):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
         _worker_event_loop = loop
-
-        # Connect DB and Redis so runtime.load_from_db() can work
-        from ..memory.long_term import db
-        from ..memory.short_term import redis_client
-        from ..memory.redis_pubsub import redis_pubsub_client
-        loop.run_until_complete(db.connect())
-        loop.run_until_complete(redis_client.connect())
-        loop.run_until_complete(redis_pubsub_client.connect())
-
-        loop.run_until_complete(_ensure_runtime_initialized())
-
-        # Register built-in tools and MCP tools (mirrors FastAPI lifespan)
-        try:
-            from ..tools.builtin import register_builtin_tools
-            from ..tools.registry import tool_registry
-            register_builtin_tools(tool_registry)
-            logger.info("Built-in tools registered in Celery worker")
-        except Exception as e:
-            logger.error(f"Built-in tools registration failed in Celery worker: {e}")
-
-        try:
-            from ..mcp.client_manager import mcp_client_manager
-            loop.run_until_complete(mcp_client_manager.start_system_servers())
-            logger.info("MCP system servers started in Celery worker")
-        except BaseException as e:
-            logger.error(f"MCP system servers start failed in Celery worker: {e}")
-
-        try:
-            from ..tools.registry import tool_registry
-            loop.run_until_complete(tool_registry.discover_mcp_tools())
-            logger.info("MCP tools discovered in Celery worker")
-        except Exception as e:
-            logger.error(f"MCP tool discovery failed in Celery worker: {e}")
-
-        logger.info("AgentRuntime eagerly initialized in Celery worker process")
+        # Don't eagerly connect — let execute_task() do it lazily
+        logger.info("Celery worker: event loop policy set")
     except Exception as e:
-        logger.error(f"Celery worker eager initialization failed: {e}")
+        logger.error(f"Celery worker init failed: {e}")
 
 
 async def _ensure_runtime_initialized() -> AgentRuntime:
