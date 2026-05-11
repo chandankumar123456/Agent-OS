@@ -1,7 +1,7 @@
 import asyncio
 import json
 from typing import AsyncIterator, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..memory.redis_pubsub import redis_pubsub_client
 from ..logs.logger import logger
@@ -18,7 +18,7 @@ class Event:
         self.event_type = event_type
         self.payload = payload
         self.source = source
-        self.timestamp = timestamp or datetime.utcnow().isoformat()
+        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
 
     def json(self) -> str:
         return json.dumps(
