@@ -5,7 +5,7 @@ using Redis-backed distributed locks with configurable TTL.
 """
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -72,7 +72,7 @@ class ExecutionLock:
         ttl = ttl_seconds or self.default_ttl
         key = self._lock_key(task_id)
         lock_id = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         record = LockRecord(
             lock_id=lock_id,
             task_id=task_id,
