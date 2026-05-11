@@ -6,7 +6,7 @@ from typing import Optional
 
 class Settings(BaseSettings):
     APP_NAME: str = "Agent-OS"
-    VERSION: str = "0.2.0"
+    VERSION: str = "0.3.0"
 
     DATABASE_URL: Optional[str] = None
     REDIS_URL: Optional[str] = None

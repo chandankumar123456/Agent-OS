@@ -122,7 +122,7 @@ Version: 0.1.0 (Phase 1 - Foundation)
 
 // PrintVersion prints version information
 func PrintVersion() {
-	fmt.Println("AgentOS Supervisor v0.1.0 (Phase 1 - Foundation)")
+	fmt.Println("AgentOS Supervisor v0.3.0")
 	fmt.Println("Local-native runtime supervisor for AgentOS")
 }
 
