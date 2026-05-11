@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
 from sqlalchemy import func, extract, select
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from collections import Counter
 
@@ -28,7 +28,7 @@ async def get_dashboard(_: object = Depends(get_current_user)):
         pending_tasks = status_map.get("pending", 0) + status_map.get("running", 0)
 
         # Tasks today
-        today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
         tasks_today_result = await session.execute(
             select(func.count()).select_from(TaskModel).where(TaskModel.created_at >= today_start)
         )
@@ -57,7 +57,7 @@ async def get_dashboard(_: object = Depends(get_current_user)):
         ]
 
         # Tasks over time (last 7 days)
-        seven_days_ago = datetime.utcnow() - timedelta(days=6)
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=6)
         seven_days_ago = seven_days_ago.replace(hour=0, minute=0, second=0, microsecond=0)
         recent_tasks_result = await session.execute(
             select(TaskModel.created_at)
@@ -70,7 +70,7 @@ async def get_dashboard(_: object = Depends(get_current_user)):
         date_counts = Counter(dates)
         tasks_over_time = []
         for i in range(7):
-            day = (datetime.utcnow() - timedelta(days=6 - i)).date().isoformat()
+            day = (datetime.now(timezone.utc) - timedelta(days=6 - i)).date().isoformat()
             tasks_over_time.append({"date": day, "count": date_counts.get(day, 0)})
 
         # Top agents by span count
@@ -220,7 +220,7 @@ async def get_metrics_time_series(
     interval = range_minutes // points
 
     data = []
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     for i in range(points):
         ts = now - timedelta(minutes=(points - i) * interval)
         if metric == "requests":
