@@ -1,8 +1,6 @@
 //! Window service for desktop automation
 //! Provides native Windows API access for window management
 
-use std::collections::HashMap;
-
 #[cfg(target_os = "windows")]
 use windows::Win32::Foundation::HWND;
 
@@ -19,28 +17,22 @@ pub struct WindowInfo {
 }
 
 /// Window service for managing Windows
-pub struct WindowService {
-    #[cfg(target_os = "windows")]
-    hwnd_cache: HashMap<isize, WindowInfo>,
-}
+pub struct WindowService;
 
 impl WindowService {
     pub fn new() -> Self {
-        Self {
-            #[cfg(target_os = "windows")]
-            hwnd_cache: HashMap::new(),
-        }
+        Self
     }
 
     /// Find window by title and/or class name
     #[cfg(target_os = "windows")]
-    pub fn find_window(&self, title: &str, class_name: &str, partial_match: bool) -> Option<WindowInfo> {
+    pub fn find_window(&self, title: &str, class_name: &str, _partial_match: bool) -> Option<WindowInfo> {
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{EnumWindows, GetWindowTextW, IsWindowVisible};
 
-        let title_lower = title.to_lowercase();
-        let class_lower = class_name.to_lowercase();
-        let mut result: Option<WindowInfo> = None;
+        let _title_lower = title.to_lowercase();
+        let _class_lower = class_name.to_lowercase();
+        let _result: Option<WindowInfo> = None;
 
         unsafe extern "system" fn enum_callback(
             hwnd: HWND,
@@ -105,7 +97,7 @@ impl WindowService {
         use windows::Win32::Foundation::{HWND, RECT};
         use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, GetWindowTextW, IsWindowVisible};
 
-        let hwnd = HWND(hwnd as *mut std::ffi::c_void);
+        let hwnd = HWND(hwnd);
         
         unsafe {
             let mut rect = RECT::default();
