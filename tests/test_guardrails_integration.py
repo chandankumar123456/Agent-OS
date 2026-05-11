@@ -66,8 +66,7 @@ class TestGuardrailsInputValidation:
     @pytest.mark.asyncio
     async def test_validate_input_rejects_invalid_query(self, orchestrator):
         """When guardrails returns invalid, _validate_input should raise UnrecoverableError."""
-        mock_result = ValidationResult()
-        mock_result.valid = False
+        mock_result = ValidationResult(valid=False)
         mock_result.errors = ["query contains blocked pattern"]
         mock_result.warnings = []
 
