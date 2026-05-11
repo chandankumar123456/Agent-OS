@@ -39,6 +39,7 @@ RUN playwright install chromium
 RUN chown -R agentos:agentos /root/.cache/ms-playwright || true
 
 COPY app ./app
+COPY scripts ./scripts
 COPY .env .
 
 # Production hardening
@@ -50,4 +51,5 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run migrations on startup, then launch the app
+CMD ["sh", "-c", "scripts/migrate.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
