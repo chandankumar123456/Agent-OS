@@ -199,6 +199,6 @@ async def test_runner_tier1_failure_escalates_to_tier2_langgraph():
         result = await runner.run("search AI news", {}, task_id, "user-1", "task")
 
     assert result.status == AgentStatus.SUCCESS
-    assert result.output_data == {"summary": "ok"}
+    assert result.output_data == {"perception_layer": "unknown", "summary": "ok"}
     runner.sequential_executor.execute.assert_awaited_once()
     mock_graph.ainvoke.assert_awaited_once()
