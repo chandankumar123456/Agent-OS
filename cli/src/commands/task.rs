@@ -1,7 +1,7 @@
 use crate::config::Config;
 use crate::ipc::ApiClient;
 use crate::models::*;
-use anyhow::{Result, Context};
+use anyhow::{Result};
 use colored::*;
 use comfy_table::{Table, ContentArrangement};
 
