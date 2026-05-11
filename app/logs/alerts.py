@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 from .anomaly import AnomalyDetector, AnomalySeverity, anomaly_detector
 from .metrics import MetricsCollector, metrics_collector
 from ..logs.logger import logger
@@ -98,7 +98,7 @@ class AlertManager:
             return False
         try:
             last_dt = datetime.fromisoformat(last)
-            return (datetime.utcnow() - last_dt).total_seconds() < rule.cooldown_seconds
+            return (datetime.now(timezone.utc) - last_dt).total_seconds() < rule.cooldown_seconds
         except Exception:
             return False
 
@@ -133,12 +133,12 @@ class AlertManager:
 
             value = metric_values[rule.metric]
             if value >= rule.threshold:
-                self._last_triggered[rule.name] = datetime.utcnow().isoformat()
+                self._last_triggered[rule.name] = datetime.now(timezone.utc).isoformat()
                 alert = Alert(
                     severity=rule.severity,
                     message=f"{rule.metric}={value:.4f} exceeded threshold {rule.threshold}",
                     triggered_rule=rule.name,
-                    timestamp=datetime.utcnow().isoformat(),
+                    timestamp=datetime.now(timezone.utc).isoformat(),
                     context={"metric": rule.metric, "value": value, "threshold": rule.threshold}
                 )
                 self._alert_history.append(alert)
