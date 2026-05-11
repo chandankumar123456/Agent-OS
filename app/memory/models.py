@@ -1,12 +1,23 @@
 from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean, UniqueConstraint, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 from uuid import uuid4
 from enum import Enum as PyEnum
 
 class Base(DeclarativeBase):
+    """Base class for all ORM models.
+
+    NOTE: Most models use String(36) for UUID primary keys to maintain
+    compatibility between PostgreSQL and SQLite (for testing).  For
+    production PostgreSQL deployments, consider migrating to native
+    UUID columns via an Alembic migration to gain ~40% faster joins,
+    smaller indexes, and built-in type validation.  The
+    PostgreSQL-specific UUID type is already imported and used by
+    ToolV2Model and UserOnboardingState as examples of the target
+    pattern.
+    """
     pass
 
 
@@ -32,8 +43,8 @@ class ToolV2Model(Base):
     avg_latency_ms = Column(Float, default=0.0)
     error_rate = Column(Float, default=0.0)
     status = Column(String, default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class GuardrailRuleType(str, PyEnum):
@@ -63,8 +74,8 @@ class TaskModel(Base):
     status = Column(String(20), default="pending")
     result = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class StepModel(Base):
@@ -79,8 +90,8 @@ class StepModel(Base):
     input_data = Column(JSON, nullable=True)
     output_data = Column(JSON, nullable=True)
     confidence = Column(Float, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowModel(Base):
@@ -92,8 +103,8 @@ class WorkflowModel(Base):
     name = Column(String(100), nullable=True)
     definition = Column(JSON, nullable=True)
     status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowNodeModel(Base):
@@ -111,8 +122,8 @@ class WorkflowNodeModel(Base):
     condition_code = Column(Text, nullable=True)
     node_type = Column(String(20), nullable=False, default="agent")
     approval_config = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class WorkflowEdgeModel(Base):
@@ -122,7 +133,7 @@ class WorkflowEdgeModel(Base):
     workflow_id = Column(String(36), nullable=False, index=True)
     from_node_id = Column(String(36), nullable=False, index=True)
     to_node_id = Column(String(36), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class ContextModel(Base):
@@ -132,8 +143,8 @@ class ContextModel(Base):
     task_id = Column(String(36), nullable=False, index=True)
     key = Column(String(100), nullable=False)
     value = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MessageModel(Base):
@@ -141,11 +152,11 @@ class MessageModel(Base):
     
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     task_id = Column(String(36), nullable=False, index=True)
-    step_id = Column(String(36), nullable=True)
+    step_id = Column(String(36), nullable=True, index=True)
     sender = Column(String(50), nullable=False)
     receiver = Column(String(50), nullable=False)
     payload = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class TraceModel(Base):
@@ -156,8 +167,8 @@ class TraceModel(Base):
     user_id = Column(String(36), nullable=False, index=True)
     trace_id = Column(String(36), nullable=False, unique=True, index=True)
     status = Column(String(20), default="pending")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class NodeTraceModel(Base):
@@ -172,10 +183,10 @@ class NodeTraceModel(Base):
     input_data = Column(JSON, nullable=True)
     output_data = Column(JSON, nullable=True)
     error = Column(Text, nullable=True)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class SpanModel(Base):
@@ -189,7 +200,7 @@ class SpanModel(Base):
     status = Column(String(20), default="pending")
     error = Column(Text, nullable=True)
     metadata_json = Column("metadata", JSON, nullable=True)
-    start_time = Column(DateTime, default=datetime.utcnow)
+    start_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     end_time = Column(DateTime, nullable=True)
 
 
@@ -203,8 +214,8 @@ class ToolModel(Base):
     parameters_schema = Column(JSON, nullable=True)
     template = Column(Text, nullable=True)
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class MCPServerModel(Base):
@@ -218,8 +229,8 @@ class MCPServerModel(Base):
     health_status = Column(String(20), default="unknown")
     version = Column(String(20), default="1.0.0")
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class AgentModel(Base):
@@ -236,8 +247,8 @@ class AgentModel(Base):
     tools = Column(JSON, nullable=True)
     version = Column(String(20), default="1.0.0")
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class AgentVersionModel(Base):
@@ -253,7 +264,7 @@ class AgentVersionModel(Base):
     temperature = Column(Float, nullable=True)
     max_tokens = Column(Integer, nullable=True)
     tools = Column(JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("agent_key", "version", name="uq_agent_version"),
@@ -265,7 +276,7 @@ class ConfigModel(Base):
 
     key = Column(String(100), primary_key=True)
     value = Column(JSON, nullable=True)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class GuardrailRuleModel(Base):
@@ -277,7 +288,7 @@ class GuardrailRuleModel(Base):
     condition = Column(JSON, nullable=False, default=dict)
     action = Column(String(20), nullable=False, default="block")
     status = Column(String(20), nullable=False, default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class CheckpointModel(Base):
@@ -289,7 +300,7 @@ class CheckpointModel(Base):
     parent_checkpoint_id = Column(String(100), nullable=True)
     checkpoint = Column(Text, nullable=False)
     checkpoint_metadata = Column("metadata", Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class CheckpointWriteModel(Base):
@@ -302,7 +313,7 @@ class CheckpointWriteModel(Base):
     task_id = Column(String(100), nullable=False, index=True)
     task_path = Column(String(255), nullable=True)
     write_data = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (
         UniqueConstraint("thread_id", "checkpoint_ns", "checkpoint_id", "task_id", "task_path", name="uq_checkpoint_write"),
@@ -319,7 +330,7 @@ class UserModel(Base):
     hashed_password = Column(String(255), nullable=False)
     api_key = Column(String(64), unique=True, nullable=True, index=True)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class WorkspaceModel(Base):
@@ -327,7 +338,7 @@ class WorkspaceModel(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     name = Column(String(100), nullable=False)
     owner_id = Column(String(36), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class WorkspaceMemberModel(Base):
@@ -336,7 +347,7 @@ class WorkspaceMemberModel(Base):
     workspace_id = Column(String(36), nullable=False, index=True)
     user_id = Column(String(36), nullable=False, index=True)
     role = Column(String(20), nullable=False, default="member")
-    joined_at = Column(DateTime, default=datetime.utcnow)
+    joined_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class APIKeyModel(Base):
@@ -348,7 +359,7 @@ class APIKeyModel(Base):
     name = Column(String(100), nullable=False)
     permissions = Column(JSON, default=list)
     last_used_at = Column(DateTime, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class UserOnboardingState(Base):
@@ -360,8 +371,8 @@ class UserOnboardingState(Base):
     has_created_first_agent = Column(Boolean, default=False)
     has_created_first_workflow = Column(Boolean, default=False)
     dismissed_prompts = Column(JSON, default=list)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class TokenUsageModel(Base):
@@ -374,7 +385,7 @@ class TokenUsageModel(Base):
     output_tokens = Column(Integer, nullable=False, default=0)
     total_tokens = Column(Integer, nullable=False, default=0)
     cost_usd = Column(Float, nullable=False, default=0.0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class AgentConfigV2Model(Base):
@@ -401,8 +412,8 @@ class AgentConfigV2Model(Base):
     prompt_template = Column(Text, nullable=True)
     response_template = Column(Text, nullable=True)
     status = Column(String, default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ChatSessionModel(Base):
@@ -412,8 +423,8 @@ class ChatSessionModel(Base):
     user_id = Column(String(36), nullable=False, index=True)
     agent_id = Column(String(36), nullable=True, index=True)
     title = Column(String(200), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ChatMessageModel(Base):
@@ -423,7 +434,7 @@ class ChatMessageModel(Base):
     session_id = Column(String(36), nullable=False, index=True)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class KnowledgeSourceModel(Base):
@@ -436,7 +447,7 @@ class KnowledgeSourceModel(Base):
     content_preview = Column(Text, nullable=True)
     chunk_count = Column(Integer, default=0)
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class KnowledgeChunkModel(Base):
@@ -446,7 +457,7 @@ class KnowledgeChunkModel(Base):
     source_id = Column(String(36), nullable=False, index=True)
     content = Column(Text, nullable=False)
     chunk_metadata = Column("metadata", JSON, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class DeploymentModel(Base):
@@ -461,8 +472,8 @@ class DeploymentModel(Base):
     api_key_hash = Column(String(255), nullable=True)
     auth_type = Column(String(20), nullable=False, default="none")
     status = Column(String(20), default="active")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 # ============================================================================
@@ -501,7 +512,7 @@ class CheckpointMetadataModel(Base):
     recovery_attempts = Column(Integer, default=0)  # Number of recovery attempts
     
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     metadata_json = Column("metadata", JSON, nullable=True)
 
     __table_args__ = (
@@ -537,8 +548,8 @@ class UserMemoryProfileModel(Base):
     profile_size_bytes = Column(Integer, default=0)
     
     # Metadata
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ArtifactModel(Base):
@@ -577,8 +588,8 @@ class ArtifactModel(Base):
     retention_days = Column(Integer, default=90)
     archived_at = Column(DateTime, nullable=True)
     
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class AuditModel(Base):
@@ -618,8 +629,8 @@ class AuditModel(Base):
     user_agent = Column(String(500), nullable=True)
     
     # Timestamp (separate from created_at for potential clock skew handling)
-    event_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    event_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Tamper-evident (optional - for high-security deployments)
     previous_audit_hash = Column(String(64), nullable=True)  # Chain of custody
@@ -646,8 +657,8 @@ class AgentStateTransitionModel(Base):
     context = Column(JSON, nullable=True)  # Additional context
     
     # Timestamps
-    timestamp = Column(DateTime, default=datetime.utcnow, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class TaskQueueEntryModel(Base):
@@ -668,7 +679,7 @@ class TaskQueueEntryModel(Base):
     
     # Scheduling
     scheduled_at = Column(DateTime, nullable=True)  # When to execute (future scheduling)
-    enqueue_time = Column(DateTime, default=datetime.utcnow)
+    enqueue_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expected_start_time = Column(DateTime, nullable=True)
     
     # Status
@@ -686,5 +697,5 @@ class TaskQueueEntryModel(Base):
     # Metadata
     retry_count = Column(Integer, default=0)
     last_error = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
