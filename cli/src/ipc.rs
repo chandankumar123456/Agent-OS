@@ -47,23 +47,6 @@ impl ApiClient {
         Ok(status)
     }
 
-    /// Start Python runtime
-    pub async fn start_python(&self) -> Result<()> {
-        let url = format!("{}/api/v1/python/start", self.base_url);
-        let response = self.client
-            .post(&url)
-            .send()
-            .await
-            .context("Failed to send start request")?;
-        
-        if !response.status().is_success() {
-            let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("Failed to start Python runtime: {}", text);
-        }
-        
-        Ok(())
-    }
-
     /// Stop Python runtime
     pub async fn stop_python(&self) -> Result<()> {
         let url = format!("{}/api/v1/python/stop", self.base_url);
