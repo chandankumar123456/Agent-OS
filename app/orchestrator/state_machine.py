@@ -3,7 +3,7 @@
 Manages task lifecycle states and validates all transitions.
 Integrates with PostgreSQL for persistence and Redis for fast state access.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
@@ -153,7 +153,7 @@ class TaskStateMachine:
         Raises:
             AgentOSError: If transition is invalid or current state mismatch.
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         validation_errors: List[str] = []
 
         # Validate transition
@@ -301,7 +301,7 @@ class TaskStateMachine:
         try:
             await redis_client.set(
                 redis_key,
-                {"state": new_state.value, "updated_at": datetime.utcnow().isoformat()},
+                {"state": new_state.value, "updated_at": datetime.now(timezone.utc).isoformat()},
                 expire=self.history_ttl_days * 86400,
             )
         except Exception as e:
