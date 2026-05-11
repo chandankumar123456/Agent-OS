@@ -3,7 +3,7 @@
 Integrates with TokenUsageModel for LLM costs and Redis for real-time
 aggregation. Provides cost breakdowns per task, agent, tool, and user.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -24,7 +24,7 @@ class CostRecord(BaseModel):
     tokens_input: int = 0
     tokens_output: int = 0
     model: Optional[str] = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -247,7 +247,7 @@ class CostTracker:
             pipe.hincrby(key, "tokens_input", record.tokens_input)
             pipe.hincrby(key, "tokens_output", record.tokens_output)
             pipe.hincrby(key, "count", 1)
-            pipe.hset(key, "last_updated", datetime.utcnow().isoformat())
+            pipe.hset(key, "last_updated", datetime.now(timezone.utc).isoformat())
             pipe.expire(key, 86400 * 30)  # 30 days
             await pipe.execute()
             return True
