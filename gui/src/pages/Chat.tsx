@@ -1,10 +1,10 @@
 import { useState, useRef, useEffect } from 'react'
+import { supervisorApi } from '../api/supervisor'
 import { 
   Send, 
   Paperclip,
   Bot,
   User,
-  MoreVertical,
   Trash2,
   Copy
 } from 'lucide-react'
@@ -51,17 +51,26 @@ export function Chat() {
     setInput('')
     setIsLoading(true)
 
-    // Simulate assistant response
-    setTimeout(() => {
+    try {
+      const result = await supervisorApi.createTask(input)
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: `I'll help you with: "${input}"\n\nI've started a task to handle this request. You can monitor the progress in the Dashboard.`,
+        content: `I've started task ${result.taskId} to handle your request. You can monitor progress in the Dashboard.`,
         timestamp: new Date().toISOString(),
       }
       setMessages((prev) => [...prev, assistantMessage])
+    } catch (error) {
+      const errorMessage: Message = {
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: `Sorry, I couldn't start a task: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        timestamp: new Date().toISOString(),
+      }
+      setMessages((prev) => [...prev, errorMessage])
+    } finally {
       setIsLoading(false)
-    }, 1000)
+    }
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
