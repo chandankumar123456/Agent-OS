@@ -1,7 +1,7 @@
 import asyncio
 import json
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import WebSocket, WebSocketDisconnect, Query
 from ..orchestrator.event_bus import event_bus, Event
@@ -16,10 +16,27 @@ class ConnectionManager:
 
     async def connect(self, task_id: str, websocket: WebSocket) -> None:
         await websocket.accept()
+        client_ip = websocket.client.host if websocket.client else "unknown"
         async with self._lock:
+            # Global connection limit
+            total_connections = sum(len(conns) for conns in self.active_connections.values())
+            if total_connections >= 500:
+                await websocket.close(code=1008, reason="Too many connections")
+                return
+
+            # Per-IP limit
+            ip_count = sum(
+                1 for conns in self.active_connections.values()
+                for ws in conns
+                if ws.client and ws.client.host == client_ip
+            )
+            if ip_count >= 10:
+                await websocket.close(code=1008, reason="Too many connections from this IP")
+                return
+
+            # Per-task limit
             if task_id not in self.active_connections:
                 self.active_connections[task_id] = []
-            # Limit concurrent connections per task
             if len(self.active_connections[task_id]) >= 100:
                 await websocket.close(code=1008, reason="Too many connections for this task")
                 return
@@ -113,7 +130,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         try:
             while True:
                 await asyncio.sleep(15.0)
-                await websocket.send_text(json.dumps({"type": "heartbeat", "task_id": task_id, "ts": datetime.utcnow().isoformat()}))
+                await websocket.send_text(json.dumps({"type": "heartbeat", "task_id": task_id, "ts": datetime.now(timezone.utc).isoformat()}))
         except asyncio.CancelledError:
             pass
         except Exception:
@@ -122,10 +139,22 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     try:
         subscription_task = asyncio.create_task(_subscribe())
         keepalive_task = asyncio.create_task(_keepalive())
+        # Per-connection message rate limiting
+        _last_msg_time = datetime.now(timezone.utc)
+        _msg_count = 0
         while True:
             # Keep the connection alive and handle incoming client messages
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                # Message rate limiting: max 10 messages per second
+                _now = datetime.now(timezone.utc)
+                if (_now - _last_msg_time).total_seconds() > 1.0:
+                    _msg_count = 0
+                    _last_msg_time = _now
+                _msg_count += 1
+                if _msg_count > 10:
+                    await websocket.send_text(json.dumps({"type": "error", "message": "Rate limit exceeded"}))
+                    continue
                 if data.strip().lower() == "ping":
                     await websocket.send_text("pong")
             except asyncio.TimeoutError:
