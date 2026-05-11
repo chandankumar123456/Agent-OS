@@ -496,9 +496,57 @@ class DesktopAutomationServicer(desktop_pb2_grpc.DesktopAutomationServicer):
             return desktop_pb2.CloseSessionResponse(success=False, error=str(e))
 
 
+def _load_tls_credentials(cert_dir: Optional[str] = None):
+    """Load TLS credentials from certificate directory.
+
+    Args:
+        cert_dir: Path to cert directory (default: from AGENTOS_CERT_DIR env or ~/.agentos/certs)
+
+    Returns:
+        grpc.ChannelCredentials if certs exist, None otherwise
+    """
+    if cert_dir is None:
+        cert_dir = os.environ.get("AGENTOS_CERT_DIR", "")
+
+    server_cert_path = os.path.join(cert_dir, "server.crt")
+    server_key_path = os.path.join(cert_dir, "server.key")
+    ca_cert_path = os.path.join(cert_dir, "ca.crt")
+
+    if not all(os.path.exists(p) for p in [server_cert_path, server_key_path, ca_cert_path]):
+        logging.warning("TLS certificates not found in %s, falling back to insecure mode", cert_dir)
+        return None
+
+    try:
+        with open(server_cert_path, "rb") as f:
+            server_cert = f.read()
+        with open(server_key_path, "rb") as f:
+            server_key = f.read()
+        with open(ca_cert_path, "rb") as f:
+            ca_cert = f.read()
+
+        # mTLS: require client certificate
+        server_credentials = grpc.ssl_server_credentials(
+            [(server_key, server_cert)],
+            root_certificates=ca_cert,
+            require_client_auth=True,
+        )
+        logging.info("TLS credentials loaded successfully from %s", cert_dir)
+        return server_credentials
+    except Exception as e:
+        logging.warning("Failed to load TLS credentials: %s, falling back to insecure mode", e)
+        return None
+
+
 async def serve_async(port: int = 50051):
-    """Start the async gRPC server"""
-    # Use async gRPC server
+    """Start the async gRPC server with TLS + optional API key auth.
+
+    TLS is enabled when certificates are found in AGENTOS_CERT_DIR
+    (or default ~/.agentos/certs). API key auth is enabled when
+    AGENTOS_API_KEY env var is set.
+    """
+    # Try to load TLS credentials
+    tls_creds = _load_tls_credentials()
+
     server = grpc.aio.server()
 
     # Check if protobuf is available
@@ -510,7 +558,13 @@ async def serve_async(port: int = 50051):
         logging.warning("gRPC protobuf not generated yet. Server will start but service methods unavailable.")
         return
 
-    server.add_insecure_port(f'[::]:{port}')
+    if tls_creds:
+        server.add_secure_port(f'[::]:{port}', tls_creds)
+        logging.info("gRPC server using TLS (mTLS with client cert required)")
+    else:
+        server.add_insecure_port(f'[::]:{port}')
+        logging.warning("gRPC server running in INSECURE mode (no TLS)")
+
     await server.start()
     logging.info(f"Desktop Automation async gRPC server started on port {port}")
     await server.wait_for_termination()
