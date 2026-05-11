@@ -7,6 +7,7 @@ use tauri::{generate_context, generate_handler, Manager, RunEvent};
 
 mod commands;
 mod config;
+mod events;
 mod notifications;
 mod shortcuts;
 mod tray;
@@ -26,28 +27,34 @@ fn main() {
         .on_system_tray_event(tray::handle_system_tray_event)
         .setup(|app| {
             // Register global shortcuts
-            if let Err(e) = shortcuts::register_global_shortcuts(app.handle()) {
+            if let Err(e) = shortcuts::register_global_shortcuts(&app.handle()) {
                 eprintln!("Failed to register global shortcuts: {}", e);
             }
 
-            // Check if should start minimized
-            let config = config::AppConfig::default();
+            // Load persisted config and apply settings
+            let config = config::AppConfig::load();
             if config.start_minimized {
                 if let Some(window) = app.get_window("main") {
                     let _ = window.hide();
                 }
             }
 
+            // Start WebSocket event bridge to Supervisor
+            events::start_event_bridge(app.handle());
+
             Ok(())
         })
         .invoke_handler(generate_handler![
-            commands::get_daemon_status,
-            commands::start_daemon,
-            commands::stop_daemon,
-            commands::get_config,
-            commands::set_config,
-            commands::show_notification,
-            commands::get_app_version,
+            commands::daemon::get_daemon_status,
+            commands::daemon::start_daemon,
+            commands::daemon::stop_daemon,
+            commands::config::get_config,
+            commands::config::set_config,
+            commands::notifications::show_notification,
+            commands::system::get_app_version,
+            commands::keychain::get_secret,
+            commands::keychain::set_secret,
+            commands::keychain::delete_secret,
         ])
         .on_window_event(|event| match event.event() {
             tauri::WindowEvent::CloseRequested { api, .. } => {
