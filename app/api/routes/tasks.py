@@ -1,3 +1,5 @@
+import asyncio
+from enum import Enum
 from fastapi import APIRouter, HTTPException, Depends, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 from uuid import UUID, uuid4
@@ -6,13 +8,20 @@ from typing import Optional, Dict, Any, List
 from ...orchestrator.core import Orchestrator
 from ...agents.types import TaskStatus, StepStatus
 from ...logs.logger import logger
-from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo
+from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
 from ...config.settings import settings
 from ...orchestrator.errors import ErrorCode, UnrecoverableError
 from ...orchestrator.event_bus import event_bus, Event
 from ..deps import OrchestratorDep, get_current_user
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+
+class TaskMode(str, Enum):
+    TASK = "task"
+    WORKFLOW = "workflow"
+    AUTONOMOUS = "autonomous"
+    COLLABORATION = "collaboration"
 
 
 class TaskConfig(BaseModel):
@@ -23,7 +32,7 @@ class TaskConfig(BaseModel):
 class TaskCreateRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=10000)
     config: Optional[TaskConfig] = None
-    mode: Optional[str] = Field(default="task", pattern="^(task|workflow|autonomous|collaboration)$")
+    mode: TaskMode = Field(default=TaskMode.TASK)
 
 
 class TaskCreateResponse(BaseModel):
@@ -158,9 +167,9 @@ async def create_task(
     config = request.config.model_dump() if request.config else {}
     config.setdefault("max_steps", settings.MAX_STEPS_DEFAULT)
     config.setdefault("timeout", settings.TIMEOUT_DEFAULT)
-    config.setdefault("mode", request.mode or "task")
+    config.setdefault("mode", request.mode.value)
 
-    created_at = datetime.utcnow()
+    created_at = datetime.now(timezone.utc)
 
     db_task = await task_repo.create(
         task_id=str(task_id),
@@ -335,11 +344,38 @@ async def list_tasks(
     else:
         db_tasks = await task_repo.list_by_user(str(getattr(current_user, "id")), limit=limit, offset=offset)
 
-    all_tasks = []
+    if not db_tasks:
+        return []
 
+    # ── Batch fetch all workflow data (N+1 fix) ─────────────────────
+    all_task_ids = [str(t.id) for t in db_tasks]
+    workflows = await workflow_repo.get_by_task_ids(all_task_ids)
+    workflow_by_task_id = {w.task_id: w for w in workflows}
+
+    workflow_ids = [w.id for w in workflows]
+    if workflow_ids:
+        all_nodes, all_edges = await asyncio.gather(
+            workflow_node_repo.get_by_workflow_ids(workflow_ids),
+            workflow_edge_repo.get_by_workflow_ids(workflow_ids),
+        )
+    else:
+        all_nodes, all_edges = [], []
+
+    nodes_by_workflow_id = {}
+    for node in all_nodes:
+        nodes_by_workflow_id.setdefault(node.workflow_id, []).append(node)
+
+    edges_by_workflow_id = {}
+    for edge in all_edges:
+        edges_by_workflow_id.setdefault(edge.workflow_id, []).append(edge)
+
+    # ── Build response ─────────────────────────────────────────────
+    all_tasks = []
     for db_task in db_tasks:
-        workflow_state = await _task_scoped_workflow_state(UUID(db_task.id), current_user)
-        # Extract retry and fallback context from task result
+        workflow = workflow_by_task_id.get(str(db_task.id))
+        workflow_nodes = nodes_by_workflow_id.get(workflow.id, []) if workflow else []
+        workflow_edges = edges_by_workflow_id.get(workflow.id, []) if workflow else []
+
         retry_info = None
         fallback_chain = None
         if db_task.result and isinstance(db_task.result, dict):
@@ -349,19 +385,19 @@ async def list_tasks(
             task_id=UUID(db_task.id),
             status=_safe_task_status(db_task.status),
             result=db_task.result,
-            steps=[_serialize_node(node) for node in workflow_state["nodes"]],
+            steps=[_serialize_node(node) for node in workflow_nodes],
             workflow_state={
                 "workflow": {
-                    "id": workflow_state["workflow"].id if workflow_state["workflow"] else None,
-                    "task_id": workflow_state["workflow"].task_id if workflow_state["workflow"] else None,
-                    "name": workflow_state["workflow"].name if workflow_state["workflow"] else None,
-                    "definition": workflow_state["workflow"].definition if workflow_state["workflow"] else None,
-                    "status": workflow_state["workflow"].status if workflow_state["workflow"] else None,
+                    "id": workflow.id if workflow else None,
+                    "task_id": workflow.task_id if workflow else None,
+                    "name": workflow.name if workflow else None,
+                    "definition": workflow.definition if workflow else None,
+                    "status": workflow.status if workflow else None,
                 },
-                "nodes": [_serialize_node(node) for node in workflow_state["nodes"]],
+                "nodes": [_serialize_node(node) for node in workflow_nodes],
                 "edges": [
                     {"id": edge.id, "from_node_id": edge.from_node_id, "to_node_id": edge.to_node_id}
-                    for edge in workflow_state["edges"]
+                    for edge in workflow_edges
                 ],
             },
             error={"message": db_task.error} if db_task.error else None,
@@ -378,12 +414,35 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
     db_task = await task_repo.get(str(task_id))
     _ensure_task_access(db_task, current_user)
     await task_repo.update(str(task_id), status=TaskStatus.CANCELLED.value)
+
+    # Publish cancellation event so running execution paths can listen
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.cancelled", {"task_id": str(task_id), "reason": "Cancelled by user"}, source="api")
+    )
     await event_bus.publish(
         f"task:{task_id}",
         Event("task.status_changed", {"status": TaskStatus.CANCELLED.value, "task_id": str(task_id)})
     )
 
-    return {"message": "Task deleted"}
+    # Write Redis cancellation key so executor nodes can check
+    try:
+        from ..memory.short_term import redis_client
+        if redis_client and redis_client.client:
+            await redis_client.client.setex(
+                f"agentos:cancelled:{task_id}", 3600, "1"
+            )
+    except Exception:
+        pass
+
+    # Attempt to revoke Celery task if running
+    try:
+        from ..queue.tasks import celery_app
+        celery_app.control.revoke(str(task_id), terminate=True, signal='SIGTERM')
+    except Exception:
+        pass
+
+    return {"message": "Task deleted", "task_id": str(task_id)}
 
 
 @router.post("/{task_id}/approve")
