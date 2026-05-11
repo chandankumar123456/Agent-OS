@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Dict, Optional
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..agents.base import AgentOutput, AgentStatus
 from ..logs.logger import logger
@@ -24,10 +24,7 @@ from ..langgraph.graphs import (
 )
 from ..langgraph.state import AgentState
 
-try:
-    from langgraph.types import Command
-except ImportError:
-    Command = None
+from langgraph.types import Command
 from ..orchestrator.event_bus import event_bus, Event
 from ..capabilities import (
     capability_router,
@@ -100,7 +97,7 @@ class TaskRunner:
             environment_config=environment_config,
             verification_reports=[],
             recovery_decisions=[],
-            created_at=datetime.utcnow().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
             mode=config.get("mode", "task"),
             status="pending",
             max_tool_rounds=config.get("max_tool_rounds", 5),
@@ -459,7 +456,7 @@ class TaskRunner:
                 workflow_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT)
 
             try:
-                if resume_value and Command is not None:
+                if resume_value:
                     logger.info(f"[LangGraph] Resuming {mode} graph for task {task_id} with resume_value")
                     final_state = await asyncio.wait_for(
                         graph.ainvoke(Command(resume=resume_value), config=thread_config),
