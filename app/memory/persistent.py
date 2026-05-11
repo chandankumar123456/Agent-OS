@@ -5,7 +5,7 @@ persistence interface with Redis for fast access and PostgreSQL for durability.
 Supports size-based LRU eviction, TTL expiry, and optional LLM summarization
 of memory contents.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -99,7 +99,7 @@ class PersistentMemoryManager:
         """
         await self._check_and_prune(namespace)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         expire = ttl if ttl is not None else self.ttl_default
 
         entry = MemoryEntry(
@@ -306,7 +306,7 @@ class PersistentMemoryManager:
     async def _update_lru(self, redis_key: str) -> None:
         """Update the LRU tracker for a key (best-effort)."""
         try:
-            now = datetime.utcnow().isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             lru_entry = {redis_key: now}
             existing = await redis_client.get(self._lru_tracker_key)
             if existing:
