@@ -4,7 +4,7 @@ Prevents duplicate task execution using idempotency keys and
 distributed locks with configurable TTL.
 """
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
@@ -134,7 +134,7 @@ class IdempotencyEnforcement:
             # Try to acquire lock with NX (only if not exists)
             lock_data = {
                 "task_id": task_id,
-                "acquired_at": datetime.utcnow().isoformat(),
+                "acquired_at": datetime.now(timezone.utc).isoformat(),
             }
             # Use SET NX EX via redis_client's set method
             # Since redis_client.set doesn't support NX, we check get first
@@ -162,7 +162,7 @@ class IdempotencyEnforcement:
                 "idempotency_key": idempotency_key,
                 "task_id": task_id,
                 "status": "pending",
-                "created_at": datetime.utcnow().isoformat(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
             }
             await redis_client.set(record_key, record, expire=self.record_ttl)
 
@@ -219,7 +219,7 @@ class IdempotencyEnforcement:
             record = await redis_client.get(record_key) or {}
             if record.get("task_id") == task_id:
                 record["status"] = "completed"
-                record["completed_at"] = datetime.utcnow().isoformat()
+                record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 if result_ref:
                     record["result_ref"] = result_ref
                 await redis_client.set(record_key, record, expire=self.record_ttl)
@@ -240,7 +240,7 @@ class IdempotencyEnforcement:
             record = await redis_client.get(record_key) or {}
             if record.get("task_id") == task_id:
                 record["status"] = "failed"
-                record["completed_at"] = datetime.utcnow().isoformat()
+                record["completed_at"] = datetime.now(timezone.utc).isoformat()
                 await redis_client.set(record_key, record, expire=self.record_ttl)
                 await self._save_record_to_db(idempotency_key, task_id, "failed")
                 logger.debug(f"Marked idempotency failed: {idempotency_key}")
@@ -300,7 +300,7 @@ class IdempotencyEnforcement:
                     "task_id": task_id,
                     "status": status,
                     "result_ref": result_ref,
-                    "updated_at": datetime.utcnow().isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
                 }
                 if existing:
                     existing.value = value
