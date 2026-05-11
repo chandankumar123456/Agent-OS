@@ -5,16 +5,7 @@ from datetime import datetime
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from langgraph.checkpoint.base import BaseCheckpointSaver, Checkpoint, CheckpointMetadata, CheckpointTuple
-try:
-    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-except ImportError:
-    # Fallback for different langgraph versions
-    from langgraph.checkpoint.serde.base import SerializerProtocol
-    class JsonPlusSerializer:
-        def dumps_typed(self, obj):
-            return json.loads(json.dumps(obj, default=str))
-        def loads_typed(self, data):
-            return data
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from sqlalchemy import select, delete
 from ..memory.models import CheckpointModel, CheckpointWriteModel
 from ..memory.long_term import db
