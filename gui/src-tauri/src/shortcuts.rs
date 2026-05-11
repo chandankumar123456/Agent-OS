@@ -1,4 +1,4 @@
-use tauri::{AppHandle, GlobalShortcutManager};
+use tauri::{AppHandle, GlobalShortcutManager, Manager};
 
 pub fn register_global_shortcuts(app: &AppHandle) -> Result<(), String> {
     let app_handle = app.clone();
@@ -13,7 +13,7 @@ pub fn register_global_shortcuts(app: &AppHandle) -> Result<(), String> {
         eprintln!("Failed to register Ctrl+Shift+A: {}", e);
     }
     
-    let app_handle = app.clone();
+    let _app_handle = app.clone();
     
     // Register Ctrl+Shift+S for screenshot
     if let Err(e) = app.global_shortcut_manager().register("Ctrl+Shift+S", move || {
@@ -41,7 +41,7 @@ pub fn register_global_shortcuts(app: &AppHandle) -> Result<(), String> {
 }
 
 pub fn unregister_global_shortcuts(app: &AppHandle) -> Result<(), String> {
-    let manager = app.global_shortcut_manager();
-    manager.unregister_all()?;
+    let mut manager = app.global_shortcut_manager();
+    manager.unregister_all().map_err(|e| e.to_string())?;
     Ok(())
 }
