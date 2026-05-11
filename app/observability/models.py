@@ -1,7 +1,7 @@
 """Structured observability event models for AgentOS."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, Optional
 
@@ -14,6 +14,7 @@ class ObservabilityEventType(str, Enum):
     CAPABILITY_SELECTED = "capability.selected"
     ENVIRONMENT_SELECTED = "environment.selected"
     STEP_STARTED = "step.started"
+    STEP_COMPLETED = "step.completed"
     TOOL_INVOKED = "tool.invoked"
     TOOL_RESULT = "tool.result"
     RETRY_INITIATED = "retry.initiated"
@@ -34,7 +35,7 @@ class ObservabilityEvent(BaseModel):
     step_id: Optional[str] = None
     payload: Dict[str, Any] = Field(default_factory=dict)
     source: str = "agentos"
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_event_bus_payload(self) -> Dict[str, Any]:
         """Convert to the plain dict format expected by the legacy event bus."""
