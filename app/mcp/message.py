@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID, uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional, Dict
 
 
@@ -23,7 +23,7 @@ class MCPMessage(BaseModel):
     step_id: Optional[UUID] = None
     sender_agent: str = "system"
     receiver_agent: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: Payload = Field(default_factory=Payload)
     metadata: Metadata = Field(default_factory=Metadata)
     
