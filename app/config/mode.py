@@ -44,23 +44,17 @@ def get_runtime_mode() -> RuntimeMode:
     """Get the current runtime mode from environment variable.
     
     Returns:
-        RuntimeMode: HTTP or GRPC mode
-        
-    Raises:
-        ValueError: If environment variable has invalid value
+        RuntimeMode: HTTP or GRPC mode (defaults to HTTP on invalid input)
     """
     mode_str = os.environ.get(ENV_RUNTIME_MODE, DEFAULT_MODE).lower()
-    
     if mode_str == "http":
         return RuntimeMode.HTTP
     elif mode_str == "grpc":
         return RuntimeMode.GRPC
     else:
-        raise ValueError(
-            f"Invalid runtime mode '{mode_str}'. "
-            f"Valid values: 'http', 'grpc'. "
-            f"Set with environment variable {ENV_RUNTIME_MODE}"
-        )
+        if ENV_RUNTIME_MODE in os.environ:
+            logger.warning(f"Invalid runtime mode '{mode_str}', defaulting to '{DEFAULT_MODE}'")
+        return RuntimeMode.HTTP
 
 
 def is_grpc_mode() -> bool:
