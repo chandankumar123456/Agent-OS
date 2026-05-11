@@ -1,13 +1,13 @@
 import asyncio
-from datetime import datetime
-from typing import Optional, Dict, Any, List
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List, AsyncGenerator
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import select
 
 from .models import (
-    Base,
     TaskModel,
     WorkflowModel,
     WorkflowNodeModel,
@@ -57,9 +57,7 @@ class Database:
         )
         self.session_factory = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
         self._loop = current_loop
-        async with self.engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database connected")
+        logger.info("Database engine connected (schema managed by migrations)")
 
     async def disconnect(self):
         if self.engine:
@@ -73,6 +71,35 @@ class Database:
         if not self.session_factory:
             raise RuntimeError("Database session factory is unavailable")
         return self.session_factory()
+
+    @asynccontextmanager
+    async def session_scope(self) -> AsyncGenerator[AsyncSession, None]:
+        """Provide a transactional scope around a series of operations.
+
+        Use this when you need to group multiple repository calls or raw
+        operations into a single database transaction with automatic
+        rollback on failure.
+
+        Usage:
+            async with db.session_scope() as session:
+                task = await task_repo.create(...)
+                await trace_repo.create(...)
+                # Both succeed or both roll back
+
+        NOTE: Each repository method (e.g. TaskRepository.get()) currently
+        opens its own session. For simple reads this is fine — but when you
+        need atomicity across multiple operations, wrap them in this scope
+        instead of calling individual repo methods.
+        """
+        session = self.get_session()
+        try:
+            yield session
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
 
 db = Database()
@@ -465,7 +492,7 @@ class NodeTraceRepository:
                     row.output_data = output_data
                 if error is not None:
                     row.error = error
-                row.finished_at = datetime.utcnow()
+                row.finished_at = datetime.now(timezone.utc)
                 await session.commit()
                 await session.refresh(row)
             return row
@@ -503,7 +530,7 @@ class SpanRepository:
             if span:
                 span.status = status
                 span.error = error
-                span.end_time = datetime.utcnow()
+                span.end_time = datetime.now(timezone.utc)
                 await session.commit()
                 await session.refresh(span)
             return span
@@ -953,7 +980,7 @@ class TokenUsageRepository:
     async def get_total_tokens_today(self) -> int:
         from sqlalchemy import func
         async with db.get_session() as session:
-            today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             result = await session.execute(
                 select(func.coalesce(func.sum(TokenUsageModel.total_tokens), 0))
                 .where(TokenUsageModel.created_at >= today_start)
