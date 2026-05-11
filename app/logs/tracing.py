@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from ..memory.long_term import trace_repo, span_repo
 
@@ -50,7 +50,7 @@ class TraceManager:
             trace_id=trace_id,
             operation=operation,
             agent_name=agent_name,
-            start_time=datetime.utcnow(),
+            start_time=datetime.now(timezone.utc),
             metadata=metadata or {}
         )
 
@@ -70,7 +70,7 @@ class TraceManager:
     ):
         if span_id in self.spans:
             span = self.spans[span_id]
-            span.end_time = datetime.utcnow()
+            span.end_time = datetime.now(timezone.utc)
             span.status = status
             span.error = error
 
