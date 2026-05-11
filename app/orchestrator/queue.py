@@ -6,7 +6,7 @@ Integrates with TaskStateMachine, IdempotencyEnforcement, and ExecutionLock.
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
@@ -44,7 +44,7 @@ class QueuedTask(BaseModel):
     priority: TaskPriority
     config: Dict[str, Any] = Field(default_factory=dict)
     idempotency_key: Optional[str] = None
-    enqueued_at: datetime = Field(default_factory=datetime.utcnow)
+    enqueued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     scheduled_for: Optional[datetime] = None
     worker_id: Optional[str] = None
     status: str = "queued"
@@ -107,7 +107,7 @@ class TaskQueue:
             QueuePosition with position and estimated wait.
         """
         config = config or {}
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         # Compute score: priority * 1_000_000_000 + timestamp
         # This ensures priority is dominant but FIFO within same priority
@@ -258,7 +258,7 @@ class TaskQueue:
                     "data": task.model_dump_json(),
                     "status": "assigned",
                     "worker_id": worker_id,
-                    "assigned_at": datetime.utcnow().isoformat(),
+                    "assigned_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
 
@@ -302,7 +302,7 @@ class TaskQueue:
             # Update task metadata
             await redis_client.client.hset(
                 self._task_key(task_id),
-                mapping={"status": "completed", "completed_at": datetime.utcnow().isoformat()},
+                mapping={"status": "completed", "completed_at": datetime.now(timezone.utc).isoformat()},
             )
 
             # Release execution lock
@@ -336,7 +336,7 @@ class TaskQueue:
                 mapping={
                     "status": "failed",
                     "error": error,
-                    "failed_at": datetime.utcnow().isoformat(),
+                    "failed_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
 
@@ -376,7 +376,7 @@ class TaskQueue:
             task.retry_count += 1
             task.status = "queued"
             task.worker_id = None
-            task.enqueued_at = datetime.utcnow()
+            task.enqueued_at = datetime.now(timezone.utc)
             if priority is not None:
                 task.priority = priority
 
@@ -390,7 +390,7 @@ class TaskQueue:
                 mapping={
                     "data": task.model_dump_json(),
                     "status": "queued",
-                    "requeued_at": datetime.utcnow().isoformat(),
+                    "requeued_at": datetime.now(timezone.utc).isoformat(),
                 },
             )
 
