@@ -3,10 +3,12 @@
 Provides client stubs for supervisor communication while maintaining
 LangGraph checkpoint compatibility and SQLite persistence for local mode.
 
+Supports TLS + API key authentication for desktop mode.
+
 Usage:
     from app.proto.grpc_client import GRPCClient
     
-    client = GRPCClient(host="localhost", port=50051)
+    client = GRPCClient(host="localhost", port=50052, use_tls=True)
     await client.connect()
     
     # Create a task
@@ -22,6 +24,7 @@ Usage:
 """
 
 import asyncio
+import os
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 
@@ -43,11 +46,16 @@ from ..proto import worker_pb2_grpc
 class GRPCClientConfig:
     """Configuration for gRPC client."""
     host: str = "localhost"
-    port: int = 50051
+    port: int = 50052
     max_send_message_length: int = 50 * 1024 * 1024  # 50MB
     max_receive_message_length: int = 50 * 1024 * 1024  # 50MB
     connection_timeout: float = 5.0
     keepalive_timeout: int = 60
+    use_tls: bool = True
+    ca_cert_path: Optional[str] = None
+    client_cert_path: Optional[str] = None
+    client_key_path: Optional[str] = None
+    api_key: Optional[str] = None
 
 
 class RuntimeServiceClient:
@@ -234,11 +242,25 @@ class WorkerServiceClient:
         return await self._stub.HealthCheck(request)
 
 
+class APIKeyInterceptor(grpc.aio.UnaryUnaryClientInterceptor):
+    """Interceptor that adds API key to every gRPC call."""
+    
+    def __init__(self, api_key: str):
+        self._api_key = api_key
+    
+    async def intercept_unary_unary(self, continuation, client_call_details, request):
+        metadata = list(client_call_details.metadata or [])
+        metadata.append(("x-api-key", self._api_key))
+        client_call_details = client_call_details._replace(metadata=metadata)
+        return await continuation(client_call_details, request)
+
+
 class GRPCClient:
     """gRPC client wrapper for AgentOS runtime.
     
     Provides client stubs for supervisor communication while maintaining
     LangGraph checkpoint compatibility and SQLite persistence for local mode.
+    Supports TLS + API key authentication.
     """
     
     def __init__(self, config: Optional[GRPCClientConfig] = None):
@@ -269,17 +291,76 @@ class GRPCClient:
         """Check if client is connected."""
         return self._connected
     
+    def _load_api_key(self) -> Optional[str]:
+        """Load API key from config or environment."""
+        if self._config.api_key:
+            return self._config.api_key
+        return os.environ.get("AGENTOS_API_KEY")
+    
+    def _build_channel(self) -> grpc.aio.Channel:
+        """Build gRPC channel with TLS and auth."""
+        target = f"{self._config.host}:{self._config.port}"
+        options = [
+            ("grpc.max_send_message_length", self._config.max_send_message_length),
+            ("grpc.max_receive_message_length", self._config.max_receive_message_length),
+            ("grpc.keepalive_timeout_ms", self._config.keepalive_timeout * 1000),
+        ]
+        
+        api_key = self._load_api_key()
+        interceptors = []
+        if api_key:
+            interceptors.append(APIKeyInterceptor(api_key))
+        
+        if self._config.use_tls:
+            # Load CA certificate
+            ca_cert_path = self._config.ca_cert_path or self._default_ca_path()
+            if not os.path.exists(ca_cert_path):
+                logger.warning(f"CA cert not found at {ca_cert_path}, falling back to insecure channel")
+                channel = grpc.aio.insecure_channel(target, options=options, interceptors=interceptors)
+                return channel
+            
+            with open(ca_cert_path, "rb") as f:
+                ca_cert = f.read()
+            
+            creds = grpc.ssl_channel_credentials(ca_cert)
+            
+            # Add client cert for mTLS if available
+            client_cert_path = self._config.client_cert_path or self._default_client_cert_path()
+            client_key_path = self._config.client_key_path or self._default_client_key_path()
+            if os.path.exists(client_cert_path) and os.path.exists(client_key_path):
+                with open(client_cert_path, "rb") as f:
+                    client_cert = f.read()
+                with open(client_key_path, "rb") as f:
+                    client_key = f.read()
+                creds = grpc.ssl_channel_credentials(ca_cert, client_key, client_cert)
+            
+            channel = grpc.aio.secure_channel(target, creds, options=options, interceptors=interceptors)
+            logger.info(f"gRPC client using TLS to {target}")
+            return channel
+        else:
+            channel = grpc.aio.insecure_channel(target, options=options, interceptors=interceptors)
+            logger.warning(f"gRPC client using INSECURE connection to {target}")
+            return channel
+    
+    def _default_ca_path(self) -> str:
+        """Get default CA certificate path."""
+        home = os.path.expanduser("~")
+        return os.path.join(home, ".agentos", "certs", "ca.crt")
+    
+    def _default_client_cert_path(self) -> str:
+        """Get default client certificate path."""
+        home = os.path.expanduser("~")
+        return os.path.join(home, ".agentos", "certs", "client.crt")
+    
+    def _default_client_key_path(self) -> str:
+        """Get default client key path."""
+        home = os.path.expanduser("~")
+        return os.path.join(home, ".agentos", "certs", "client.key")
+    
     async def connect(self):
         """Establish gRPC connection to supervisor."""
         try:
-            self._channel = grpc.aio.insecure_channel(
-                f"{self._config.host}:{self._config.port}",
-                options=[
-                    ("grpc.max_send_message_length", self._config.max_send_message_length),
-                    ("grpc.max_receive_message_length", self._config.max_receive_message_length),
-                    ("grpc.keepalive_timeout_ms", self._config.keepalive_timeout * 1000),
-                ]
-            )
+            self._channel = self._build_channel()
             
             # Create stubs
             runtime_stub = runtime_pb2_grpc.RuntimeServiceStub(self._channel)
