@@ -6,7 +6,7 @@ timeout configurations and deadlines across distributed workers.
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -31,7 +31,7 @@ class TimeoutRecord(BaseModel):
     scope: str  # agent, tool, workflow, step
     deadline_timestamp: float
     configured_seconds: int
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     triggered: bool = False
 
 
