@@ -10,7 +10,7 @@ from ..memory.long_term import db
 from ..memory.models import APIKeyModel
 from sqlalchemy import select
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class APIKeyMiddleware(BaseHTTPMiddleware):
@@ -56,7 +56,7 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
                         result = await session.execute(select(APIKeyModel).where(APIKeyModel.key_hash == key_hash))
                         key_obj = result.scalar_one_or_none()
                         if key_obj:
-                            key_obj.last_used_at = datetime.utcnow()
+                            key_obj.last_used_at = datetime.now(timezone.utc)
                             await session.commit()
                             request.state.user = {"sub": key_obj.user_id}
                             request.state.auth_type = "api_key"
