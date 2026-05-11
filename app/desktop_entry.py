@@ -23,6 +23,16 @@ import os
 import sys
 from typing import Optional
 
+# Set gRPC mode BEFORE any app imports to avoid settings validation race
+# where REDIS_URL is required in HTTP mode but optional in gRPC mode.
+# We set BOTH env vars because:
+# - AGENTOS_RUNTIME_MODE is checked by app.runtime.mode
+# - RUNTIME_MODE is the Settings field name read by Pydantic BaseSettings
+if os.environ.get("AGENTOS_RUNTIME_MODE") != "grpc":
+    os.environ["AGENTOS_RUNTIME_MODE"] = "grpc"
+if os.environ.get("RUNTIME_MODE") != "grpc":
+    os.environ["RUNTIME_MODE"] = "grpc"
+
 # Ensure project root is in path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
