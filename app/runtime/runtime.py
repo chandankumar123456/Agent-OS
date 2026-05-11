@@ -7,25 +7,11 @@ from .worker import AgentWorker
 from .factory import AgentFactory
 from .pool import AgentPool
 
-# gRPC imports (optional, only when in GRPC mode)
-try:
-    from ..proto.grpc_client import GRPCClient, GRPCClientConfig
-    from ..runtime.mode import get_runtime_mode, get_grpc_client_config, RuntimeMode
-    GRPC_AVAILABLE = True
-except ImportError:
-    GRPC_AVAILABLE = False
-    # Fallback for when gRPC is not available
-    def get_runtime_mode() -> str:
-        return "http"
-    
-    class RuntimeMode:
-        HTTP = "http"
-        GRPC = "grpc"
-    
-    class GRPCClientConfig:
-        def __init__(self, host="localhost", port=50051):
-            self.host = host
-            self.port = port
+# gRPC client imports (core dependency, always available)
+from ..proto.grpc_client import GRPCClient, GRPCClientConfig
+from ..runtime.mode import get_runtime_mode, get_grpc_client_config, RuntimeMode
+from ..config.mode import get_grpc_address
+GRPC_AVAILABLE = True
 
 
 class AgentRuntime:
@@ -138,12 +124,12 @@ class AgentRuntime:
                 except Exception as e:
                     logger.warning(f"Failed to persist core agents to database: {e}")
 
-            # Load any additional agents from database into runtime (always do this)
-            try:
-                await self.load_from_db()
-                logger.info("Agents loaded from database into runtime")
-            except Exception as e:
-                logger.warning(f"Failed to load agents from database: {e}")
+                # Load additional agents from DB (inside mutex to prevent duplicate registration)
+                try:
+                    await self.load_from_db()
+                    logger.info("Agents loaded from database into runtime")
+                except Exception as e:
+                    logger.warning(f"Failed to load agents from database: {e}")
 
             self._initialized = True
             logger.info("AgentRuntime initialized with core agents")
@@ -193,7 +179,6 @@ class AgentRuntime:
                 return False
             
             # Initialize gRPC client
-            from ..config.mode import get_grpc_address
             grpc_address = get_grpc_address()
             host, port_str = grpc_address.rsplit(":", 1)
             port = int(port_str)
@@ -211,9 +196,6 @@ class AgentRuntime:
             logger.info(f"gRPC client initialized for mode={mode}, address={grpc_address}")
             return True
             
-        except ImportError as e:
-            logger.error(f"gRPC import error: {e}")
-            return False
         except Exception as e:
             logger.error(f"Failed to initialize gRPC client: {e}")
             self._grpc_client = None
