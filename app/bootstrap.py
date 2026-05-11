@@ -26,12 +26,9 @@ from .runtime.mode import RuntimeMode, get_runtime_mode, is_grpc_mode
 from .migrations.runner import run_pending_migrations
 from .mcp.monitor import mcp_health_monitor
 
-# Optional imports for gRPC mode
-try:
-    from .proto.grpc_client import GRPCClient, GRPCClientConfig
-    GRPC_AVAILABLE = True
-except ImportError:
-    GRPC_AVAILABLE = False
+# gRPC client imports (core dependency, always available)
+from .proto.grpc_client import GRPCClient, GRPCClientConfig
+GRPC_AVAILABLE = True
 
 
 class BootstrapContext:
@@ -92,6 +89,19 @@ async def _check_dependencies() -> None:
     
     if not settings.OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is required but not set")
+
+    if not settings.SECRET_KEY or settings.SECRET_KEY.strip() == "":
+        raise RuntimeError(
+            "SECRET_KEY is required but not set or empty. "
+            "Set a persistent SECRET_KEY in your environment "
+            "so that all processes (FastAPI, Celery workers, runtime) share the same key."
+        )
+
+    if len(settings.SECRET_KEY) < 32:
+        raise RuntimeError(
+            f"SECRET_KEY is too short ({len(settings.SECRET_KEY)} chars). "
+            f"Minimum 32 characters recommended."
+        )
 
 
 async def _init_database(ctx: BootstrapContext) -> None:
