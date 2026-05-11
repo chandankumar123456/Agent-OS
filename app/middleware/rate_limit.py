@@ -95,8 +95,9 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
             return False, 0, remaining
         except Exception as e:
-            logger.warning(f"Redis rate limit check failed, allowing request: {e}")
-            return False, 0, limit
+            logger.error(f"Redis rate limit check failed, rejecting request: {e}")
+            # Fail closed: reject request when rate limit system is unavailable
+            return True, 60, 0  # is_limited=True, retry_after=60, remaining=0
 
     async def dispatch(self, request: Request, call_next):
         if request.url.path in ["/health", "/docs", "/openapi.json"]:
