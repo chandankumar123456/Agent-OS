@@ -6,7 +6,7 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable
-from datetime import datetime
+from datetime import datetime, timezone
 
 from ..logs.logger import logger
 
@@ -209,7 +209,7 @@ class ActionStabilizer:
         try:
             while (asyncio.get_event_loop().time() - start) < max_wait:
                 # Save temp screenshot
-                path = os.path.join(tempfile.gettempdir(), f"stab_{datetime.utcnow().timestamp()}.png")
+                path = os.path.join(tempfile.gettempdir(), f"stab_{datetime.now(timezone.utc).timestamp()}.png")
                 result = await screenshot_fn(path)
                 if not getattr(result, "success", True):
                     # Clean up failed screenshot
@@ -292,7 +292,7 @@ class ActionStabilizer:
 
         while (asyncio.get_event_loop().time() - start) < timeout:
             # Screenshot check
-            path = os.path.join(tempfile.gettempdir(), f"verify_{datetime.utcnow().timestamp()}.png")
+            path = os.path.join(tempfile.gettempdir(), f"verify_{datetime.now(timezone.utc).timestamp()}.png")
             result = await screenshot_fn(path)
             if getattr(result, "success", True):
                 # Clean up previous intermediate screenshot
@@ -513,7 +513,7 @@ class ActionStabilizer:
                 # Take a screenshot (don't need the path, just need fresh capture)
                 ss_path = os.path.join(
                     tempfile.gettempdir(),
-                    f"dismiss_check_{method_name}_{datetime.utcnow().timestamp()}.png",
+                    f"dismiss_check_{method_name}_{datetime.now(timezone.utc).timestamp()}.png",
                 )
                 await screenshot_fn(ss_path)
                 # NFR3: Verify popup is actually gone before claiming success
@@ -572,7 +572,7 @@ class ActionStabilizer:
 
         for attempt in range(max_retries + 1):
             snapshot = ActionSnapshot(
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 action_name=action_name,
                 params=params,
                 before_screenshot_path=None,
@@ -601,7 +601,7 @@ class ActionStabilizer:
                 logger.debug(f"[ActionStabilizer] Could not capture tree hash: {e}")
 
             # Screenshot before
-            before_path = os.path.join(tempfile.gettempdir(), f"before_{action_name}_{datetime.utcnow().timestamp()}.png")
+            before_path = os.path.join(tempfile.gettempdir(), f"before_{action_name}_{datetime.now(timezone.utc).timestamp()}.png")
             sc_result = await screenshot_fn(before_path)
             if getattr(sc_result, "success", True):
                 snapshot.before_screenshot_path = before_path
@@ -676,7 +676,7 @@ class ActionStabilizer:
                     return last_result, snapshot
 
             # ── Post-action: capture state ──
-            after_path = os.path.join(tempfile.gettempdir(), f"after_{action_name}_{datetime.utcnow().timestamp()}.png")
+            after_path = os.path.join(tempfile.gettempdir(), f"after_{action_name}_{datetime.now(timezone.utc).timestamp()}.png")
             sc_result = await screenshot_fn(after_path)
             if getattr(sc_result, "success", True):
                 snapshot.after_screenshot_path = after_path
