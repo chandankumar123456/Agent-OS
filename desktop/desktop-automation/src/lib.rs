@@ -8,7 +8,7 @@ pub mod server;
 pub use desktop_protocol;
 
 // Re-export capture types
-pub use capture::{DxgiCapture, GdiCapture, CapturedFrame, Rect, CaptureError};
+pub use capture::{GdiCapture, CapturedFrame, Rect, CaptureError};
 
 // Re-export server
 pub use server::DesktopAutomationService;
