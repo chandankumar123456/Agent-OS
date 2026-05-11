@@ -5,7 +5,7 @@ metadata tracking, versioning, and namespace isolation per task.
 """
 import hashlib
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
@@ -120,7 +120,7 @@ class ArtifactStore:
                 http_status=413,
             )
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         artifact_id = artifact_id or str(uuid4())
         content_hash = hashlib.sha256(content).hexdigest()
         artifact_path = self._artifact_path(artifact_id, artifact_type)
