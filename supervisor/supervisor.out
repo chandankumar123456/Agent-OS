@@ -1,0 +1,10 @@
+[INFO] Database initialized successfully
+[INFO] Database file verified at: C:\Users\Chandan Kumar\.agentos\agentos.db
+Testing database operations...
+Database operations test passed!
+[INFO] TLS certificates initialized
+[INFO] Generated new API key for local auth
+[INFO] Checkpoint gRPC server starting on 127.0.0.1:50052 with TLS + auth
+AgentOS Supervisor started successfully
+HTTP API available at http://127.0.0.1:8080
+Press Ctrl+C to shutdown
