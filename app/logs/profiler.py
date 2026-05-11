@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 import statistics
 
 
@@ -32,7 +32,7 @@ class PerformanceProfiler:
         self._task_start_times: Dict[str, datetime] = {}
 
     def start_task(self, task_id: str):
-        self._task_start_times[task_id] = datetime.utcnow()
+        self._task_start_times[task_id] = datetime.now(timezone.utc)
         self._profiles[task_id] = []
 
     def record_step(
@@ -47,7 +47,7 @@ class PerformanceProfiler:
         self._profiles[task_id].append(StepProfile(
             step_name=step_name,
             latency_ms=latency_ms,
-            timestamp=datetime.utcnow().isoformat(),
+            timestamp=datetime.now(timezone.utc).isoformat(),
             metadata=metadata or {}
         ))
 
@@ -57,7 +57,7 @@ class PerformanceProfiler:
         start_time = self._task_start_times.get(task_id)
 
         if start_time:
-            total_duration_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            total_duration_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
         else:
             total_duration_ms = sum(s.latency_ms for s in steps)
 
