@@ -1,4 +1,3 @@
-import { LayoutProps } from '../types'
 import { 
   LayoutDashboard, 
   Bot, 
