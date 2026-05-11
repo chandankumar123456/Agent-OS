@@ -57,3 +57,11 @@ async def liveness_check():
 @router.get("/metrics", response_class=PlainTextResponse)
 async def prometheus_metrics():
     return metrics_collector.get_prometheus_format()
+
+
+@router.post("/maintenance/purge")
+async def trigger_purge(retention_days: int = 30):
+    """Trigger data purging for records older than retention_days."""
+    from ...maintenance import purge_old_data
+    result = await purge_old_data(retention_days)
+    return {"purged": result}
