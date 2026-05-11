@@ -27,6 +27,7 @@ from .middleware.auth import APIKeyMiddleware, get_api_keys
 from .middleware.rate_limit import RateLimitMiddleware, get_rate_limit
 from .middleware.request_logging import RequestLoggingMiddleware
 from .middleware.validation import InputValidationMiddleware
+from .middleware.csrf import CSRFMiddleware
 from .orchestrator.errors import AgentOSError, ErrorCode
 from .logs.metrics import metrics_collector
 
@@ -99,6 +100,9 @@ app.add_middleware(RateLimitMiddleware, requests_per_minute=get_rate_limit())
 api_keys = get_api_keys()
 if api_keys:
     app.add_middleware(APIKeyMiddleware, api_keys=api_keys)
+
+# CSRF protection (skip for API-key authenticated requests)
+app.add_middleware(CSRFMiddleware)
 
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(health_router)
