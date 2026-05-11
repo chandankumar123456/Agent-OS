@@ -5,6 +5,7 @@ invocation wrapping, and batch recording for multi-tool workflows.
 """
 import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -165,7 +166,7 @@ class ToolCostTracker:
                     "tokens_input": 0,
                     "tokens_output": 0,
                     "model": None,
-                    "timestamp": __import__("datetime").datetime.utcnow(),
+                    "timestamp": datetime.now(timezone.utc),
                     "metadata": {"tool": tool_name, "duration_ms": duration_ms},
                 })()
             )
