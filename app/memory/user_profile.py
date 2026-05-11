@@ -3,7 +3,7 @@
 Stores user preferences, learned patterns, and task history to enable
 personalized agent behavior across multiple task executions.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -90,7 +90,7 @@ class UserMemoryProfile:
                 profile = UserProfile(
                     user_id=user_id,
                     learned_patterns=facts,
-                    last_updated=datetime.utcnow(),
+                    last_updated=datetime.now(timezone.utc),
                 )
                 # Cache in Redis (best-effort)
                 try:
@@ -125,7 +125,7 @@ class UserMemoryProfile:
         Returns:
             The recorded UserFact.
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         fact = UserFact(
             category=category,
             key=key,
@@ -199,7 +199,7 @@ class UserMemoryProfile:
                 score += 0.5
             if score > 0:
                 # Weight by confidence and recency
-                age_days = (datetime.utcnow() - (fact.updated_at or fact.created_at or datetime.utcnow())).days
+                age_days = (datetime.now(timezone.utc) - (fact.updated_at or fact.created_at or datetime.now(timezone.utc))).days
                 recency_boost = max(0.5, 1.0 - (age_days / self.fact_ttl_days))
                 final_score = score * fact.confidence * recency_boost
                 scored.append((final_score, fact))
@@ -230,12 +230,12 @@ class UserMemoryProfile:
             "query": query,
             "result_summary": result_summary,
             "tools_used": tools_used or [],
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         profile.recent_task_summaries.insert(0, summary)
         # Keep only last 20
         profile.recent_task_summaries = profile.recent_task_summaries[:20]
-        profile.last_updated = datetime.utcnow()
+        profile.last_updated = datetime.now(timezone.utc)
         await self._save_profile(user_id, profile)
 
     async def get_recent_task_summaries(
@@ -268,7 +268,7 @@ class UserMemoryProfile:
         """
         profile = await self.get_profile(user_id)
         profile.preferences.update(preferences)
-        profile.last_updated = datetime.utcnow()
+        profile.last_updated = datetime.now(timezone.utc)
         await self._save_profile(user_id, profile)
         logger.debug(f"Updated preferences for user {user_id}: {list(preferences.keys())}")
 
