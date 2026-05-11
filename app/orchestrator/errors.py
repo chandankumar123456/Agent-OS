@@ -45,6 +45,7 @@ class ErrorType(str, Enum):
     TIMEOUT_ERROR = "timeout_error"
     RATE_LIMIT_ERROR = "rate_limit_error"
     AUTH_ERROR = "auth_error"
+    SYSTEM_ERROR = "system_error"
     UNKNOWN_ERROR = "unknown_error"
 
 
