@@ -2,6 +2,7 @@
 import asyncio
 import os
 import sys
+import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from contextlib import AsyncExitStack
@@ -17,17 +18,56 @@ StdioServerParameters = mcp_package.StdioServerParameters
 
 from ..logs.logger import logger
 
-# Handle both built-in (Python 3.11+) and backport exceptiongroup
-try:
-    from builtins import BaseExceptionGroup, ExceptionGroup
-except ImportError:
-    try:
-        from exceptiongroup import BaseExceptionGroup, ExceptionGroup
-    except ImportError:
-        class BaseExceptionGroup(BaseException):
-            pass
-        class ExceptionGroup(BaseExceptionGroup):
-            pass
+# ExceptionGroup is standard in Python 3.11+
+from builtins import BaseExceptionGroup, ExceptionGroup
+
+
+@dataclass
+class CircuitBreakerState:
+    failures: int = 0
+    last_failure_time: float = 0.0
+    state: str = "closed"  # closed, open, half-open
+
+
+class CircuitBreaker:
+    """Circuit breaker pattern for MCP server connections.
+
+    Tracks failures and prevents reconnection storms by temporarily
+    blocking connection attempts after consecutive failures.
+    """
+
+    def __init__(self, threshold=3, recovery_timeout=30.0):
+        self.threshold = threshold
+        self.recovery_timeout = recovery_timeout
+        self._states: Dict[str, CircuitBreakerState] = {}
+
+    def record_failure(self, name: str):
+        if name not in self._states:
+            self._states[name] = CircuitBreakerState()
+        state = self._states[name]
+        state.failures += 1
+        state.last_failure_time = time.time()
+        if state.failures >= self.threshold:
+            state.state = "open"
+
+    def record_success(self, name: str):
+        if name in self._states:
+            self._states[name] = CircuitBreakerState()  # reset
+
+    def can_proceed(self, name: str) -> bool:
+        if name not in self._states:
+            return True
+        state = self._states[name]
+        if state.state == "closed":
+            return True
+        if state.state == "open":
+            if time.time() - state.last_failure_time >= self.recovery_timeout:
+                state.state = "half-open"
+                return True
+            return False
+        if state.state == "half-open":
+            return True
+        return True
 
 
 @dataclass
@@ -53,6 +93,7 @@ class MCPClientManager:
         self._tool_to_server: Dict[str, str] = {}
         self._exit_stacks: Dict[str, AsyncExitStack] = {}
         self._raw_contexts: Dict[str, Any] = {}
+        self._circuit_breaker = CircuitBreaker()
 
     # ── Connection management ──────────────────────────────────────────
 
@@ -67,6 +108,13 @@ class MCPClientManager:
         if name in self.connections:
             logger.warning(f"MCP server '{name}' already connected")
             return self.connections[name]
+
+        # Circuit breaker: prevent reconnection storms
+        if not self._circuit_breaker.can_proceed(name):
+            raise RuntimeError(
+                f"MCP server '{name}' connection blocked by circuit breaker "
+                f"(too many consecutive failures)"
+            )
 
         logger.info(f"Connecting to MCP server '{name}' via stdio: {command} {args}")
         # Pass the full parent environment so MCP servers inherit OPENAI_API_KEY,
@@ -113,14 +161,17 @@ class MCPClientManager:
                 self._tool_to_server[tool["name"]] = name
 
             logger.info(f"MCP server '{name}' connected with {len(conn.tools)} tools")
+            self._circuit_breaker.record_success(name)
             return conn
         except asyncio.TimeoutError:
+            self._circuit_breaker.record_failure(name)
             if ctx:
                 await self._safe_aclose_generator(name, ctx)
                 self._raw_contexts.pop(name, None)
             await self._safe_close_exit_stack(name, exit_stack)
             raise RuntimeError(f"MCP server '{name}' initialization timed out")
         except Exception:
+            self._circuit_breaker.record_failure(name)
             if ctx:
                 await self._safe_aclose_generator(name, ctx)
                 self._raw_contexts.pop(name, None)
@@ -242,9 +293,10 @@ class MCPClientManager:
     # ── System servers ─────────────────────────────────────────────────
 
     async def start_system_servers(self) -> None:
-        """Start the built-in system MCP servers (filesystem, shell, cloud_api).
+        """Start the built-in system MCP servers (filesystem, shell, cloud_api, etc.).
 
         Idempotent: safe to call multiple times. Uses a flag to prevent duplicate spawns.
+        Uses ``asyncio.gather()`` to start all servers in parallel.
         """
         if getattr(self, "_system_servers_started", False):
             logger.debug("System MCP servers already started; skipping")
@@ -261,13 +313,16 @@ class MCPClientManager:
             ("code_executor", sys.executable, ["-m", "app.mcp.servers.code"]),
         ]
 
-        for name, command, args in servers:
+        async def _start_one(name: str, command: str, args: list) -> None:
             try:
                 await self.connect_stdio(name, command, args)
             except asyncio.CancelledError:
                 logger.warning(f"MCP server '{name}' connection was cancelled")
             except Exception as e:
                 logger.error(f"Failed to start system MCP server '{name}': {e}")
+
+        tasks = [_start_one(name, cmd, args) for name, cmd, args in servers]
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _ensure_system_servers(self) -> None:
         """Lazy on-demand startup for system servers."""
