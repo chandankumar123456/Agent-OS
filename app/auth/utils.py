@@ -13,8 +13,6 @@ from passlib.context import CryptContext
 from ..config.settings import settings
 from ..logs.logger import logger
 
-logger = logging.getLogger(__name__)
-
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 MAX_BCRYPT_BYTES = 72
