@@ -5,13 +5,18 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/AgentOS/supervisor/logger"
 	"github.com/AgentOS/supervisor/proto/runtime"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// TaskEventHandler is a callback for task status changes
+type TaskEventHandler func(eventType string, taskID string, status string, query string, errMsg string)
 
 // RuntimeServer implements the RuntimeServiceServer interface
 type RuntimeServer struct {
@@ -21,11 +26,24 @@ type RuntimeServer struct {
 	taskEvents   map[string][]*runtime.TaskEvent
 	taskEventSub map[string]chan *runtime.TaskEvent
 	db           *DB
-	logger       *log.Logger
+	logger       *logger.Logger
+	eventHandler atomic.Value // stores TaskEventHandler
+}
+
+// SetEventHandler sets a callback for task status changes
+func (s *RuntimeServer) SetEventHandler(handler TaskEventHandler) {
+	s.eventHandler.Store(handler)
+}
+
+// emitEvent calls the event handler if set (safe to call while holding s.mu)
+func (s *RuntimeServer) emitEvent(eventType string, taskID string, status string, query string, errMsg string) {
+	if handler, ok := s.eventHandler.Load().(TaskEventHandler); ok && handler != nil {
+		handler(eventType, taskID, status, query, errMsg)
+	}
 }
 
 // NewRuntimeServer creates a new runtime server
-func NewRuntimeServer(db *DB, logger *log.Logger) *RuntimeServer {
+func NewRuntimeServer(db *DB, logger *logger.Logger) *RuntimeServer {
 	return &RuntimeServer{
 		tasks:        make(map[string]*runtime.Task),
 		taskEvents:   make(map[string][]*runtime.TaskEvent),
@@ -85,8 +103,11 @@ func (s *RuntimeServer) CreateTask(ctx context.Context, req *runtime.CreateTaskR
 
 	// Save to database
 	if err := s.saveTaskToDB(task); err != nil {
-		s.logger.Printf("Warning: Failed to save task to database: %v", err)
+		s.logger.Infof("Warning: Failed to save task to database: %v", err)
 	}
+
+	// Emit event
+	s.emitEvent("task:created", taskID, "pending", req.Query, "")
 
 	return &runtime.CreateTaskResponse{
 		Success: true,
@@ -107,7 +128,7 @@ func (s *RuntimeServer) GetTask(ctx context.Context, req *runtime.GetTaskRequest
 	// Get steps from database
 	steps, err := s.getStepsFromDB(req.TaskId)
 	if err != nil {
-		s.logger.Printf("Warning: Failed to get steps from database: %v", err)
+		s.logger.Infof("Warning: Failed to get steps from database: %v", err)
 	}
 
 	return &runtime.GetTaskResponse{
@@ -157,8 +178,11 @@ func (s *RuntimeServer) CancelTask(ctx context.Context, req *runtime.CancelTaskR
 
 	// Update database
 	if err := s.updateTaskInDB(task); err != nil {
-		s.logger.Printf("Warning: Failed to update task in database: %v", err)
+		s.logger.Infof("Warning: Failed to update task in database: %v", err)
 	}
+
+	// Emit event
+	s.emitEvent("task:cancelled", req.TaskId, "cancelled", task.Query, req.Reason)
 
 	return &runtime.CancelTaskResponse{
 		Success: true,
@@ -295,7 +319,7 @@ func (s *RuntimeServer) GetRuntimeStatus(ctx context.Context, req *runtime.GetRu
 
 // Shutdown gracefully shuts down the runtime server
 func (s *RuntimeServer) Shutdown(ctx context.Context, req *runtime.ShutdownRequest) (*runtime.ShutdownResponse, error) {
-	s.logger.Printf("Runtime server shutdown requested")
+	s.logger.Infof("Runtime server shutdown requested")
 
 	// Wait for active tasks to complete
 	if req.Graceful {
@@ -310,7 +334,7 @@ func (s *RuntimeServer) Shutdown(ctx context.Context, req *runtime.ShutdownReque
 		for {
 			select {
 			case <-ctx.Done():
-				s.logger.Printf("Graceful shutdown timed out")
+				s.logger.Infof("Graceful shutdown timed out")
 				return &runtime.ShutdownResponse{
 					Success: true,
 					Message: "Graceful shutdown timed out, forcing shutdown",
@@ -327,7 +351,7 @@ func (s *RuntimeServer) Shutdown(ctx context.Context, req *runtime.ShutdownReque
 				s.mu.RUnlock()
 
 				if active == 0 {
-					s.logger.Printf("All tasks completed, shutting down")
+					s.logger.Infof("All tasks completed, shutting down")
 					return &runtime.ShutdownResponse{
 						Success: true,
 						Message: "Graceful shutdown complete",
@@ -483,4 +507,59 @@ func convertStepStatus(status string) runtime.StepStatus {
 	default:
 		return runtime.StepStatus_STEP_STATUS_UNSPECIFIED
 	}
+}
+
+// ApproveTask approves a task awaiting approval
+func (s *RuntimeServer) ApproveTask(ctx context.Context, req *runtime.ApproveTaskRequest) (*runtime.ApproveTaskResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[req.TaskId]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "task not found")
+	}
+
+	if task.Status != runtime.TaskStatus_TASK_STATUS_AWAITING_APPROVAL {
+		return nil, status.Error(codes.FailedPrecondition, "task is not awaiting approval")
+	}
+
+	task.Status = runtime.TaskStatus_TASK_STATUS_EXECUTING
+	task.UpdatedAt = timestamppb.Now()
+	s.tasks[req.TaskId] = task
+
+	// Emit event
+	s.emitEvent("task:updated", req.TaskId, "executing", task.Query, "")
+
+	return &runtime.ApproveTaskResponse{
+		Success: true,
+		Task:    task,
+	}, nil
+}
+
+// RejectTask rejects a task awaiting approval
+func (s *RuntimeServer) RejectTask(ctx context.Context, req *runtime.RejectTaskRequest) (*runtime.RejectTaskResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, ok := s.tasks[req.TaskId]
+	if !ok {
+		return nil, status.Error(codes.NotFound, "task not found")
+	}
+
+	if task.Status != runtime.TaskStatus_TASK_STATUS_AWAITING_APPROVAL {
+		return nil, status.Error(codes.FailedPrecondition, "task is not awaiting approval")
+	}
+
+	task.Status = runtime.TaskStatus_TASK_STATUS_CANCELLED
+	task.UpdatedAt = timestamppb.Now()
+	task.Error = req.Reason
+	s.tasks[req.TaskId] = task
+
+	// Emit event
+	s.emitEvent("task:cancelled", req.TaskId, "cancelled", task.Query, req.Reason)
+
+	return &runtime.RejectTaskResponse{
+		Success: true,
+		Task:    task,
+	}, nil
 }
