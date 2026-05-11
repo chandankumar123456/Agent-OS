@@ -1,7 +1,7 @@
 import asyncio
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from .base import BaseTool, ToolInput, ToolOutput
 from .search import SearchTool, CalculatorTool, TextProcessorTool
 from ..logs.logger import logger
@@ -72,6 +72,103 @@ class MCPWrappedTool:
         except Exception as e:
             logger.error(f"[registry][TRACE] MCP ERROR: name='{self.name}' error={e}")
             return ToolOutput(success=False, error=str(e))
+
+
+class DesktopEnvTool:
+    """Tool wrapper for desktop environment operations. Provides a unified interface
+    for all desktop automation actions with dict-based dispatch for maintainability."""
+
+    def __init__(self, name, action):
+        self.name = name
+        self.description = f"Desktop environment: {action}"
+        self.tool_type = "desktop_env"
+        self._action = action
+
+    def get_schema(self):
+        schema = {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": {}}}
+        schema_map = {
+            "click": {"properties": {"x": {"type": "integer", "description": "X coordinate"}, "y": {"type": "integer", "description": "Y coordinate"}}, "required": ["x", "y"]},
+            "type_text": {"properties": {"text": {"type": "string", "description": "Text to type"}, "interval": {"type": "number", "description": "Typing interval in seconds", "default": 0.01}}, "required": ["text"]},
+            "press_key": {"properties": {"keys": {"type": "string", "description": "Key or key combination to press (e.g., 'ctrl+c')"}}, "required": ["keys"]},
+            "screenshot": {"properties": {"path": {"type": "string", "description": "Optional file path to save screenshot"}}},
+            "focus_window": {"properties": {"title": {"type": "string", "description": "Window title substring to focus"}}, "required": ["title"]},
+            "get_window_list": {"properties": {}},
+            "get_clipboard": {"properties": {}},
+            "set_clipboard": {"properties": {"text": {"type": "string", "description": "Text to copy to clipboard"}}, "required": ["text"]},
+            "get_mouse_position": {"properties": {}},
+            "scroll": {"properties": {"amount": {"type": "integer", "description": "Scroll amount (positive=down, negative=up)"}}, "required": ["amount"]},
+            "close": {"properties": {}},
+            "get_ui_tree": {"properties": {}},
+            "click_element": {"properties": {"element_id": {"type": "integer", "description": "Element ID from get_ui_tree"}}, "required": ["element_id"]},
+            "type_element": {"properties": {"element_id": {"type": "integer", "description": "Element ID from get_ui_tree"}, "text": {"type": "string", "description": "Text to type"}}, "required": ["element_id", "text"]},
+            "focus_and_interact": {"properties": {"element_id": {"type": "integer", "description": "Element ID from get_ui_tree"}, "key": {"type": "string", "description": "Key to press", "default": "enter"}}, "required": ["element_id"]},
+            "ensure_focus": {"properties": {"window_ref_id": {"type": "string", "description": "Window reference ID to focus"}, "title": {"type": "string", "description": "Window title substring to focus"}}},
+            "launch_app_and_open_file": {"properties": {"file_path": {"type": "string", "description": "Absolute path to the file to open"}, "app_name": {"type": "string", "description": "Application name to use for opening"}}, "required": ["file_path"]},
+            "open_application": {"properties": {"app_name": {"type": "string", "description": "Name of the application to open (e.g., notepad, chrome, vscode)"}}, "required": ["app_name"]},
+            "get_window_registry": {"properties": {}},
+            "save_checkpoint": {"properties": {"step": {"type": "string", "description": "Checkpoint step identifier"}}, "required": ["step"]},
+            "get_workflow_state": {"properties": {}},
+            "set_approval_mode": {"properties": {"mode": {"type": "string", "enum": ["standard", "full_trust"], "description": "Approval mode for this session"}}, "required": ["mode"]},
+        }
+        if self._action in schema_map:
+            schema["parameters"].update(schema_map[self._action])
+        return schema
+
+    async def execute(self, tool_input: ToolInput):
+        from ..environments.desktop_env import desktop_session_manager
+
+        params = tool_input.parameters
+        task_id = params.get("_task_id", "")
+        if not task_id:
+            return ToolOutput(success=False, error="'_task_id' parameter is required for desktop environment tools")
+
+        logger.info(f"[registry][TRACE] DESKTOP TOOL WRAPPER: name='{self.name}' action='{self._action}' task_id='{task_id}' params={ {k:v for k,v in params.items() if not k.startswith('_')} }")
+        session = await desktop_session_manager.get_or_create_session(task_id)
+
+        # Dict-based dispatch for most session-method actions
+        _dispatch = {
+            "screenshot": lambda: session.screenshot(params.get("path")),
+            "click": lambda: session.click(params.get("x", 0), params.get("y", 0)),
+            "type_text": lambda: session.type_text(params.get("text", ""), params.get("interval", 0.01)),
+            "press_key": lambda: session.press_key(params.get("keys", "")),
+            "get_window_list": lambda: session.get_window_list(),
+            "focus_window": lambda: session.focus_window(params.get("title", "")),
+            "get_clipboard": lambda: session.get_clipboard(),
+            "set_clipboard": lambda: session.set_clipboard(params.get("text", "")),
+            "get_mouse_position": lambda: session.get_mouse_position(),
+            "scroll": lambda: session.scroll(params.get("amount", 0)),
+            "get_ui_tree": lambda: session.get_ui_tree(),
+            "click_element": lambda: session.click_element(params.get("element_id", 0)),
+            "type_element": lambda: session.type_element(params.get("element_id", 0), params.get("text", "")),
+            "focus_and_interact": lambda: session.focus_and_interact(params.get("element_id", 0), params.get("key", "enter")),
+            "ensure_focus": lambda: session.ensure_focus(window_ref_id=params.get("window_ref_id"), title=params.get("title")),
+            "launch_app_and_open_file": lambda: session.launch_app_and_open_file(file_path=params["file_path"], app_name=params.get("app_name")),
+            "open_application": lambda: session.open_application(app_name=params["app_name"]),
+        }
+
+        if self._action in _dispatch:
+            return await _dispatch[self._action]()
+
+        if self._action == "close":
+            return await desktop_session_manager.close_session(task_id)
+        elif self._action == "get_window_registry":
+            registry = session.get_window_registry()
+            return ToolOutput(success=True, result=registry.to_dict() if registry else {"refs": [], "count": 0})
+        elif self._action == "save_checkpoint":
+            orchestrator = await session.get_orchestrator()
+            await orchestrator.save_checkpoint(step=params["step"])
+            return ToolOutput(success=True, result=orchestrator.get_state())
+        elif self._action == "get_workflow_state":
+            orchestrator = await session.get_orchestrator()
+            return ToolOutput(success=True, result=orchestrator.get_state())
+        elif self._action == "set_approval_mode":
+            from ..safety.approval_store import approval_store
+            mode = params.get("mode", "standard")
+            approval_store.set_mode(task_id, mode)
+            return ToolOutput(success=True, result={"message": f"Approval mode set to {mode}", "task_id": task_id})
+
+        logger.error(f"[registry][TRACE] DESKTOP TOOL WRAPPER: unknown action '{self._action}'")
+        return ToolOutput(success=False, error=f"Unknown action: {self._action}")
 
 
 class ToolRegistry:
@@ -474,160 +571,6 @@ class ToolRegistry:
         logger.info("Communication tools registered (MCP placeholders)")
 
     def _register_desktop_env_tools(self):
-        from ..environments.desktop_env import desktop_session_manager
-
-        class DesktopEnvTool:
-            def __init__(self, name, action):
-                self.name = name
-                self.description = f"Desktop environment: {action}"
-                self.tool_type = "desktop_env"
-                self._action = action
-
-            def get_schema(self):
-                schema = {"name": self.name, "description": self.description, "parameters": {"type": "object", "properties": {}}}
-                action = self._action
-                if action == "click":
-                    schema["parameters"]["properties"] = {
-                        "x": {"type": "integer", "description": "X coordinate"},
-                        "y": {"type": "integer", "description": "Y coordinate"}
-                    }
-                    schema["parameters"]["required"] = ["x", "y"]
-                elif action == "type_text":
-                    schema["parameters"]["properties"] = {
-                        "text": {"type": "string", "description": "Text to type"},
-                        "interval": {"type": "number", "description": "Typing interval in seconds", "default": 0.01}
-                    }
-                    schema["parameters"]["required"] = ["text"]
-                elif action == "press_key":
-                    schema["parameters"]["properties"] = {"keys": {"type": "string", "description": "Key or key combination to press (e.g., 'ctrl+c')"}}
-                    schema["parameters"]["required"] = ["keys"]
-                elif action == "screenshot":
-                    schema["parameters"]["properties"] = {"path": {"type": "string", "description": "Optional file path to save screenshot"}}
-                elif action == "focus_window":
-                    schema["parameters"]["properties"] = {"title": {"type": "string", "description": "Window title substring to focus"}}
-                    schema["parameters"]["required"] = ["title"]
-                elif action == "get_window_list":
-                    schema["parameters"]["properties"] = {}
-                elif action == "get_clipboard":
-                    schema["parameters"]["properties"] = {}
-                elif action == "set_clipboard":
-                    schema["parameters"]["properties"] = {"text": {"type": "string", "description": "Text to copy to clipboard"}}
-                    schema["parameters"]["required"] = ["text"]
-                elif action == "get_mouse_position":
-                    schema["parameters"]["properties"] = {}
-                elif action == "scroll":
-                    schema["parameters"]["properties"] = {"amount": {"type": "integer", "description": "Scroll amount (positive=down, negative=up)"}}
-                    schema["parameters"]["required"] = ["amount"]
-                elif action == "close":
-                    schema["parameters"]["properties"] = {}
-                elif action == "get_ui_tree":
-                    schema["parameters"]["properties"] = {}
-                elif action == "click_element":
-                    schema["parameters"]["properties"] = {"element_id": {"type": "integer", "description": "Element ID from get_ui_tree"}}
-                    schema["parameters"]["required"] = ["element_id"]
-                elif action == "type_element":
-                    schema["parameters"]["properties"] = {
-                        "element_id": {"type": "integer", "description": "Element ID from get_ui_tree"},
-                        "text": {"type": "string", "description": "Text to type"}
-                    }
-                    schema["parameters"]["required"] = ["element_id", "text"]
-                elif action == "focus_and_interact":
-                    schema["parameters"]["properties"] = {
-                        "element_id": {"type": "integer", "description": "Element ID from get_ui_tree"},
-                        "key": {"type": "string", "description": "Key to press", "default": "enter"}
-                    }
-                    schema["parameters"]["required"] = ["element_id"]
-                elif action == "ensure_focus":
-                    schema["parameters"]["properties"] = {
-                        "window_ref_id": {"type": "string", "description": "Window reference ID to focus"},
-                        "title": {"type": "string", "description": "Window title substring to focus"}
-                    }
-                    # At least one of window_ref_id or title is required (enforced at runtime)
-                elif action == "launch_app_and_open_file":
-                    schema["parameters"]["properties"] = {
-                        "file_path": {"type": "string", "description": "Absolute path to the file to open"},
-                        "app_name": {"type": "string", "description": "Application name to use for opening"}
-                    }
-                    schema["parameters"]["required"] = ["file_path"]
-                elif action == "open_application":
-                    schema["parameters"]["properties"] = {
-                        "app_name": {"type": "string", "description": "Name of the application to open (e.g., notepad, chrome, vscode)"}
-                    }
-                    schema["parameters"]["required"] = ["app_name"]
-                elif action == "get_window_registry":
-                    schema["parameters"]["properties"] = {}
-                elif action == "save_checkpoint":
-                    schema["parameters"]["properties"] = {"step": {"type": "string", "description": "Checkpoint step identifier"}}
-                    schema["parameters"]["required"] = ["step"]
-                elif action == "get_workflow_state":
-                    schema["parameters"]["properties"] = {}
-                elif action == "set_approval_mode":
-                    schema["parameters"]["properties"] = {
-                        "mode": {"type": "string", "enum": ["standard", "full_trust"], "description": "Approval mode for this session"}
-                    }
-                    schema["parameters"]["required"] = ["mode"]
-                return schema
-
-            async def execute(self, tool_input: ToolInput):
-                params = tool_input.parameters
-                task_id = params.get("_task_id", "default")
-                logger.info(f"[registry][TRACE] DESKTOP TOOL WRAPPER: name='{self.name}' action='{self._action}' task_id='{task_id}' params={ {k:v for k,v in params.items() if not k.startswith('_')} }")
-                session = await desktop_session_manager.get_or_create_session(task_id)
-
-                if self._action == "screenshot":
-                    return await session.screenshot(params.get("path"))
-                elif self._action == "click":
-                    return await session.click(params.get("x", 0), params.get("y", 0))
-                elif self._action == "type_text":
-                    return await session.type_text(params.get("text", ""), params.get("interval", 0.01))
-                elif self._action == "press_key":
-                    return await session.press_key(params.get("keys", ""))
-                elif self._action == "get_window_list":
-                    return await session.get_window_list()
-                elif self._action == "focus_window":
-                    return await session.focus_window(params.get("title", ""))
-                elif self._action == "get_clipboard":
-                    return await session.get_clipboard()
-                elif self._action == "set_clipboard":
-                    return await session.set_clipboard(params.get("text", ""))
-                elif self._action == "get_mouse_position":
-                    return await session.get_mouse_position()
-                elif self._action == "scroll":
-                    return await session.scroll(params.get("amount", 0))
-                elif self._action == "close":
-                    return await desktop_session_manager.close_session(task_id)
-                elif self._action == "get_ui_tree":
-                    return await session.get_ui_tree()
-                elif self._action == "click_element":
-                    return await session.click_element(params.get("element_id", 0))
-                elif self._action == "type_element":
-                    return await session.type_element(params.get("element_id", 0), params.get("text", ""))
-                elif self._action == "focus_and_interact":
-                    return await session.focus_and_interact(params.get("element_id", 0), params.get("key", "enter"))
-                elif self._action == "ensure_focus":
-                    return await session.ensure_focus(window_ref_id=params.get("window_ref_id"), title=params.get("title"))
-                elif self._action == "launch_app_and_open_file":
-                    return await session.launch_app_and_open_file(file_path=params["file_path"], app_name=params.get("app_name"))
-                elif self._action == "open_application":
-                    return await session.open_application(app_name=params["app_name"])
-                elif self._action == "get_window_registry":
-                    registry = session.get_window_registry()
-                    return ToolOutput(success=True, result=registry.to_dict() if registry else {"refs": [], "count": 0})
-                elif self._action == "save_checkpoint":
-                    orchestrator = await session.get_orchestrator()
-                    await orchestrator.save_checkpoint(step=params["step"])
-                    return ToolOutput(success=True, result=orchestrator.get_state())
-                elif self._action == "get_workflow_state":
-                    orchestrator = await session.get_orchestrator()
-                    return ToolOutput(success=True, result=orchestrator.get_state())
-                elif self._action == "set_approval_mode":
-                    from ..safety.approval_store import approval_store
-                    mode = params.get("mode", "standard")
-                    approval_store.set_mode(task_id, mode)
-                    return ToolOutput(success=True, result={"message": f"Approval mode set to {mode}", "task_id": task_id})
-                logger.error(f"[registry][TRACE] DESKTOP TOOL WRAPPER: unknown action '{self._action}'")
-                return ToolOutput(success=False, error=f"Unknown action: {self._action}")
-
         for action in ["screenshot", "click", "type_text", "press_key", "get_window_list", "focus_window", "get_clipboard", "set_clipboard", "get_mouse_position", "scroll", "close", "ensure_focus", "launch_app_and_open_file", "open_application", "get_window_registry", "save_checkpoint", "get_workflow_state", "set_approval_mode"]:
             self.register(DesktopEnvTool(f"desktop_env__{action}", action))
         # Register semantic element-based tools with desktop__ prefix (matching MCP naming)
@@ -829,8 +772,21 @@ class ToolRegistry:
 
         if result.success:
             registered.use_count += 1
-            registered.last_used = datetime.utcnow().isoformat()
+            registered.last_used = datetime.now(timezone.utc).isoformat()
         return result
+
+
+
+async def is_task_cancelled(task_id: str) -> bool:
+    """Check if a task has been cancelled (via Redis signal)."""
+    try:
+        from ..memory.short_term import redis_client
+        if redis_client and redis_client.client:
+            result = await redis_client.client.get(f"agentos:cancelled:{task_id}")
+            return result is not None
+    except Exception:
+        pass
+    return False
 
 
 tool_registry = ToolRegistry()
