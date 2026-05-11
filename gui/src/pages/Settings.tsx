@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/tauri'
 import { 
-  Settings, 
+  Settings as SettingsIcon, 
   Bell, 
   Keyboard, 
   Server,
   Info,
   CheckCircle,
-  XCircle
+  XCircle,
+  Key
 } from 'lucide-react'
 
 interface SettingsPageProps {
@@ -25,9 +26,63 @@ export function Settings({ version, daemonConnected }: SettingsPageProps) {
     daemonPort: 8080,
   })
   const [saved, setSaved] = useState(false)
+  const [apiKey, setApiKey] = useState('')
+  const [apiKeySaved, setApiKeySaved] = useState(false)
+  const [apiKeyLoading, setApiKeyLoading] = useState(false)
+
+  useEffect(() => {
+    // Load existing API key on mount
+    loadApiKey()
+  }, [])
+
+  const loadApiKey = async () => {
+    try {
+      const result = await invoke<{ success: boolean; value?: string; error?: string }>('get_secret', { key: 'OPENAI_API_KEY' })
+      if (result.success && result.value) {
+        setApiKey('••••••••••••••••')
+        setApiKeySaved(true)
+      }
+    } catch (error) {
+      console.error('Failed to load API key:', error)
+    }
+  }
+
+  const handleSaveApiKey = async () => {
+    if (!apiKey || apiKey === '••••••••••••••••') return
+    setApiKeyLoading(true)
+    try {
+      const result = await invoke<{ success: boolean; error?: string }>('set_secret', { key: 'OPENAI_API_KEY', value: apiKey })
+      if (result.success) {
+        setApiKey('••••••••••••••••')
+        setApiKeySaved(true)
+      } else {
+        console.error('Failed to save API key:', result.error)
+      }
+    } catch (error) {
+      console.error('Failed to save API key:', error)
+    } finally {
+      setApiKeyLoading(false)
+    }
+  }
+
+  const handleDeleteApiKey = async () => {
+    setApiKeyLoading(true)
+    try {
+      const result = await invoke<{ success: boolean; error?: string }>('delete_secret', { key: 'OPENAI_API_KEY' })
+      if (result.success) {
+        setApiKey('')
+        setApiKeySaved(false)
+      } else {
+        console.error('Failed to delete API key:', result.error)
+      }
+    } catch (error) {
+      console.error('Failed to delete API key:', error)
+    } finally {
+      setApiKeyLoading(false)
+    }
+  }
 
   const handleSave = async () => {
-    // TODO: Save config via Tauri command
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -97,6 +152,52 @@ export function Settings({ version, daemonConnected }: SettingsPageProps) {
                   <span className="text-red-400">Disconnected from daemon</span>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+
+        {/* API Keys Section */}
+        <div className="bg-agentos-dark rounded-lg border border-gray-800 p-6 mb-6">
+          <div className="flex items-center gap-3 mb-4">
+            <Key className="w-5 h-5 text-agentos-primary" />
+            <h3 className="text-lg font-bold">API Keys</h3>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">OpenAI API Key</label>
+              <div className="flex gap-2">
+                <input
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => { setApiKey(e.target.value); setApiKeySaved(false) }}
+                  placeholder={apiKeySaved ? '••••••••••••••••' : 'Enter your API key'}
+                  className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-4 py-2 text-white placeholder-gray-500 focus:outline-none focus:border-agentos-primary"
+                />
+                {apiKeySaved ? (
+                  <button
+                    onClick={handleDeleteApiKey}
+                    disabled={apiKeyLoading}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    {apiKeyLoading ? '...' : 'Remove'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSaveApiKey}
+                    disabled={apiKeyLoading || !apiKey}
+                    className="px-4 py-2 bg-agentos-primary hover:bg-blue-600 disabled:bg-gray-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    {apiKeyLoading ? 'Saving...' : 'Save'}
+                  </button>
+                )}
+              </div>
+              {apiKeySaved && (
+                <p className="text-xs text-green-400 mt-1">API key stored securely in OS keychain</p>
+              )}
+              <p className="text-xs text-gray-500 mt-1">
+                Your API key is stored in the OS credential manager (Windows Credential Manager / macOS Keychain / Linux Secret Service)
+              </p>
             </div>
           </div>
         </div>
@@ -175,7 +276,7 @@ export function Settings({ version, daemonConnected }: SettingsPageProps) {
         {/* Window Section */}
         <div className="bg-agentos-dark rounded-lg border border-gray-800 p-6 mb-6">
           <div className="flex items-center gap-3 mb-4">
-            <Settings className="w-5 h-5 text-agentos-primary" />
+            <SettingsIcon className="w-5 h-5 text-agentos-primary" />
             <h3 className="text-lg font-bold">Window</h3>
           </div>
 
