@@ -7,7 +7,7 @@ and resource limits.
 import asyncio
 import traceback
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -33,7 +33,7 @@ class IsolationContext(BaseModel):
     isolated_state: Dict[str, Any] = Field(default_factory=dict)
     error_handler: Optional[str] = None  # Handler identifier
     resource_limits: ResourceLimits = Field(default_factory=ResourceLimits)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     active: bool = True
     failure_count: int = 0
     max_failures: int = 3
@@ -146,7 +146,7 @@ class FailureIsolator:
             Current failure count.
         """
         failure_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "error_type": type(error).__name__,
             "error_message": str(error),
             "context": context or "unknown",
