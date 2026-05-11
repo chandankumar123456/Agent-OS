@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 import statistics
 
 
@@ -103,7 +103,7 @@ class AnomalyDetector:
                     observed_value=current_error,
                     expected_range=expected,
                     message=f"Error rate spike: {current_error:.2%} (threshold: {self.error_rate_threshold:.0%})",
-                    timestamp=datetime.utcnow().isoformat()
+                    timestamp=datetime.now(timezone.utc).isoformat()
                 ))
                 recommendations.append("Investigate recent failures and check tool health.")
 
@@ -119,7 +119,7 @@ class AnomalyDetector:
                     observed_value=current_latency,
                     expected_range=expected,
                     message=f"Latency anomaly: {current_latency:.0f}ms (threshold: {self.latency_threshold_ms:.0f}ms)",
-                    timestamp=datetime.utcnow().isoformat()
+                    timestamp=datetime.now(timezone.utc).isoformat()
                 ))
                 recommendations.append("Check for slow LLM responses or tool timeouts.")
 
@@ -135,7 +135,7 @@ class AnomalyDetector:
                     observed_value=current_cost,
                     expected_range=expected,
                     message=f"Cost outlier: ${current_cost:.4f} (threshold: ${self.cost_threshold_usd:.2f})",
-                    timestamp=datetime.utcnow().isoformat()
+                    timestamp=datetime.now(timezone.utc).isoformat()
                 ))
                 recommendations.append("Review expensive tool invocations and enable caching.")
 
@@ -149,7 +149,7 @@ class AnomalyDetector:
                     observed_value=float(current_loop),
                     expected_range=(0.0, float(self.loop_threshold)),
                     message=f"Infinite loop detected: {current_loop} iterations (threshold: {self.loop_threshold})",
-                    timestamp=datetime.utcnow().isoformat()
+                    timestamp=datetime.now(timezone.utc).isoformat()
                 ))
                 recommendations.append("Abort task and investigate plan generation logic.")
 
