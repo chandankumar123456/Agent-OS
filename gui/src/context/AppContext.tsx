@@ -1,20 +1,7 @@
 import { createContext, useContext, useState, ReactNode } from 'react'
+import { supervisorApi, type Task, type TaskStep } from '../api/supervisor'
 
-interface Task {
-  id: string
-  query: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-  createdAt: string
-  updatedAt: string
-  steps: TaskStep[]
-}
-
-interface TaskStep {
-  id: string
-  description: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
-  result?: string
-}
+export type { Task, TaskStep }
 
 interface AppState {
   tasks: Task[]
@@ -48,45 +35,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const refreshTasks = async () => {
-    // TODO: Implement actual API call to get tasks
-    // For now, use mock data
-    const mockTasks: Task[] = [
-      {
-        id: 'task-1',
-        query: 'Open Chrome and search for rust tutorials',
-        status: 'running',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        steps: [
-          { id: 'step-1', description: 'Focus Chrome window', status: 'completed' },
-          { id: 'step-2', description: 'Click on address bar', status: 'running' },
-        ],
-      },
-      {
-        id: 'task-2',
-        query: 'Create a text file with hello world',
-        status: 'completed',
-        createdAt: new Date(Date.now() - 3600000).toISOString(),
-        updatedAt: new Date(Date.now() - 3500000).toISOString(),
-        steps: [
-          { id: 'step-1', description: 'Open Notepad', status: 'completed' },
-          { id: 'step-2', description: 'Type hello world', status: 'completed' },
-          { id: 'step-3', description: 'Save file', status: 'completed' },
-        ],
-      },
-    ]
+    try {
+      const tasks = await supervisorApi.listTasks()
+      const activeTasks = tasks.filter(t => t.status === 'running').length
+      const completedTasks = tasks.filter(t => t.status === 'completed').length
+      const failedTasks = tasks.filter(t => t.status === 'failed').length
+      setState(prev => ({ ...prev, tasks, activeTasks, completedTasks, failedTasks }))
+    } catch (error) {
+      console.error('Failed to refresh tasks:', error)
+      // Fall back to mock data if API is not available (e.g., during development)
+      const mockTasks: Task[] = [
+        {
+          id: 'task-1',
+          query: 'Open Chrome and search for rust tutorials',
+          status: 'running',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          steps: [
+            { id: 'step-1', index: 0, description: 'Focus Chrome window', status: 'completed' },
+            { id: 'step-2', index: 1, description: 'Click on address bar', status: 'running' },
+          ],
+        },
+        {
+          id: 'task-2',
+          query: 'Create a text file with hello world',
+          status: 'completed',
+          created_at: new Date(Date.now() - 3600000).toISOString(),
+          updated_at: new Date(Date.now() - 3500000).toISOString(),
+          steps: [
+            { id: 'step-1', index: 0, description: 'Open Notepad', status: 'completed' },
+            { id: 'step-2', index: 1, description: 'Type hello world', status: 'completed' },
+            { id: 'step-3', index: 2, description: 'Save file', status: 'completed' },
+          ],
+        },
+      ]
 
-    const activeTasks = mockTasks.filter(t => t.status === 'running').length
-    const completedTasks = mockTasks.filter(t => t.status === 'completed').length
-    const failedTasks = mockTasks.filter(t => t.status === 'failed').length
+      const activeTasks = mockTasks.filter(t => t.status === 'running').length
+      const completedTasks = mockTasks.filter(t => t.status === 'completed').length
+      const failedTasks = mockTasks.filter(t => t.status === 'failed').length
 
-    setState(prev => ({
-      ...prev,
-      tasks: mockTasks,
-      activeTasks,
-      completedTasks,
-      failedTasks,
-    }))
+      setState(prev => ({
+        ...prev,
+        tasks: mockTasks,
+        activeTasks,
+        completedTasks,
+        failedTasks,
+      }))
+    }
   }
 
   return (
