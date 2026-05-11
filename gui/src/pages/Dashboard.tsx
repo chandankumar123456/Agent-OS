@@ -1,5 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useApp } from '../context/AppContext'
+import { supervisorApi, type Task } from '../api/supervisor'
+import { subscribeToSupervisorEvents } from '../api/events'
+import { SafetyDialog } from '../components/SafetyDialog'
 import { 
   Play, 
   Pause, 
@@ -9,33 +12,81 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  Activity
+  Activity,
+  Shield
 } from 'lucide-react'
 
 export function Dashboard() {
   const { state, refreshTasks } = useApp()
   const [newTaskQuery, setNewTaskQuery] = useState('')
   const [isCreating, setIsCreating] = useState(false)
+  const [approvalTask, setApprovalTask] = useState<Task | null>(null)
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Debounced refresh to avoid multiple rapid calls
+  const debouncedRefresh = () => {
+    if (refreshTimeoutRef.current) {
+      clearTimeout(refreshTimeoutRef.current)
+    }
+    refreshTimeoutRef.current = setTimeout(() => {
+      refreshTasks()
+    }, 300)
+  }
 
   useEffect(() => {
+    // Initial load
     refreshTasks()
-    const interval = setInterval(refreshTasks, 5000)
-    return () => clearInterval(interval)
+
+    // Subscribe to Supervisor WebSocket events for real-time updates
+    const unlistenPromise = subscribeToSupervisorEvents(() => {
+      debouncedRefresh()
+    })
+
+    // Fallback polling (30s instead of 5s — events provide real-time updates)
+    const interval = setInterval(refreshTasks, 30000)
+
+    return () => {
+      clearInterval(interval)
+      unlistenPromise.then(unlisten => unlisten())
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current)
+      }
+    }
   }, [])
+
+  useEffect(() => {
+    // Check for tasks awaiting approval
+    const pendingApproval = state.tasks.find(t => t.status === 'pending')
+    if (pendingApproval && !approvalTask) {
+      // Only show dialog for desktop automation tasks that might need approval
+      const query = pendingApproval.query.toLowerCase()
+      if (query.includes('click') || query.includes('type') || query.includes('screenshot') || query.includes('desktop')) {
+        setApprovalTask(pendingApproval)
+      }
+    }
+  }, [state.tasks])
 
   const handleCreateTask = async () => {
     if (!newTaskQuery.trim()) return
-    
     setIsCreating(true)
-    // TODO: Implement actual task creation via Tauri command
-    console.log('Creating task:', newTaskQuery)
-    
-    // Simulate task creation
-    setTimeout(() => {
+    try {
+      await supervisorApi.createTask(newTaskQuery)
       setNewTaskQuery('')
+      await refreshTasks()
+    } catch (error) {
+      console.error('Failed to create task:', error)
+    } finally {
       setIsCreating(false)
-      refreshTasks()
-    }, 1000)
+    }
+  }
+
+  const handleCancelTask = async (taskId: string) => {
+    try {
+      await supervisorApi.cancelTask(taskId)
+      await refreshTasks()
+    } catch (error) {
+      console.error('Failed to cancel task:', error)
+    }
   }
 
   const getStatusIcon = (status: string) => {
@@ -48,6 +99,8 @@ export function Dashboard() {
         return <XCircle className="w-4 h-4 text-red-400" />
       case 'cancelled':
         return <X className="w-4 h-4 text-gray-400" />
+      case 'pending':
+        return <Shield className="w-4 h-4 text-yellow-400" />
       default:
         return <Clock className="w-4 h-4 text-yellow-400" />
     }
@@ -63,6 +116,8 @@ export function Dashboard() {
         return 'bg-red-500/10 border-red-500/30 text-red-400'
       case 'cancelled':
         return 'bg-gray-500/10 border-gray-500/30 text-gray-400'
+      case 'pending':
+        return 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
       default:
         return 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
     }
@@ -70,6 +125,13 @@ export function Dashboard() {
 
   return (
     <div className="h-full flex flex-col">
+      {approvalTask && (
+        <SafetyDialog
+          task={approvalTask}
+          onApprove={() => { setApprovalTask(null); refreshTasks() }}
+          onReject={() => { setApprovalTask(null); refreshTasks() }}
+        />
+      )}
       {/* Header with stats */}
       <div className="p-6 border-b border-gray-800">
         <div className="flex items-center justify-between mb-6">
@@ -146,7 +208,7 @@ export function Dashboard() {
                     <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                       <span>{task.steps.length} steps</span>
                       <span>•</span>
-                      <span>{new Date(task.createdAt).toLocaleString()}</span>
+                      <span>{new Date(task.created_at).toLocaleString()}</span>
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -155,7 +217,11 @@ export function Dashboard() {
                         <Pause className="w-4 h-4" />
                       </button>
                     )}
-                    <button className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-white">
+                    <button
+                      onClick={() => handleCancelTask(task.id)}
+                      className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-gray-400 hover:text-white"
+                      title="Cancel task"
+                    >
                       <X className="w-4 h-4" />
                     </button>
                   </div>
@@ -165,7 +231,7 @@ export function Dashboard() {
                 {task.steps.length > 0 && (
                   <div className="mt-4 pt-4 border-t border-gray-800">
                     <div className="flex gap-2">
-                      {task.steps.map((step, index) => (
+                      {task.steps.map((step) => (
                         <div
                           key={step.id}
                           className={`flex-1 h-1 rounded-full ${
