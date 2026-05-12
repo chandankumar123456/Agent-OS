@@ -293,7 +293,7 @@ class TestGRPCClient:
     @pytest.mark.asyncio
     async def test_connect_success(self):
         """Test successful gRPC connection."""
-        config = GRPCClientConfig(host="localhost", port=50051)
+        config = GRPCClientConfig(host="localhost", port=50051, use_tls=False)
 
         # Mock the async channel and stubs
         mock_channel = AsyncMock()
@@ -343,7 +343,7 @@ class TestGRPCClient:
     @pytest.mark.asyncio
     async def test_connect_failure(self):
         """Test connection failure handling."""
-        config = GRPCClientConfig(host="invalid-host", port=9999)
+        config = GRPCClientConfig(host="invalid-host", port=9999, use_tls=False)
 
         with patch('grpc.aio.insecure_channel') as mock_grpc_channel:
             mock_grpc_channel.side_effect = Exception("Connection refused")
@@ -358,7 +358,7 @@ class TestGRPCClient:
     @pytest.mark.asyncio
     async def test_close_success(self):
         """Test successful gRPC connection close."""
-        config = GRPCClientConfig()
+        config = GRPCClientConfig(use_tls=False)
 
         # Mock the async channel
         mock_channel = AsyncMock()

@@ -34,3 +34,72 @@ def _test_env():
     assert os.environ.get("DATABASE_URL") == "sqlite+aiosqlite:///:memory:"
     assert os.environ.get("SECRET_KEY", "").startswith("test-")
     yield
+
+
+@pytest.fixture(autouse=True)
+def block_external_connections_in_grpc_mode(monkeypatch):
+    """Block Redis and PostgreSQL connections when running in gRPC/desktop mode."""
+    runtime_mode = os.environ.get("AGENTOS_RUNTIME_MODE", "").lower()
+    if runtime_mode != "grpc":
+        yield
+        return
+
+    # Block redis.asyncio.Redis
+    try:
+        import redis.asyncio as redis_async
+
+        original_redis_init = redis_async.Redis.__init__
+
+        def blocked_redis_init(*args, **kwargs):
+            import traceback
+            raise RuntimeError(
+                "REDIS CONNECTION BLOCKED IN GRPC MODE.\n"
+                "Stack trace:\n" + "".join(traceback.format_stack())
+            )
+
+        monkeypatch.setattr(redis_async.Redis, "__init__", blocked_redis_init)
+    except ImportError:
+        pass
+
+    # Block asyncpg.connect
+    try:
+        import asyncpg
+
+        original_asyncpg_connect = asyncpg.connect
+
+        async def blocked_asyncpg_connect(*args, **kwargs):
+            import traceback
+            raise RuntimeError(
+                "ASYNCPG CONNECTION BLOCKED IN GRPC MODE.\n"
+                "Stack trace:\n" + "".join(traceback.format_stack())
+            )
+
+        monkeypatch.setattr(asyncpg, "connect", blocked_asyncpg_connect)
+    except ImportError:
+        pass
+
+    # Block sqlalchemy async engine creation for postgresql dialects
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        original_create_async_engine = create_async_engine
+
+        def blocked_create_async_engine(url, **kwargs):
+            url_str = str(url)
+            if "postgresql" in url_str.lower() or "postgres" in url_str.lower():
+                import traceback
+                raise RuntimeError(
+                    "POSTGRESQL ENGINE CREATION BLOCKED IN GRPC MODE.\n"
+                    f"URL: {url_str}\n"
+                    "Stack trace:\n" + "".join(traceback.format_stack())
+                )
+            return original_create_async_engine(url, **kwargs)
+
+        monkeypatch.setattr(
+            "sqlalchemy.ext.asyncio.create_async_engine",
+            blocked_create_async_engine,
+        )
+    except ImportError:
+        pass
+
+    yield
