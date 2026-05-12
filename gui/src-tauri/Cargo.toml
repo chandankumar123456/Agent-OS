@@ -22,6 +22,7 @@ anyhow = "1.0"
 keyring = "3"
 dirs = "5.0"
 toml = "0.8"
+sysinfo = "0.30"
 
 [features]
 default = ["custom-protocol"]
