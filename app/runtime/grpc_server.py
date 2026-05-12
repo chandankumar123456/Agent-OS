@@ -27,6 +27,14 @@ from pathlib import Path
 # Import from app/proto where generated files are located
 from ..proto import runtime_pb2, runtime_pb2_grpc
 from ..proto import checkpoint_pb2, checkpoint_pb2_grpc
+from ..proto.checkpoint_pb2 import (
+    SaveCheckpointResponse as CheckpointResponse,
+    GetCheckpointResponse,
+    ListCheckpointsResponse,
+    Checkpoint,
+    CleanupCheckpointsResponse,
+    CheckpointEvent,
+)
 from ..proto import worker_pb2, worker_pb2_grpc
 
 # Import runtime types for type hints
@@ -102,11 +110,16 @@ class GRPCServer:
         """Stop the gRPC server."""
         if self._server:
             await self._server.stop(grace)
+            self._server = None
             logger.info("gRPC server stopped")
 
         # Shutdown runtime
         if self._runtime:
             await self._runtime.shutdown_all()
+            self._runtime = None
+
+        self._orchestrator = None
+        self._checkpointer = None
 
     async def serve(self):
         """Start the server and wait for shutdown."""
@@ -234,6 +247,20 @@ class RuntimeServiceImpl:
             logger.error(f"Health check failed: {e}")
             return runtime_pb2.HealthCheckResponse(healthy=False, error=str(e))
 
+    async def StreamTaskEvents(self, request, context):
+        """Stream task events via server-side streaming."""
+        try:
+            # Placeholder: yield a single completion event
+            yield runtime_pb2.TaskEvent(
+                task_id=request.task_id,
+                event_type="completed",
+                message="Task completed",
+            )
+        except Exception as e:
+            logger.error(f"Stream task events failed: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
+
     async def GetConfig(self, request, context):
         """Get configuration."""
         try:
@@ -263,22 +290,20 @@ class CheckpointServiceImpl:
     async def SaveCheckpoint(self, request, context):
         """Save a checkpoint."""
         try:
-            checkpoint = json.loads(request.checkpoint_json)
-            metadata = json.loads(request.metadata_json) if request.metadata_json else {}
+            checkpoint = json.loads(request.state_blob.decode("utf-8")) if request.state_blob else {}
+            metadata = json.loads(request.metadata) if request.metadata else {}
 
             config = {
                 "configurable": {
                     "thread_id": request.thread_id,
                     "checkpoint_ns": request.checkpoint_ns or "",
-                    "checkpoint_id": request.checkpoint_id,
                 }
             }
 
             new_config = await self._checkpointer.aput(config, checkpoint, metadata)
             return CheckpointResponse(
                 success=True,
-                thread_id=new_config["configurable"]["thread_id"],
-                checkpoint_id=new_config["configurable"]["checkpoint_id"]
+                checkpoint_id=new_config["configurable"].get("checkpoint_id", "")
             )
         except Exception as e:
             logger.error(f"Save checkpoint failed: {e}")
@@ -301,10 +326,13 @@ class CheckpointServiceImpl:
 
             return GetCheckpointResponse(
                 success=True,
-                thread_id=request.thread_id,
-                checkpoint_id=checkpoint_tuple.config["configurable"]["checkpoint_id"],
-                checkpoint_json=json.dumps(checkpoint_tuple.checkpoint),
-                metadata_json=json.dumps(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else "{}"
+                checkpoint=Checkpoint(
+                    id=checkpoint_tuple.config["configurable"].get("checkpoint_id", ""),
+                    thread_id=checkpoint_tuple.config["configurable"]["thread_id"],
+                    checkpoint_ns=checkpoint_tuple.config["configurable"].get("checkpoint_ns", ""),
+                    state_blob=json.dumps(checkpoint_tuple.checkpoint).encode("utf-8"),
+                    metadata=json.dumps(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else "{}",
+                )
             )
         except Exception as e:
             logger.error(f"Get checkpoint failed: {e}")
@@ -324,22 +352,77 @@ class CheckpointServiceImpl:
 
             checkpoints = []
             async for checkpoint_tuple in self._checkpointer.alist(config):
-                checkpoints.append(CheckpointInfo(
+                checkpoints.append(Checkpoint(
+                    id=checkpoint_tuple.config["configurable"].get("checkpoint_id", ""),
                     thread_id=checkpoint_tuple.config["configurable"]["thread_id"],
-                    checkpoint_id=checkpoint_tuple.config["configurable"]["checkpoint_id"],
                     checkpoint_ns=checkpoint_tuple.config["configurable"].get("checkpoint_ns", ""),
-                    checkpoint_json=json.dumps(checkpoint_tuple.checkpoint),
-                    metadata_json=json.dumps(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else "{}"
+                    state_blob=json.dumps(checkpoint_tuple.checkpoint).encode("utf-8"),
+                    metadata=json.dumps(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else "{}",
                 ))
 
             return ListCheckpointsResponse(
                 success=True,
                 checkpoints=checkpoints,
-                count=len(checkpoints)
+                total_count=len(checkpoints)
             )
         except Exception as e:
             logger.error(f"List checkpoints failed: {e}")
             return ListCheckpointsResponse(success=False, error=str(e))
+
+    async def GetLatestCheckpoint(self, request, context):
+        """Get the latest checkpoint for a thread."""
+        try:
+            config = {
+                "configurable": {
+                    "thread_id": request.thread_id,
+                    "checkpoint_ns": request.checkpoint_ns or "",
+                }
+            }
+
+            checkpoint_tuple = await self._checkpointer.aget_tuple(config)
+            if not checkpoint_tuple:
+                return GetCheckpointResponse(success=False, error="Checkpoint not found")
+
+            return GetCheckpointResponse(
+                success=True,
+                checkpoint=Checkpoint(
+                    id=checkpoint_tuple.config["configurable"].get("checkpoint_id", ""),
+                    thread_id=checkpoint_tuple.config["configurable"]["thread_id"],
+                    checkpoint_ns=checkpoint_tuple.config["configurable"].get("checkpoint_ns", ""),
+                    state_blob=json.dumps(checkpoint_tuple.checkpoint).encode("utf-8"),
+                    metadata=json.dumps(checkpoint_tuple.metadata) if checkpoint_tuple.metadata else "{}",
+                )
+            )
+        except Exception as e:
+            logger.error(f"Get latest checkpoint failed: {e}")
+            return GetCheckpointResponse(success=False, error=str(e))
+
+    async def CleanupCheckpoints(self, request, context):
+        """Clean up old checkpoints."""
+        try:
+            # Placeholder: no actual cleanup implemented yet
+            return CleanupCheckpointsResponse(
+                success=True,
+                deleted_count=0,
+                message="Cleanup placeholder"
+            )
+        except Exception as e:
+            logger.error(f"Cleanup checkpoints failed: {e}")
+            return CleanupCheckpointsResponse(success=False, error=str(e))
+
+    async def SubscribeCheckpoints(self, request, context):
+        """Subscribe to checkpoint events via server-side streaming."""
+        try:
+            # Placeholder: yield a single subscription confirmation event
+            yield CheckpointEvent(
+                event_type="subscribed",
+                thread_id=request.thread_id,
+                message="Checkpoint subscription active",
+            )
+        except Exception as e:
+            logger.error(f"Subscribe checkpoints failed: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(str(e))
 
 
 class WorkerServiceImpl:
@@ -363,7 +446,7 @@ class WorkerServiceImpl:
                 # Fallback to runtime if orchestrator not available
                 result = {"status": "executed", "task_id": request.task_id}
 
-            return TaskResponse(
+            return worker_pb2.TaskResponse(
                 task_id=request.task_id,
                 success=True,
                 result=json.dumps(result),
@@ -371,7 +454,7 @@ class WorkerServiceImpl:
             )
         except Exception as e:
             logger.error(f"Execute task failed: {e}")
-            return TaskResponse(
+            return worker_pb2.TaskResponse(
                 task_id=request.task_id,
                 success=False,
                 error=str(e)
@@ -381,14 +464,13 @@ class WorkerServiceImpl:
         """Health check for worker service."""
         try:
             agents = self._runtime.list_active()
-            return HealthResponse(
+            return worker_pb2.HealthResponse(
                 healthy=True,
-                status="ok",
-                workers_count=len(agents)
+                version="0.2.0",
             )
         except Exception as e:
             logger.error(f"Health check failed: {e}")
-            return HealthResponse(healthy=False, status=str(e))
+            return worker_pb2.HealthResponse(healthy=False, version="error")
 
 
 # Convenience function to create and run the gRPC server

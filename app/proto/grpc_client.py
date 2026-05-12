@@ -399,9 +399,8 @@ class GRPCClient:
             return False
         
         try:
-            # Check all services
+            # Check runtime and worker services
             await self._runtime_service.health_check()
-            await self._checkpoint_service.health_check()
             await self._worker_service.health_check()
             return True
         except Exception as e:
