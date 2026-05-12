@@ -1,7 +1,11 @@
+import os
 import asyncio
 from uuid import uuid4
 
 import pytest
+
+if os.environ.get("AGENTOS_RUNTIME_MODE", "").lower() == "grpc":
+    pytest.skip("Celery-dependent tests not applicable in gRPC/desktop mode", allow_module_level=True)
 
 from app.api.routes.tasks import get_task
 from app.memory.long_term import db
