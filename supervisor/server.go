@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/AgentOS/supervisor/proto/runtime"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -70,6 +71,8 @@ type Supervisor struct {
 	apiKey         string // API key for local gRPC auth
 	updater        *Updater // Auto-updater
 	eventHub       *EventHub // WebSocket event hub
+	grpcConn       *grpc.ClientConn             // gRPC connection to Python runtime
+	grpcClient     runtime.RuntimeServiceClient  // gRPC client for Python runtime
 }
 
 // Metrics holds simple request metrics
@@ -157,17 +160,16 @@ func (s *Supervisor) projectRoot() string {
 // Start starts the supervisor and its services
 func (s *Supervisor) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
-	// Start Python runtime
+	// Start Python runtime (desktop_entry starts its own gRPC server on port 50051)
 	if err := s.startPythonRuntime(); err != nil {
 		log.Printf("Warning: Failed to start Python runtime: %v", err)
 	}
 
-	// Start gRPC server
-	if err := s.startGRPCServer(); err != nil {
-		log.Printf("Warning: Failed to start gRPC server: %v", err)
-	}
+	// Separate gRPC server is no longer needed — desktop_entry handles it internally.
+	// if err := s.startGRPCServer(); err != nil {
+	// 	log.Printf("Warning: Failed to start gRPC server: %v", err)
+	// }
 
 	// Start checkpoint gRPC server
 	if err := s.startCheckpointGRPCServer(); err != nil {
@@ -184,10 +186,17 @@ func (s *Supervisor) Start() error {
 		log.Printf("Warning: Failed to start MCP servers: %v", err)
 	}
 
+	s.mu.Unlock()
+
+	// Connect gRPC client to Python runtime (retries take time, do outside lock)
+	if err := s.connectGRPCClient(); err != nil {
+		log.Printf("Warning: Failed to connect gRPC client: %v", err)
+	}
+
 	return nil
 }
 
-// startPythonRuntime starts the Python FastAPI backend
+// startPythonRuntime starts the Python desktop-native runtime (includes its own gRPC server on port 50051)
 func (s *Supervisor) startPythonRuntime() error {
 	// Check if Python is available
 	pythonPath, err := exec.LookPath("python")
@@ -195,13 +204,7 @@ func (s *Supervisor) startPythonRuntime() error {
 		return err
 	}
 
-	// Use port 8000 for Python FastAPI backend (separate from supervisor port 8080)
-	pythonPort := "8000"
-	cmd := exec.Command(pythonPath, "-m", "uvicorn", "app.main:app",
-		"--host", s.config.Host,
-		"--port", pythonPort,
-		"--reload",
-	)
+	cmd := exec.Command(pythonPath, "-m", "app.desktop_entry")
 	cmd.Env = append(os.Environ(),
 		"AGENTOS_RUNTIME_MODE=grpc",
 		fmt.Sprintf("AGENTOS_API_KEY=%s", s.apiKey),
@@ -219,8 +222,45 @@ func (s *Supervisor) startPythonRuntime() error {
 	s.pythonCmd = cmd
 	s.state.PythonReady = true
 
-	log.Printf("Python runtime started on %s:%s", s.config.Host, pythonPort)
+	log.Printf("Python runtime started on port 8000 (desktop_entry)")
 	return nil
+}
+
+// connectGRPCClient establishes a gRPC client connection to the Python runtime with retries.
+func (s *Supervisor) connectGRPCClient() error {
+	var conn *grpc.ClientConn
+	var lastErr error
+
+	for i := 0; i < 10; i++ {
+		conn, lastErr = grpc.Dial("localhost:50051", grpc.WithInsecure())
+		if lastErr != nil {
+			log.Printf("gRPC client connection attempt %d/10 failed: %v, retrying in 1s...", i+1, lastErr)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		// Test connection with health check
+		client := runtime.NewRuntimeServiceClient(conn)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, lastErr = client.HealthCheck(ctx, &runtime.HealthCheckRequest{})
+		cancel()
+		if lastErr == nil {
+			s.mu.Lock()
+			s.grpcConn = conn
+			s.grpcClient = client
+			s.state.GRPCReady = true
+			s.state.GRPCPort = 50051
+			s.mu.Unlock()
+			log.Printf("gRPC client connected to Python runtime on port 50051")
+			return nil
+		}
+
+		conn.Close()
+		log.Printf("gRPC client health check attempt %d/10 failed: %v, retrying in 1s...", i+1, lastErr)
+		time.Sleep(1 * time.Second)
+	}
+
+	return fmt.Errorf("failed to connect gRPC client after 10 attempts: %w", lastErr)
 }
 
 // stopPythonRuntime stops the Python FastAPI backend
@@ -310,15 +350,9 @@ func (s *Supervisor) isCheckpointGRPCHealthy() bool {
 	return s.checkpointServer.IsHealthy()
 }
 
-// isGRPCHealthy checks if the gRPC server is responsive
+// isGRPCHealthy checks if the gRPC client connection to Python runtime is healthy
 func (s *Supervisor) isGRPCHealthy() bool {
-	if !s.state.GRPCReady || s.grpcCmd == nil || s.grpcCmd.Process == nil {
-		return false
-	}
-	if s.grpcCmd.ProcessState != nil && s.grpcCmd.ProcessState.Exited() {
-		return false
-	}
-	return true
+	return s.state.GRPCReady && s.grpcClient != nil
 }
 
 // startMCPServers starts all MCP servers
@@ -672,10 +706,10 @@ func (s *Supervisor) HandleTasksRoute(w http.ResponseWriter, r *http.Request) {
 // HandleCreateTask handles POST /api/v1/tasks
 func (s *Supervisor) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	rt := s.runtimeServer
+	client := s.grpcClient
 	s.mu.RUnlock()
 
-	if rt == nil {
+	if client == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "runtime server not initialized"})
 		return
@@ -695,7 +729,7 @@ func (s *Supervisor) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := rt.CreateTask(r.Context(), &runtime.CreateTaskRequest{
+	resp, err := client.CreateTask(r.Context(), &runtime.CreateTaskRequest{
 		Query: req.Query,
 		Type:  runtime.TaskType_TASK_TYPE_COMPLEX,
 	})
@@ -716,10 +750,10 @@ func (s *Supervisor) HandleCreateTask(w http.ResponseWriter, r *http.Request) {
 // HandleListTasks handles GET /api/v1/tasks
 func (s *Supervisor) HandleListTasks(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	rt := s.runtimeServer
+	client := s.grpcClient
 	s.mu.RUnlock()
 
-	if rt == nil {
+	if client == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "runtime server not initialized"})
 		return
@@ -739,7 +773,7 @@ func (s *Supervisor) HandleListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	resp, err := rt.ListTasks(r.Context(), &runtime.ListTasksRequest{
+	resp, err := client.ListTasks(r.Context(), &runtime.ListTasksRequest{
 		Limit:  limit,
 		Offset: offset,
 	})
@@ -764,10 +798,10 @@ func (s *Supervisor) HandleListTasks(w http.ResponseWriter, r *http.Request) {
 // HandleGetTask handles GET /api/v1/tasks/{id}
 func (s *Supervisor) HandleGetTask(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	rt := s.runtimeServer
+	client := s.grpcClient
 	s.mu.RUnlock()
 
-	if rt == nil {
+	if client == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "runtime server not initialized"})
 		return
@@ -782,7 +816,7 @@ func (s *Supervisor) HandleGetTask(w http.ResponseWriter, r *http.Request) {
 	}
 	taskID := parts[3]
 
-	resp, err := rt.GetTask(r.Context(), &runtime.GetTaskRequest{TaskId: taskID})
+	resp, err := client.GetTask(r.Context(), &runtime.GetTaskRequest{TaskId: taskID})
 	if err != nil {
 		if grpcStatus, ok := status.FromError(err); ok && grpcStatus.Code() == codes.NotFound {
 			w.WriteHeader(http.StatusNotFound)
@@ -801,10 +835,10 @@ func (s *Supervisor) HandleGetTask(w http.ResponseWriter, r *http.Request) {
 // HandleCancelTask handles POST /api/v1/tasks/{id}/cancel
 func (s *Supervisor) HandleCancelTask(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	rt := s.runtimeServer
+	client := s.grpcClient
 	s.mu.RUnlock()
 
-	if rt == nil {
+	if client == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "runtime server not initialized"})
 		return
@@ -824,7 +858,7 @@ func (s *Supervisor) HandleCancelTask(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	resp, err := rt.CancelTask(r.Context(), &runtime.CancelTaskRequest{
+	resp, err := client.CancelTask(r.Context(), &runtime.CancelTaskRequest{
 		TaskId: taskID,
 		Reason: req.Reason,
 	})
@@ -848,10 +882,10 @@ func (s *Supervisor) HandleCancelTask(w http.ResponseWriter, r *http.Request) {
 // HandleApproveTask handles POST /api/v1/tasks/{id}/approve
 func (s *Supervisor) HandleApproveTask(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	rt := s.runtimeServer
+	client := s.grpcClient
 	s.mu.RUnlock()
 
-	if rt == nil {
+	if client == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "runtime server not initialized"})
 		return
@@ -871,7 +905,7 @@ func (s *Supervisor) HandleApproveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	resp, err := rt.ApproveTask(r.Context(), &runtime.ApproveTaskRequest{
+	resp, err := client.ApproveTask(r.Context(), &runtime.ApproveTaskRequest{
 		TaskId: taskID,
 		Reason: req.Reason,
 	})
@@ -901,10 +935,10 @@ func (s *Supervisor) HandleApproveTask(w http.ResponseWriter, r *http.Request) {
 // HandleRejectTask handles POST /api/v1/tasks/{id}/reject
 func (s *Supervisor) HandleRejectTask(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
-	rt := s.runtimeServer
+	client := s.grpcClient
 	s.mu.RUnlock()
 
-	if rt == nil {
+	if client == nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]string{"error": "runtime server not initialized"})
 		return
@@ -924,7 +958,7 @@ func (s *Supervisor) HandleRejectTask(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
 
-	resp, err := rt.RejectTask(r.Context(), &runtime.RejectTaskRequest{
+	resp, err := client.RejectTask(r.Context(), &runtime.RejectTaskRequest{
 		TaskId: taskID,
 		Reason: req.Reason,
 	})
@@ -1167,6 +1201,14 @@ func (s *Supervisor) Shutdown(ctx context.Context) error {
 	}
 	if err := s.stopCheckpointGRPCServer(); err != nil {
 		log.Printf("Shutdown: checkpoint gRPC server stop error: %v", err)
+	}
+
+	// 6b. Close gRPC client connection
+	if s.grpcConn != nil {
+		log.Println("Shutdown: closing gRPC client connection...")
+		if err := s.grpcConn.Close(); err != nil {
+			log.Printf("Shutdown: gRPC client close error: %v", err)
+		}
 	}
 
 	// 7. Close database
