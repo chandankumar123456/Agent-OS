@@ -63,14 +63,14 @@ async def test_executor_node_invokes_tool_when_llm_requests_it(mock_obs_bus):
                 mock_tool_output.error = None
                 mock_registry.execute = AsyncMock(return_value=mock_tool_output)
 
-            with patch("app.langgraph.nodes.recovery_engine") as mock_recovery:
-                mock_decision = MagicMock()
-                mock_decision.action = MagicMock(value="retry")
-                mock_decision.reason = "Mock recovery"
-                mock_decision.next_tool = None
-                mock_decision.model_dump = MagicMock(return_value={"action": "retry", "reason": "Mock recovery", "next_tool": None})
-                mock_recovery.decide = AsyncMock(return_value=mock_decision)
-                result = await executor_node(state)
+                with patch("app.langgraph.nodes.recovery_engine") as mock_recovery:
+                    mock_decision = MagicMock()
+                    mock_decision.action = MagicMock(value="retry")
+                    mock_decision.reason = "Mock recovery"
+                    mock_decision.next_tool = None
+                    mock_decision.model_dump = MagicMock(return_value={"action": "retry", "reason": "Mock recovery", "next_tool": None})
+                    mock_recovery.decide = AsyncMock(return_value=mock_decision)
+                    result = await executor_node(state)
 
     assert result["status"] == "step_executed"
     assert result["current_step_index"] == 1
