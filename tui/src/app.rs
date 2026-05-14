@@ -1,4 +1,6 @@
 use std::io;
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -7,9 +9,9 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Terminal,
 };
@@ -17,19 +19,21 @@ use ratatui::{
 use crate::models::{DaemonStatus, LogEntry, Task};
 
 pub struct App {
-    pub tasks: Vec<Task>,
-    pub logs: Vec<LogEntry>,
+    pub _tasks: Vec<Task>,
+    pub _logs: Vec<LogEntry>,
     pub status: DaemonStatus,
     pub connected: bool,
     pub should_quit: bool,
     pub show_help: bool,
+    host: String,
+    port: u16,
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl App {
+    pub fn new(host: String, port: u16) -> Self {
         Self {
-            tasks: Vec::new(),
-            logs: Vec::new(),
+            _tasks: Vec::new(),
+            _logs: Vec::new(),
             status: DaemonStatus {
                 running: false,
                 pid: None,
@@ -43,19 +47,22 @@ impl Default for App {
             connected: false,
             should_quit: false,
             show_help: false,
+            host,
+            port,
         }
     }
-}
 
-impl App {
-    pub fn new() -> Self {
-        Self::default()
+    fn check_connection(&self) -> bool {
+        let addr: SocketAddr = format!("{}:{}", self.host, self.port)
+            .parse()
+            .unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], 8080)));
+        TcpStream::connect_timeout(&addr, Duration::from_secs(2)).is_ok()
     }
 
     pub fn on_key(&mut self, key: KeyCode) {
         match key {
             KeyCode::Char('q') | KeyCode::Esc => self.should_quit = true,
-            KeyCode::Char('?') | KeyCode::Char('h') => self.show_help = !self.show_help,
+            KeyCode::Char('?') | KeyCode::Char('/') | KeyCode::Char('h') => self.show_help = !self.show_help,
             _ => {}
         }
     }
@@ -83,7 +90,7 @@ impl App {
         frame.render_widget(status, chunks[1]);
     }
 
-    fn draw_dashboard(&self) -> Paragraph {
+    fn draw_dashboard(&self) -> Paragraph<'_> {
         let text = vec![
             Line::from(vec![
                 Span::styled("AgentOS TUI - Real-time Monitoring", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -121,7 +128,7 @@ impl App {
             .wrap(Wrap { trim: true })
     }
 
-    fn draw_help(&self) -> Paragraph {
+    fn draw_help(&self) -> Paragraph<'_> {
         let text = vec![
             Line::from(vec![
                 Span::styled("Keyboard Shortcuts", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -145,7 +152,7 @@ impl App {
             .block(Block::default().borders(Borders::ALL).title("Help"))
     }
 
-    fn draw_status_bar(&self) -> Paragraph {
+    fn draw_status_bar(&self) -> Paragraph<'_> {
         let status_text = format!(
             " {} | v{} | {} active / {} total ",
             if self.connected { "● connected" } else { "● disconnected" },
@@ -160,7 +167,7 @@ impl App {
     }
 }
 
-pub fn run() -> io::Result<()> {
+pub fn run(host: String, port: u16) -> io::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -170,7 +177,7 @@ pub fn run() -> io::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
-    let mut app = App::new();
+    let mut app = App::new(host, port);
 
     // Main loop
     let tick_rate = std::time::Duration::from_millis(250);
@@ -191,8 +198,9 @@ pub fn run() -> io::Result<()> {
             }
         }
 
-        // Tick
+        // Tick — check supervisor connection
         if last_tick.elapsed() >= tick_rate {
+            app.connected = app.check_connection();
             last_tick = std::time::Instant::now();
         }
 
