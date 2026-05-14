@@ -1,3 +1,4 @@
+import os
 from fastapi import Request, HTTPException, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,12 +14,22 @@ import hashlib
 from datetime import datetime, timezone
 
 
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
+
+
 class APIKeyMiddleware(BaseHTTPMiddleware):
     def __init__(self, app, api_keys: Optional[list] = None):
         super().__init__(app)
         self.api_keys = api_keys or []
-    
+
     async def dispatch(self, request: Request, call_next):
+        # In desktop mode, skip API key/JWT auth for local IPC
+        if _is_desktop_mode():
+            return await call_next(request)
+
         if request.url.path in {"/api/v1/auth/login", "/api/v1/auth/signup"}:
             return await call_next(request)
 
