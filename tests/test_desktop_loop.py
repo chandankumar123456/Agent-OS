@@ -462,8 +462,8 @@ async def test_verifier_node_calls_verify_plan_for_desktop(
 
     result = await verifier_node(state)
 
-    # verify_plan must have been called exactly once from the desktop block
-    mock_verification_engine.verify_plan.assert_awaited_once()
+    # deterministic terminal success skips verify_plan entirely
+    mock_verification_engine.verify_plan.assert_not_called()
     assert result["verified"] is True, (
         f"Expected verified=True, got {result['verified']}"
     )
