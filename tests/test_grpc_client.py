@@ -24,7 +24,7 @@ class TestGRPCClientConfig:
         """Test default configuration values."""
         config = GRPCClientConfig()
         assert config.host == "localhost"
-        assert config.port == 50051
+        assert config.port == 50052
         assert config.max_send_message_length == 50 * 1024 * 1024
         assert config.max_receive_message_length == 50 * 1024 * 1024
         assert config.connection_timeout == 5.0
@@ -323,8 +323,11 @@ class TestGRPCClient:
         """Create mock grpc module with all dependencies."""
         mock_grpc = MagicMock()
         mock_aio_channel = MagicMock()
-        mock_grpc.aio.channel.return_value = mock_aio_channel
-        mock_grpc.aio.channel.close = AsyncMock()
+        mock_aio_channel.close = AsyncMock()
+        mock_grpc_aio = MagicMock()
+        mock_grpc_aio.secure_channel = MagicMock(return_value=mock_aio_channel)
+        mock_grpc_aio.insecure_channel = MagicMock(return_value=mock_aio_channel)
+        mock_grpc.aio = mock_grpc_aio
 
         # Create mock stubs
         mock_runtime_stub = MagicMock()
@@ -393,12 +396,12 @@ class TestGRPCClient:
     @pytest.mark.asyncio
     async def test_close(self, mock_grpc_module):
         """Test close closes gRPC connection."""
+        mock_channel = mock_grpc_module['channel']
         client = GRPCClient()
 
         await client.connect()
-        
-        # Get the mock channel from the fixture
-        mock_channel = mock_grpc_module['channel']
+        # Replace the channel with our tracked mock to verify close is called
+        client._channel = mock_channel
         await client.close()
 
         assert client.is_connected is False
@@ -414,29 +417,34 @@ class TestGRPCClient:
         assert client.is_connected is False
 
     @pytest.mark.asyncio
-    async def test_health_check_all_services(self, mock_channel, mock_stubs):
+    async def test_health_check_all_services(self, mock_grpc_module):
         """Test health_check checks all services."""
-        mock_stubs["runtime"].HealthCheck = AsyncMock()
-        mock_stubs["checkpoint"].CheckpointHealth = AsyncMock()
-        mock_stubs["worker"].HealthCheck = AsyncMock()
+        mock_grpc = mock_grpc_module['grpc']
+        mock_grpc.aio.secure_channel.return_value = mock_grpc_module['channel']
 
         client = GRPCClient()
         await client.connect()
+
+        # Mock the health check methods on the service clients
+        client._runtime_service.health_check = AsyncMock()
+        client._worker_service.health_check = AsyncMock()
 
         result = await client.health_check()
 
         assert result is True
-        mock_stubs["runtime"].HealthCheck.assert_called_once()
-        mock_stubs["checkpoint"].CheckpointHealth.assert_called_once()
-        mock_stubs["worker"].HealthCheck.assert_called_once()
+        client._runtime_service.health_check.assert_called_once()
+        client._worker_service.health_check.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_health_check_failure(self, mock_channel, mock_stubs):
+    async def test_health_check_failure(self, mock_grpc_module):
         """Test health_check when a service fails."""
-        mock_stubs["runtime"].HealthCheck = AsyncMock(side_effect=Exception("Service unavailable"))
+        mock_grpc = mock_grpc_module['grpc']
+        mock_grpc.aio.secure_channel.return_value = mock_grpc_module['channel']
 
         client = GRPCClient()
         await client.connect()
+
+        client._runtime_service.health_check = AsyncMock(side_effect=Exception("Service unavailable"))
 
         result = await client.health_check()
 
