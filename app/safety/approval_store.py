@@ -1,7 +1,10 @@
+import json
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 from enum import Enum
 from datetime import datetime, timezone
+
+from ..logs.logger import logger
 
 
 class ApprovalMode(str, Enum):
@@ -28,12 +31,36 @@ class ApprovalSession:
 
 
 class ApprovalStore:
-    """Per-session approval state store (in-memory)."""
+    """Per-session approval state store backed by SQLite for persistence."""
 
     def __init__(self):
         self._sessions: Dict[str, ApprovalSession] = {}
+        self._using_sqlite = False
+        try:
+            from ..desktop_native.sqlite_store import sqlite_store
+            self._sqlite = sqlite_store
+            self._using_sqlite = True
+        except Exception:
+            self._sqlite = None
 
-    def set_mode(self, task_id: str, mode: str) -> ApprovalSession:
+    async def _ensure_table(self):
+        if not self._using_sqlite:
+            return
+        try:
+            await self._sqlite.execute("""
+                CREATE TABLE IF NOT EXISTS approval_sessions (
+                    task_id TEXT PRIMARY KEY,
+                    mode TEXT NOT NULL DEFAULT 'standard',
+                    audit_log TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            await self._sqlite.commit()
+        except Exception as e:
+            logger.warning(f"Failed to create approval_sessions table: {e}")
+
+    async def set_mode(self, task_id: str, mode: str) -> ApprovalSession:
         """Set approval mode for a session. Creates session if needed."""
         mode_enum = ApprovalMode(mode) if mode in {m.value for m in ApprovalMode} else ApprovalMode.STANDARD
         session = self._sessions.get(task_id)
@@ -43,29 +70,82 @@ class ApprovalStore:
         else:
             session.mode = mode_enum
             session.updated_at = datetime.now(timezone.utc).isoformat()
+
+        # Persist to SQLite
+        if self._using_sqlite:
+            await self._ensure_table()
+            try:
+                await self._sqlite.execute(
+                    """
+                    INSERT OR REPLACE INTO approval_sessions (task_id, mode, audit_log, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (task_id, session.mode.value, json.dumps(session.audit_log), session.created_at, session.updated_at),
+                )
+                await self._sqlite.commit()
+            except Exception as e:
+                logger.warning(f"Failed to persist approval session: {e}")
+
         return session
 
-    def get_mode(self, task_id: str) -> ApprovalMode:
+    async def get_mode(self, task_id: str) -> ApprovalMode:
+        # Check in-memory first
         session = self._sessions.get(task_id)
-        return session.mode if session else ApprovalMode.STANDARD
+        if session:
+            return session.mode
 
-    def get_session(self, task_id: str) -> Optional[ApprovalSession]:
-        return self._sessions.get(task_id)
+        # Fallback to SQLite
+        if self._using_sqlite:
+            try:
+                await self._ensure_table()
+                row = await self._sqlite.fetchone(
+                    "SELECT mode FROM approval_sessions WHERE task_id = ?",
+                    (task_id,),
+                )
+                if row:
+                    return ApprovalMode(row["mode"]) if row["mode"] in {m.value for m in ApprovalMode} else ApprovalMode.STANDARD
+            except Exception as e:
+                logger.warning(f"Failed to load approval mode from SQLite: {e}")
+
+        return ApprovalMode.STANDARD
+
+    async def get_session(self, task_id: str) -> Optional[ApprovalSession]:
+        # Check in-memory first
+        if task_id in self._sessions:
+            return self._sessions[task_id]
+
+        # Fallback to SQLite
+        if self._using_sqlite:
+            try:
+                await self._ensure_table()
+                row = await self._sqlite.fetchone(
+                    "SELECT * FROM approval_sessions WHERE task_id = ?",
+                    (task_id,),
+                )
+                if row:
+                    session = ApprovalSession(
+                        task_id=row["task_id"],
+                        mode=ApprovalMode(row["mode"]) if row["mode"] in {m.value for m in ApprovalMode} else ApprovalMode.STANDARD,
+                        audit_log=json.loads(row["audit_log"]),
+                        created_at=row["created_at"],
+                        updated_at=row["updated_at"],
+                    )
+                    self._sessions[task_id] = session
+                    return session
+            except Exception as e:
+                logger.warning(f"Failed to load approval session from SQLite: {e}")
+
+        return None
 
     def should_auto_approve(self, task_id: str, tool_name: str, severity: str) -> bool:
         """Determine if an action should be auto-approved without interrupt.
 
-        Returns True if:
-        - mode is FULL_TRUST AND
-        - tool is NOT in forbidden list
-
-        Forbidden tools are ALWAYS blocked regardless of mode:
-        filesystem__delete_file, filesystem__delete_directory, database__drop_table,
-        database__drop_schema, database__delete_rows, user__delete_account,
-        payment__*, crypto__*, purchase__*, buy__*, email__send*, slack__send*,
-        discord__send*, sms__send*, github__delete*, github__force_push,
-        aws__terminate*, aws__delete*, docker__remove*, kubernetes__delete*
+        Note: This is a synchronous check (fast path). For desktop mode,
+        approval state should be loaded beforehand via get_session().
         """
+        session = self._sessions.get(task_id)
+        mode = session.mode if session else ApprovalMode.STANDARD
+
         # Forbidden prefix/pattern check
         forbidden_prefixes = (
             "filesystem__delete", "database__drop", "database__delete",
@@ -83,13 +163,24 @@ class ApprovalStore:
         if tool_name.startswith(("email__send", "slack__send", "slack__post", "discord__send", "sms__send")):
             return False
 
-        mode = self.get_mode(task_id)
         return mode == ApprovalMode.FULL_TRUST
 
-    def log_auto_approval(self, task_id: str, tool_name: str, params: dict, reason: str):
+    async def log_auto_approval(self, task_id: str, tool_name: str, params: dict, reason: str):
         session = self._sessions.get(task_id)
         if session:
             session.log_action(tool_name, params, auto_approved=True, reason=reason)
+
+            # Persist updated audit log
+            if self._using_sqlite:
+                try:
+                    await self._ensure_table()
+                    await self._sqlite.execute(
+                        "UPDATE approval_sessions SET audit_log = ?, updated_at = ? WHERE task_id = ?",
+                        (json.dumps(session.audit_log), datetime.now(timezone.utc).isoformat(), task_id),
+                    )
+                    await self._sqlite.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to persist approval log: {e}")
 
 
 # Module-level singleton
