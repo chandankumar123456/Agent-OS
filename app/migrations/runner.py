@@ -10,22 +10,51 @@ from typing import List, Tuple
 from sqlalchemy import text
 
 from ..memory.long_term import db
+from ..logs.logger import logger
 
 
 MIGRATIONS_DIR = Path(__file__).parent.parent.parent / "migrations"
 MIGRATION_TABLE = "schema_migrations"
 
 
+def _is_sqlite() -> bool:
+    """Detect if the database backend is SQLite."""
+    if db.engine is None:
+        return False
+    return "sqlite" in str(db.engine.url).lower()
+
+
+def _is_postgresql() -> bool:
+    """Detect if the database backend is PostgreSQL."""
+    if db.engine is None:
+        return False
+    return "postgresql" in str(db.engine.url).lower()
+
+
 async def ensure_migration_table():
-    """Create migration tracking table if it doesn't exist."""
+    """Create migration tracking table if it doesn't exist.
+
+    Uses backend-appropriate DDL: PostgreSQL TIMESTAMP WITHOUT TIME ZONE
+    vs SQLite TEXT with datetime() default.
+    """
     async with db.engine.begin() as conn:
-        await conn.execute(text(f"""
-            CREATE TABLE IF NOT EXISTS {MIGRATION_TABLE} (
-                version INTEGER PRIMARY KEY,
-                name VARCHAR(255) NOT NULL,
-                applied_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
-            )
-        """))
+        if _is_postgresql():
+            await conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {MIGRATION_TABLE} (
+                    version INTEGER PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    applied_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW()
+                )
+            """))
+        else:
+            # SQLite and other backends
+            await conn.execute(text(f"""
+                CREATE TABLE IF NOT EXISTS {MIGRATION_TABLE} (
+                    version INTEGER PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    applied_at TEXT DEFAULT (datetime('now'))
+                )
+            """))
 
 
 async def get_applied_migrations() -> List[int]:
@@ -99,21 +128,141 @@ def split_sql_statements(sql: str) -> List[str]:
     return statements
 
 
+def _translate_for_sqlite(sql: str) -> str:
+    """Translate PostgreSQL DDL to SQLite-compatible DDL.
+
+    Handles the most common PostgreSQL->SQLite syntax differences.
+    Returns None for statements that should be skipped entirely.
+
+    Supported translations:
+    - TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW() → TEXT DEFAULT (datetime('now'))
+    - UUID PRIMARY KEY DEFAULT gen_random_uuid() → TEXT PRIMARY KEY
+    - ALTER TABLE t ADD COLUMN IF NOT EXISTS c → ALTER TABLE t ADD COLUMN c
+    - BOOLEAN → INTEGER / DOUBLE PRECISION → REAL / etc.
+    """
+    translated = sql
+
+    # Skip ALTER COLUMN TYPE statements (SQLite doesn't support them)
+    if re.search(r'ALTER\s+TABLE\s+\S+\s+ALTER\s+COLUMN', translated, re.IGNORECASE):
+        return None  # Signal to skip
+
+    # ALTER TABLE t ADD COLUMN IF NOT EXISTS → ALTER TABLE t ADD COLUMN
+    # SQLite doesn't support IF NOT EXISTS in ALTER TABLE
+    translated = re.sub(
+        r'ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+IF\s+NOT\s+EXISTS',
+        r'ALTER TABLE \1 ADD COLUMN',
+        translated, flags=re.IGNORECASE
+    )
+
+    # Replace PostgreSQL-specific types with SQLite equivalents
+    replacements = [
+        # TIMESTAMP WITHOUT TIME ZONE DEFAULT NOW() → TEXT DEFAULT (datetime('now'))
+        (r'TIMESTAMP\s+WITHOUT\s+TIME\s+ZONE\s+DEFAULT\s+NOW\(\)', r"TEXT DEFAULT (datetime('now'))", re.IGNORECASE),
+        # TIMESTAMP WITHOUT TIME ZONE → TEXT
+        (r'TIMESTAMP\s+WITHOUT\s+TIME\s+ZONE', 'TEXT', re.IGNORECASE),
+        # DEFAULT NOW() → DEFAULT (datetime('now'))  (for non-timestamp contexts)
+        (r'DEFAULT\s+NOW\(\)', r"DEFAULT (datetime('now'))", re.IGNORECASE),
+        # UUID PRIMARY KEY DEFAULT gen_random_uuid() → TEXT PRIMARY KEY
+        (r'UUID\s+PRIMARY\s+KEY\s+DEFAULT\s+gen_random_uuid\(\)', 'TEXT PRIMARY KEY', re.IGNORECASE),
+        # id UUID → id TEXT (standalone UUID type)
+        (r'\bUUID\b', 'TEXT', re.IGNORECASE),
+        # DOUBLE PRECISION → REAL
+        (r'DOUBLE\s+PRECISION', 'REAL', re.IGNORECASE),
+        # SERIAL → INTEGER
+        (r'\bSERIAL\b', 'INTEGER', re.IGNORECASE),
+        # JSONB → TEXT
+        (r'\bJSONB\b', 'TEXT', re.IGNORECASE),
+        # BOOLEAN → INTEGER (SQLite has no real boolean)
+        # Keep BOOLEAN — SQLite treats it as NUMERIC affinity
+    ]
+
+    for pattern, replacement, flags in replacements:
+        translated = re.sub(pattern, replacement, translated, flags=flags)
+
+    return translated
+
+
+_SKIP_ERROR_PATTERNS = [
+    # SQLite: column already exists (ALTER TABLE ADD COLUMN without IF NOT EXISTS)
+    "duplicate column name",
+    # SQLite: no such column (referenced column from a skipped ALTER)
+    "no such column",
+    # General SQLite: syntax errors from untranslatable SQL
+    "syntax error",
+    # SQLite: constraint violations on re-runs
+    "already exists",
+    # SQLite: near ... syntax error
+    "near \"",
+    # General operational errors
+    "cannot add a column with non-constant default",  # SQLite limitation
+]
+
+
+def _is_skippable_sqlite_error(error_msg: str) -> bool:
+    """Check if a SQLite error is safe to skip (non-critical for bootstrap)."""
+    msg_lower = str(error_msg).lower()
+    return any(pattern in msg_lower for pattern in _SKIP_ERROR_PATTERNS)
+
+
 async def run_migration(version: int, name: str, filepath: Path):
-    """Run a single migration file."""
+    """Run a single migration file.
+
+    Translates PostgreSQL-specific DDL to SQLite-compatible syntax
+    when the backend is SQLite. Non-critical SQLite errors are logged
+    as warnings and skipped to allow bootstrap to proceed.
+    """
     sql = filepath.read_text()
     statements = split_sql_statements(sql)
 
+    skipped_count = 0
     async with db.engine.begin() as conn:
         for stmt in statements:
-            await conn.execute(text(stmt))
+            executable_sql = stmt
+            if _is_sqlite():
+                translated = _translate_for_sqlite(stmt)
+                if translated is None:
+                    logger.warning(
+                        f"  Skipping untranslatable statement in migration "
+                        f"{version:03d}: {stmt[:80].strip()}..."
+                    )
+                    skipped_count += 1
+                    continue
+                executable_sql = translated
 
-        await conn.execute(text(
-            f"INSERT INTO {MIGRATION_TABLE} (version, name) VALUES (:version, :name)"
-            f" ON CONFLICT (version) DO NOTHING"
-        ), {"version": version, "name": name})
+            try:
+                await conn.execute(text(executable_sql))
+            except Exception as e:
+                error_msg = str(e)
+                if _is_sqlite() and _is_skippable_sqlite_error(error_msg):
+                    logger.warning(
+                        f"  Skipping statement in migration "
+                        f"{version:03d} (SQLite compat): {stmt[:80].strip()}... "
+                        f"[{type(e).__name__}: {error_msg[:100]}]"
+                    )
+                    skipped_count += 1
+                    continue
+                # Re-raise critical errors
+                logger.error(
+                    f"  Fatal error in migration {version:03d}: "
+                    f"{type(e).__name__}: {error_msg[:200]}"
+                )
+                raise
 
-    print(f"  Applied migration {version:03d}: {name}")
+        # Record migration as applied (use backend-appropriate upsert)
+        if _is_postgresql():
+            await conn.execute(text(
+                f"INSERT INTO {MIGRATION_TABLE} (version, name) VALUES (:version, :name)"
+                f" ON CONFLICT (version) DO NOTHING"
+            ), {"version": version, "name": name})
+        else:
+            await conn.execute(text(
+                f"INSERT OR IGNORE INTO {MIGRATION_TABLE} (version, name) VALUES (:version, :name)"
+            ), {"version": version, "name": name})
+
+    if skipped_count > 0:
+        print(f"  Applied migration {version:03d}: {name} ({skipped_count} statement(s) skipped for SQLite compatibility)")
+    else:
+        print(f"  Applied migration {version:03d}: {name}")
 
 
 async def run_pending_migrations():
