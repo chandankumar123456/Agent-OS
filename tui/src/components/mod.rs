@@ -1,8 +1,8 @@
-// Stub components module - simplifies TUI for Phase 5 completion
+#![allow(dead_code)]
+
 pub mod task_list {
     use ratatui::{
         layout::Rect,
-        style::{Style, Color},
         widgets::{Block, Borders, Paragraph},
         Frame,
     };
