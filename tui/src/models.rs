@@ -25,6 +25,7 @@ pub enum TaskStatus {
     Cancelled,
 }
 
+#[allow(dead_code)]
 impl TaskStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -73,6 +74,7 @@ pub enum StepStatus {
     Skipped,
 }
 
+#[allow(dead_code)]
 impl StepStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -106,17 +108,20 @@ pub struct LogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ListTasksResponse {
     pub tasks: Vec<Task>,
     pub total: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CreateTaskRequest {
     pub query: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct CreateTaskResponse {
     pub task_id: String,
     pub status: TaskStatus,
