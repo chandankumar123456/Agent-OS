@@ -294,49 +294,85 @@ class GRPCClient:
             return self._config.api_key
         return os.environ.get("AGENTOS_API_KEY")
     
+    def _is_desktop_mode(self) -> bool:
+        """Check if running in desktop-native gRPC mode."""
+        mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+        return mode.lower() == "grpc"
+
+    def _enforce_mtls(self) -> bool:
+        """Check if mTLS should be strictly enforced.
+
+        mTLS is ONLY enforced when AGENTOS_ENFORCE_MTLS=true is explicitly set.
+        The presence of certificates alone enables mTLS but does not enforce it,
+        allowing tests and development environments to work without strict requirements.
+        """
+        return os.environ.get("AGENTOS_ENFORCE_MTLS", "").lower() == "true"
+
     def _build_channel(self) -> grpc.aio.Channel:
-        """Build gRPC channel with TLS and auth."""
+        """Build gRPC channel with TLS and auth.
+
+        In desktop mode with AGENTOS_ENFORCE_MTLS=true, mTLS is mandatory.
+        If certificates are missing, the connection will fail.
+        """
         target = f"{self._config.host}:{self._config.port}"
+        is_desktop = self._is_desktop_mode()
+        enforce_mtls = self._enforce_mtls()
+
         options = [
             ("grpc.max_send_message_length", self._config.max_send_message_length),
             ("grpc.max_receive_message_length", self._config.max_receive_message_length),
             ("grpc.keepalive_timeout_ms", self._config.keepalive_timeout * 1000),
         ]
-        
+
         api_key = self._load_api_key()
         interceptors = []
         if api_key:
             interceptors.append(APIKeyInterceptor(api_key))
-        
+
         if self._config.use_tls:
             # Load CA certificate
             ca_cert_path = self._config.ca_cert_path or self._default_ca_path()
             if not os.path.exists(ca_cert_path):
+                if is_desktop and enforce_mtls:
+                    raise RuntimeError(
+                        f"DESKTOP SECURITY: CA certificate not found at {ca_cert_path}. "
+                        f"mTLS is mandatory in desktop mode. Run 'agentos init-certs' to generate certificates."
+                    )
                 logger.warning(f"CA cert not found at {ca_cert_path}, falling back to insecure channel")
                 channel = grpc.aio.insecure_channel(target, options=options, interceptors=interceptors)
                 return channel
-            
+
             with open(ca_cert_path, "rb") as f:
                 ca_cert = f.read()
-            
+
             creds = grpc.ssl_channel_credentials(ca_cert)
-            
+
             # Add client cert for mTLS if available
             client_cert_path = self._config.client_cert_path or self._default_client_cert_path()
             client_key_path = self._config.client_key_path or self._default_client_key_path()
-            if os.path.exists(client_cert_path) and os.path.exists(client_key_path):
+            has_client_cert = os.path.exists(client_cert_path) and os.path.exists(client_key_path)
+
+            if has_client_cert:
                 with open(client_cert_path, "rb") as f:
                     client_cert = f.read()
                 with open(client_key_path, "rb") as f:
                     client_key = f.read()
                 creds = grpc.ssl_channel_credentials(ca_cert, client_key, client_cert)
-            
+                logger.info(f"gRPC client using mTLS to {target}")
+            else:
+                if is_desktop and enforce_mtls:
+                    raise RuntimeError(
+                        f"DESKTOP SECURITY: Client certificate not found at {client_cert_path} or key at {client_key_path}. "
+                        f"mTLS is mandatory in desktop mode. Run 'agentos init-certs' to generate certificates."
+                    )
+                logger.info(f"gRPC client using TLS (no client cert) to {target}")
+
             channel = grpc.aio.secure_channel(target, creds, options=options, interceptors=interceptors)
-            logger.info(f"gRPC client using TLS to {target}")
             return channel
         else:
             channel = grpc.aio.insecure_channel(target, options=options, interceptors=interceptors)
-            logger.warning(f"gRPC client using INSECURE connection to {target}")
+            if is_desktop:
+                logger.warning(f"gRPC client using INSECURE connection in desktop mode to {target}")
             return channel
     
     def _default_ca_path(self) -> str:
