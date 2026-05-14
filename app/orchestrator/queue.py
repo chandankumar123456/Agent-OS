@@ -2,6 +2,9 @@
 
 Uses Redis sorted sets for priority ordering and hash maps for task metadata.
 Integrates with TaskStateMachine, IdempotencyEnforcement, and ExecutionLock.
+
+In gRPC mode (AGENTOS_RUNTIME_MODE=grpc), transparently delegates to
+in-memory fallback to avoid Redis dependency.
 """
 import json
 import time
@@ -12,11 +15,17 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from ..memory.short_term import redis_client
+from ..config.settings import settings
 from ..logs.logger import logger
 from .errors import AgentOSError, ErrorCode, ErrorType
 from .state_machine import TaskState, TaskStateMachine
 from .locks import ExecutionLock
+
+
+def _is_grpc_mode() -> bool:
+    """Check if running in gRPC mode without importing runtime.mode (avoids circular deps)."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class TaskPriority(int, Enum):
@@ -54,6 +63,8 @@ class QueuedTask(BaseModel):
 class TaskQueue:
     """Priority task queue with Redis-backed scheduling.
 
+    In gRPC mode, delegates to InMemoryTaskQueue for local-native operation.
+
     Usage:
         queue = TaskQueue()
         position = await queue.enqueue(task, priority=TaskPriority.HIGH)
@@ -72,6 +83,16 @@ class TaskQueue:
         self.default_worker_ttl = default_worker_ttl
         self.state_machine = state_machine or TaskStateMachine()
         self.execution_lock = execution_lock or ExecutionLock()
+
+        # In gRPC/desktop mode, use local delegate with SQLite persistence
+        if _is_grpc_mode():
+            from ..desktop_native.task_queue import local_task_queue
+            from ..desktop_native.locks import local_execution_lock
+            self._delegate: Optional[object] = local_task_queue
+            self.execution_lock = local_execution_lock
+            logger.debug("TaskQueue using desktop-native backend (gRPC mode)")
+        else:
+            self._delegate = None
 
     def _queue_key(self) -> str:
         return f"{self.redis_prefix}tasks"
@@ -106,6 +127,13 @@ class TaskQueue:
         Returns:
             QueuePosition with position and estimated wait.
         """
+        if self._delegate is not None:
+            return await self._delegate.enqueue(  # type: ignore[return-value]
+                task_id=task_id, user_id=user_id, query=query,
+                priority=priority, config=config,
+                idempotency_key=idempotency_key, scheduled_for=scheduled_for,
+            )
+
         config = config or {}
         now = datetime.now(timezone.utc)
 
@@ -126,6 +154,7 @@ class TaskQueue:
         )
 
         try:
+            from ..memory.short_term import redis_client
             # Add to sorted set (queue)
             await redis_client.client.zadd(
                 self._queue_key(),
@@ -204,7 +233,13 @@ class TaskQueue:
         Returns:
             QueuedTask if available, None if queue is empty.
         """
+        if self._delegate is not None:
+            return await self._delegate.dequeue(  # type: ignore[return-value]
+                worker_id=worker_id, max_priority=max_priority,
+            )
+
         try:
+            from ..memory.short_term import redis_client
             # Get the highest priority task (lowest score)
             # Score filter: max_priority.value * 1_000_000_000_000 gives max score for that priority
             max_score = None
@@ -295,7 +330,11 @@ class TaskQueue:
         Returns:
             True if cleaned up, False otherwise.
         """
+        if self._delegate is not None:
+            return await self._delegate.complete(task_id=task_id)  # type: ignore[return-value]
+
         try:
+            from ..memory.short_term import redis_client
             # Remove from queue (in case it was still there)
             await redis_client.client.zrem(self._queue_key(), task_id)
 
@@ -329,7 +368,11 @@ class TaskQueue:
         Returns:
             True if updated, False otherwise.
         """
+        if self._delegate is not None:
+            return await self._delegate.fail(task_id=task_id, error=error)  # type: ignore[return-value]
+
         try:
+            from ..memory.short_term import redis_client
             await redis_client.client.zrem(self._queue_key(), task_id)
             await redis_client.client.hset(
                 self._task_key(task_id),
@@ -367,7 +410,13 @@ class TaskQueue:
         Returns:
             True if requeued, False otherwise.
         """
+        if self._delegate is not None:
+            return await self._delegate.requeue(  # type: ignore[return-value]
+                task_id=task_id, priority=priority, delay_seconds=delay_seconds,
+            )
+
         try:
+            from ..memory.short_term import redis_client
             task_data = await redis_client.client.hgetall(self._task_key(task_id))
             if not task_data or "data" not in task_data:
                 return False
@@ -412,7 +461,11 @@ class TaskQueue:
         Returns:
             Position in queue, or -1 if not in queue.
         """
+        if self._delegate is not None:
+            return await self._delegate.get_position(task_id=task_id)  # type: ignore[return-value]
+
         try:
+            from ..memory.short_term import redis_client
             rank = await redis_client.client.zrank(self._queue_key(), task_id)
             return rank if rank is not None else -1
         except Exception as e:
@@ -425,7 +478,11 @@ class TaskQueue:
         Returns:
             Queue length.
         """
+        if self._delegate is not None:
+            return await self._delegate.length()  # type: ignore[return-value]
+
         try:
+            from ..memory.short_term import redis_client
             return await redis_client.client.zcard(self._queue_key())
         except Exception as e:
             logger.error(f"Failed to get queue length: {e}")
@@ -445,7 +502,13 @@ class TaskQueue:
         Returns:
             List of QueuedTask objects.
         """
+        if self._delegate is not None:
+            return await self._delegate.list_tasks(  # type: ignore[return-value]
+                status=status, limit=limit,
+            )
+
         try:
+            from ..memory.short_term import redis_client
             task_ids = await redis_client.client.zrange(
                 self._queue_key(),
                 start=0,
@@ -485,7 +548,11 @@ class TaskQueue:
         Returns:
             Number of tasks removed.
         """
+        if self._delegate is not None:
+            return await self._delegate.clear()  # type: ignore[return-value]
+
         try:
+            from ..memory.short_term import redis_client
             count = await self.length()
             task_ids = await redis_client.client.zrange(
                 self._queue_key(), start=0, end=-1
