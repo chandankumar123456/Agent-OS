@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 from celery import Celery
 from celery.signals import worker_process_init
@@ -8,38 +9,48 @@ from ..agents.types import TaskStatus
 from ..runtime.runtime import AgentRuntime
 from ..orchestrator.errors import ErrorType, ErrorCode, UnrecoverableError, AgentOSError
 
-redis_url = settings.REDIS_URL
-if not redis_url:
-    raise UnrecoverableError(
-        "REDIS_URL is required for Celery",
-        ErrorType.SYSTEM_ERROR,
-        ErrorCode.INTERNAL_ERROR
-    )
 
-celery_app = Celery(
-    "agent_os",
-    broker=redis_url,
-    backend=redis_url
-)
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
+
+
+redis_url = settings.REDIS_URL
+
+# In desktop mode, Celery is completely disabled — no broker, no backend, no workers.
+# Tasks run directly in the AgentKernel's asyncio event loop.
+celery_app = None
+if not _is_desktop_mode() and redis_url:
+    celery_app = Celery(
+        "agent_os",
+        broker=redis_url,
+        backend=redis_url
+    )
+    logger.info("Celery app initialized (HTTP mode)")
+elif _is_desktop_mode():
+    logger.info("Celery disabled in desktop-native mode")
 
 # Guard against non-positive soft time limit
 task_soft_time_limit = max(1, settings.TIMEOUT_DEFAULT - 30)
 
-celery_app.conf.update(
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    timezone="UTC",
-    enable_utc=True,
-    worker_prefetch_multiplier=1,
-    task_acks_late=True,
-    task_reject_on_worker_lost=True,
-    result_expires=3600,
-    task_soft_time_limit=task_soft_time_limit,
-    task_time_limit=settings.TIMEOUT_DEFAULT,
-)
-
-logger.info("Celery app initialized")
+if celery_app:
+    celery_app.conf.update(
+        task_serializer="json",
+        accept_content=["json"],
+        result_serializer="json",
+        timezone="UTC",
+        enable_utc=True,
+        worker_prefetch_multiplier=1,
+        task_acks_late=True,
+        task_reject_on_worker_lost=True,
+        result_expires=3600,
+        task_soft_time_limit=task_soft_time_limit,
+        task_time_limit=settings.TIMEOUT_DEFAULT,
+    )
+    logger.info("Celery configuration applied")
+else:
+    logger.info("Celery not configured (desktop mode or REDIS_URL missing)")
 
 _worker_event_loop = None
 
@@ -90,116 +101,151 @@ async def _ensure_runtime_initialized() -> AgentRuntime:
     return runtime
 
 
-@celery_app.task(
+def _celery_task(*args, **kwargs):
+    """Decorator that wraps celery_app.task when available, otherwise no-op."""
+    def decorator(func):
+        if celery_app:
+            return celery_app.task(*args, **kwargs)(func)
+        # In desktop mode, return the function as-is (no Celery wrapping)
+        return func
+    return decorator
+
+
+async def execute_task_async(task_id: str, query: str, config: dict, user_id: str = "system") -> dict:
+    """Execute a task asynchronously (used by AgentKernel in desktop mode).
+
+    This is the canonical task execution function that works both:
+    - In desktop mode: called directly by AgentKernel._execute_task()
+    - In HTTP mode: wrapped by Celery's execute_task()
+    """
+    from ..orchestrator.core import orchestrator
+    from ..orchestrator.event_bus import event_bus, Event
+    from uuid import UUID
+    from ..memory.long_term import task_repo
+
+    logger.info(f"Executing task {task_id}: {query}")
+
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.received", {"task_id": task_id, "query": query, "user_id": user_id}, source="kernel"),
+    )
+
+    try:
+        await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
+    except Exception as e:
+        logger.warning(f"Task status update failed: {e}")
+
+    await event_bus.publish(
+        f"task:{task_id}",
+        Event("task.status_changed", {"task_id": task_id, "status": "running"}, source="kernel"),
+    )
+
+    try:
+        # Enforce hard timeout on the entire task execution
+        task_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT)
+        result = await asyncio.wait_for(
+            orchestrator.execute_task(query, config, task_id=UUID(task_id), user_id=user_id),
+            timeout=task_timeout,
+        )
+        if result.status.value == "success":
+            try:
+                await task_repo.update(
+                    task_id, status=TaskStatus.COMPLETED.value, result=result.output_data
+                )
+            except Exception as e:
+                logger.warning(f"Task completion update failed: {e}")
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("task.status_changed", {"task_id": task_id, "status": "completed"}, source="kernel"),
+            )
+            return {
+                "task_id": task_id,
+                "status": result.status.value,
+                "result": result.output_data,
+            }
+        else:
+            try:
+                await task_repo.update(
+                    task_id, status=TaskStatus.FAILED.value, error=result.error_message
+                )
+            except Exception as e:
+                logger.warning(f"Task failure update failed: {e}")
+            await event_bus.publish(
+                f"task:{task_id}",
+                Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": result.error_message}, source="kernel"),
+            )
+            return {
+                "task_id": task_id,
+                "status": "failed",
+                "error": result.error_message,
+            }
+    except asyncio.TimeoutError:
+        error_msg = f"Task timed out after {task_timeout}s"
+        logger.error(error_msg, task_id=task_id)
+        try:
+            await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=error_msg)
+        except Exception:
+            pass
+        await event_bus.publish(
+            f"task:{task_id}",
+            Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": error_msg, "reason": "timeout"}, source="kernel"),
+        )
+        return {
+            "task_id": task_id,
+            "status": "failed",
+            "error": error_msg,
+        }
+    except Exception as exc:
+        logger.error(f"Task {task_id} failed: {exc}")
+        try:
+            await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
+        except Exception:
+            pass
+        await event_bus.publish(
+            f"task:{task_id}",
+            Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": str(exc)}, source="kernel"),
+        )
+        return {
+            "task_id": task_id,
+            "status": "failed",
+            "error": str(exc),
+        }
+
+
+@_celery_task(
     name="agent_os.execute_task",
     bind=True,
     max_retries=settings.MAX_RETRIES,
     default_retry_delay=60
 )
 def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "system"):
-    logger.info(f"Executing task {task_id}: {query}")
+    """Celery task wrapper for execute_task_async.
 
-    from ..orchestrator.core import orchestrator
-    from ..orchestrator.event_bus import event_bus, Event
-    from uuid import UUID
-    from ..memory.long_term import task_repo, db
+    In desktop mode, this function is NOT wrapped by Celery and can be
+    called directly or via execute_task_async().
+    """
+    # Desktop mode: delegate to async function directly
+    if _is_desktop_mode():
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # We're already in an async context (AgentKernel worker)
+            raise RuntimeError(
+                "execute_task() called synchronously in desktop mode. "
+                "Use execute_task_async() instead."
+            )
+        return loop.run_until_complete(execute_task_async(task_id, query, config, user_id))
+
+    # HTTP mode: Celery worker process
+    from ..memory.long_term import db
     from ..memory.short_term import redis_client
     from ..memory.redis_pubsub import redis_pubsub_client
 
-    async def _heartbeat(heartbeat_event_bus, interval: float = 5.0):
-        """Publish periodic heartbeat events so the frontend knows the task is alive."""
-        try:
-            while True:
-                await asyncio.sleep(interval)
-                await heartbeat_event_bus.publish(
-                    f"task:{task_id}",
-                    Event("task.heartbeat", {"task_id": task_id, "status": "running"}, source="celery"),
-                )
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.debug(f"Heartbeat task ended for {task_id}: {e}")
-
     async def run():
-        # Re-validate connections on the persistent worker loop; no-ops if healthy
+        # Re-validate connections on the persistent worker loop
         await db.connect()
         await redis_client.connect()
         await redis_pubsub_client.connect()
-
-        logger.info("Database and Redis connected for task execution")
-
-        runtime = await _ensure_runtime_initialized()
-        worker = runtime.get("core_planner")
-        if not worker:
-            raise UnrecoverableError(
-                "Agent core_planner not found in runtime. Ensure AgentRuntime.initialize() was called at startup.",
-                ErrorType.SYSTEM_ERROR,
-                ErrorCode.INTERNAL_ERROR
-            )
-        logger.info("Runtime verified: core_planner available")
-
-        await event_bus.publish(
-            f"task:{task_id}",
-            Event("task.received", {"task_id": task_id, "query": query, "user_id": user_id}, source="celery"),
-        )
-
-        await task_repo.update(task_id, status=TaskStatus.RUNNING.value)
-        await event_bus.publish(
-            f"task:{task_id}",
-            Event("task.status_changed", {"task_id": task_id, "status": "running"}, source="celery"),
-        )
-
-        # Start heartbeat to keep frontend alive during long operations
-        heartbeat_task = asyncio.create_task(_heartbeat(event_bus))
-
-        try:
-            # Enforce hard timeout on the entire task execution
-            task_timeout = config.get("timeout", settings.TIMEOUT_DEFAULT)
-            result = await asyncio.wait_for(
-                orchestrator.execute_task(query, config, task_id=UUID(task_id), user_id=user_id),
-                timeout=task_timeout,
-            )
-            if result.status.value == "success":
-                await task_repo.update(
-                    task_id, status=TaskStatus.COMPLETED.value, result=result.output_data
-                )
-                await event_bus.publish(
-                    f"task:{task_id}",
-                    Event("task.status_changed", {"task_id": task_id, "status": "completed"}, source="celery"),
-                )
-            else:
-                await task_repo.update(
-                    task_id, status=TaskStatus.FAILED.value, error=result.error_message
-                )
-                await event_bus.publish(
-                    f"task:{task_id}",
-                    Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": result.error_message}, source="celery"),
-                )
-            return result
-        except asyncio.TimeoutError:
-            error_msg = f"Task timed out after {task_timeout}s"
-            logger.error(error_msg, task_id=task_id)
-            await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=error_msg)
-            await event_bus.publish(
-                f"task:{task_id}",
-                Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": error_msg, "reason": "timeout"}, source="celery"),
-            )
-            # Re-raise as UnrecoverableError for consistent handling
-            raise UnrecoverableError(error_msg, ErrorType.SYSTEM_ERROR, ErrorCode.TASK_QUEUE_UNAVAILABLE)
-        except Exception as exc:
-            logger.log_error(exc, task_id=task_id)
-            await task_repo.update(task_id, status=TaskStatus.FAILED.value, error=str(exc))
-            await event_bus.publish(
-                f"task:{task_id}",
-                Event("task.status_changed", {"task_id": task_id, "status": "failed", "error": str(exc)}, source="celery"),
-            )
-            raise
-        finally:
-            heartbeat_task.cancel()
-            try:
-                await asyncio.wait_for(heartbeat_task, timeout=2.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
+        return await execute_task_async(task_id, query, config, user_id)
 
     loop = _worker_event_loop
     if loop is None or loop.is_closed():
@@ -210,12 +256,7 @@ def execute_task(self, task_id: str, query: str, config: dict, user_id: str = "s
             asyncio.set_event_loop(loop)
     try:
         result = loop.run_until_complete(run())
-
-        return {
-            "task_id": task_id,
-            "status": result.status.value,
-            "result": result.output_data
-        }
+        return result
     except Exception as e:
         logger.error(f"Task execution failed: {e}")
         retries = getattr(self.request, 'retries', 0)
