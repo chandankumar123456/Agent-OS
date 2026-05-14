@@ -19,6 +19,8 @@ from .context import TaskContext
 from .router import AgentRouter
 from .task_runner import TaskRunner
 from ..orchestrator.event_bus import event_bus, Event
+from ..recovery.checkpoint_service import CheckpointRecoveryService
+from .modes import ModeStrategyFactory
 
 
 class Orchestrator:
@@ -271,7 +273,6 @@ class Orchestrator:
             )
             # ── Checkpoint Recovery ──────────────────────────────────────
             try:
-                from ..recovery.checkpoint_service import CheckpointRecoveryService
                 recovery_service = CheckpointRecoveryService()
                 recovered_state = await recovery_service.resume_task(str(task_id), mode, {})
                 if recovered_state:
@@ -282,7 +283,6 @@ class Orchestrator:
 
         # falling back to legacy mode strategies
         try:
-            from .modes import ModeStrategyFactory
             strategy = ModeStrategyFactory.get(mode)
             return await strategy.execute(self.runtime, self, query, config, task_id, user_id)
         except ValueError as mode_err:
