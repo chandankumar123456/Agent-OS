@@ -16,7 +16,7 @@ use app::run;
 #[command(version = "0.1.0")]
 struct Args {
     /// Supervisor host
-    #[arg(short, long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "127.0.0.1")]
     _host: String,
 
     /// Supervisor port
@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     info!("AgentOS TUI starting...");
 
     // Run the app
-    if let Err(e) = run() {
+    if let Err(e) = run(args._host, args._port) {
         error!("Application error: {}", e);
         eprintln!("Error: {}", e);
         std::process::exit(1);
