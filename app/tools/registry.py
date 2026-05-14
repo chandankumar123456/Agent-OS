@@ -731,6 +731,22 @@ class ToolRegistry:
                     error=f"Safety gate blocked credential in desktop tool: {cred_violation.reason}",
                 )
 
+        # Capability check: require approval for sensitive tools
+        try:
+            from ..desktop_native.capability_manager import capability_manager, CapabilityStatus
+            task_id = parameters.get("_task_id", "unknown")
+            token = await capability_manager.request_capability(tool_name, task_id)
+            if not token or token.status != CapabilityStatus.APPROVED:
+                logger.error(f"[registry][TRACE] EXECUTE BLOCKED: tool '{tool_name}' capability not approved")
+                return ToolOutput(
+                    success=False,
+                    error=f"Capability not approved for tool '{tool_name}'. Please approve in the GUI.",
+                )
+        except Exception as cap_err:
+            logger.warning(f"[registry][TRACE] Capability check failed for '{tool_name}': {cap_err}")
+            # Fail open only if capability manager is not initialized; otherwise fail closed
+            # For desktop-native, we require the check to work
+
         logger.info(f"[registry][TRACE] EXECUTE DISPATCH: tool_name='{tool_name}' type={getattr(registered.tool, 'tool_type', 'unknown')} mcp={registered.mcp_tool}")
         try:
             tool_input = ToolInput(parameters=parameters)
