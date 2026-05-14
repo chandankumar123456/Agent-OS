@@ -4,6 +4,13 @@ import json
 from ..config.settings import settings
 from ..logs.logger import logger
 
+
+def _is_grpc_mode() -> bool:
+    """Check if running in gRPC mode without importing runtime.mode (avoids circular deps)."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
+
+
 REDIS_URL = settings.REDIS_URL
 
 
@@ -12,6 +19,11 @@ class RedisClient:
         self.client: Optional[redis.Redis] = None
 
     async def connect(self):
+        # In gRPC mode, skip Redis entirely — in-memory fallbacks are used
+        if _is_grpc_mode():
+            logger.debug("Skipping Redis connect in gRPC mode (using in-memory fallbacks)")
+            return
+
         if self.client is not None:
             try:
                 await self.client.ping()
@@ -36,6 +48,8 @@ class RedisClient:
         logger.info("Redis connected")
 
     async def disconnect(self):
+        if _is_grpc_mode():
+            return
         if self.client:
             await self.client.aclose()
             self.client = None
@@ -47,8 +61,10 @@ class RedisClient:
         value: Dict[str, Any],
         expire: Optional[int] = 3600
     ) -> bool:
-        if not self.client:
-            raise RuntimeError("Redis client is unavailable")
+        # gRPC mode: silently skip Redis operations (in-memory fallbacks are primary)
+        if _is_grpc_mode() or not self.client:
+            logger.debug(f"Redis set skipped (gRPC/unavailable): {key}")
+            return False
 
         try:
             serialized = json.dumps(value)
@@ -59,8 +75,10 @@ class RedisClient:
             raise
 
     async def get(self, key: str) -> Optional[Dict[str, Any]]:
-        if not self.client:
-            raise RuntimeError("Redis client is unavailable")
+        # gRPC mode: silently skip Redis operations (in-memory fallbacks are primary)
+        if _is_grpc_mode() or not self.client:
+            logger.debug(f"Redis get skipped (gRPC/unavailable): {key}")
+            return None
 
         try:
             value = await self.client.get(key)
@@ -72,8 +90,10 @@ class RedisClient:
             raise
 
     async def delete(self, key: str) -> bool:
-        if not self.client:
-            raise RuntimeError("Redis client is unavailable")
+        # gRPC mode: silently skip Redis operations (in-memory fallbacks are primary)
+        if _is_grpc_mode() or not self.client:
+            logger.debug(f"Redis delete skipped (gRPC/unavailable): {key}")
+            return False
 
         try:
             await self.client.delete(key)
@@ -83,8 +103,10 @@ class RedisClient:
             raise
 
     async def exists(self, key: str) -> bool:
-        if not self.client:
-            raise RuntimeError("Redis client is unavailable")
+        # gRPC mode: silently skip Redis operations (in-memory fallbacks are primary)
+        if _is_grpc_mode() or not self.client:
+            logger.debug(f"Redis exists skipped (gRPC/unavailable): {key}")
+            return False
 
         try:
             return await self.client.exists(key) > 0
@@ -99,6 +121,13 @@ redis_client = RedisClient()
 class ShortTermMemory:
     def __init__(self):
         self.prefix = "agentos:context:"
+        # In gRPC mode, delegate to in-memory store
+        if _is_grpc_mode():
+            from .in_memory import InMemoryShortTermMemory
+            self._backend = InMemoryShortTermMemory()
+            logger.info("ShortTermMemory using in-memory backend (gRPC mode)")
+        else:
+            self._backend = None
 
     async def save_context(
         self,
@@ -106,14 +135,20 @@ class ShortTermMemory:
         context: Dict[str, Any],
         expire: int = 3600
     ) -> bool:
+        if self._backend:
+            return await self._backend.save_context(task_id, context, expire)
         key = f"{self.prefix}{task_id}"
         return await redis_client.set(key, context, expire)
 
     async def get_context(self, task_id: str) -> Optional[Dict[str, Any]]:
+        if self._backend:
+            return await self._backend.get_context(task_id)
         key = f"{self.prefix}{task_id}"
         return await redis_client.get(key)
 
     async def delete_context(self, task_id: str) -> bool:
+        if self._backend:
+            return await self._backend.delete_context(task_id)
         key = f"{self.prefix}{task_id}"
         return await redis_client.delete(key)
 
