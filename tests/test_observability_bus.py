@@ -70,6 +70,7 @@ class TestEmit:
                     "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
+                    await bus.shutdown()
 
         mock_create.assert_awaited_once()
         call_kwargs = mock_create.call_args[1]
@@ -101,6 +102,7 @@ class TestEmit:
                     "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
+                    await bus.shutdown()
 
         mock_logger.warning.assert_called_once()
         assert "db persist failed" in mock_logger.warning.call_args[0][0].lower()
