@@ -2,6 +2,9 @@
 
 Prevents duplicate task execution across processes and instances
 using Redis-backed distributed locks with configurable TTL.
+
+In gRPC mode (AGENTOS_RUNTIME_MODE=grpc), transparently delegates to
+in-memory fallback to avoid Redis dependency.
 """
 import time
 import uuid
@@ -10,9 +13,15 @@ from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from ..memory.short_term import redis_client
+from ..config.settings import settings
 from ..logs.logger import logger
 from .errors import AgentOSError, ErrorCode, ErrorType
+
+
+def _is_grpc_mode() -> bool:
+    """Check if running in gRPC mode without importing runtime.mode (avoids circular deps)."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class LockRecord(BaseModel):
@@ -27,6 +36,8 @@ class LockRecord(BaseModel):
 
 class ExecutionLock:
     """Distributed execution lock backed by Redis.
+
+    In gRPC mode, delegates to InMemoryDistributedLock for local-native operation.
 
     Usage:
         lock = ExecutionLock()
@@ -50,6 +61,14 @@ class ExecutionLock:
         self.redis_prefix = redis_prefix
         self.default_ttl = default_ttl_seconds
 
+        # In gRPC/desktop mode, use local delegate
+        if _is_grpc_mode():
+            from ..desktop_native.locks import local_execution_lock
+            self._delegate: Optional[object] = local_execution_lock
+            logger.debug("ExecutionLock using desktop-native backend (gRPC mode)")
+        else:
+            self._delegate = None
+
     def _lock_key(self, task_id: str) -> str:
         return f"{self.redis_prefix}{task_id}"
 
@@ -69,6 +88,11 @@ class ExecutionLock:
         Returns:
             LockRecord if acquired, None if lock is already held.
         """
+        if self._delegate is not None:
+            return await self._delegate.acquire(  # type: ignore[return-value]
+                task_id=task_id, owner=owner, ttl_seconds=ttl_seconds
+            )
+
         ttl = ttl_seconds or self.default_ttl
         key = self._lock_key(task_id)
         lock_id = str(uuid.uuid4())
@@ -83,6 +107,7 @@ class ExecutionLock:
         )
 
         try:
+            from ..memory.short_term import redis_client
             # Use NX (only if not exists) and EX (expiry) for atomic lock acquisition
             acquired = await redis_client.client.set(
                 key,
@@ -119,8 +144,12 @@ class ExecutionLock:
         Returns:
             True if released, False if lock was not held or owned by different lock_id.
         """
+        if self._delegate is not None:
+            return await self._delegate.release(task_id=task_id, lock_id=lock_id)  # type: ignore[return-value]
+
         key = self._lock_key(task_id)
         try:
+            from ..memory.short_term import redis_client
             # Get current lock value
             value = await redis_client.client.get(key)
             if not value:
@@ -168,8 +197,14 @@ class ExecutionLock:
         Returns:
             True if extended, False if lock not found or ownership mismatch.
         """
+        if self._delegate is not None:
+            return await self._delegate.extend(  # type: ignore[return-value]
+                task_id=task_id, lock_id=lock_id, additional_seconds=additional_seconds
+            )
+
         key = self._lock_key(task_id)
         try:
+            from ..memory.short_term import redis_client
             value = await redis_client.client.get(key)
             if not value:
                 return False
@@ -212,8 +247,12 @@ class ExecutionLock:
         Returns:
             True if locked, False otherwise.
         """
+        if self._delegate is not None:
+            return await self._delegate.is_locked(task_id=task_id)  # type: ignore[return-value]
+
         key = self._lock_key(task_id)
         try:
+            from ..memory.short_term import redis_client
             exists = await redis_client.client.exists(key)
             return exists > 0
         except Exception as e:
@@ -229,8 +268,12 @@ class ExecutionLock:
         Returns:
             LockRecord if locked, None otherwise.
         """
+        if self._delegate is not None:
+            return await self._delegate.get_lock_info(task_id=task_id)  # type: ignore[return-value]
+
         key = self._lock_key(task_id)
         try:
+            from ..memory.short_term import redis_client
             value = await redis_client.client.get(key)
             if not value:
                 return None
@@ -252,8 +295,12 @@ class ExecutionLock:
         Returns:
             True if released or no lock existed.
         """
+        if self._delegate is not None:
+            return await self._delegate.force_release(task_id=task_id)  # type: ignore[return-value]
+
         key = self._lock_key(task_id)
         try:
+            from ..memory.short_term import redis_client
             await redis_client.client.delete(key)
             logger.warning(
                 f"Execution lock forcefully released",
