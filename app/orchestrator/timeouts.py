@@ -14,6 +14,13 @@ from pydantic import BaseModel, Field
 from ..memory.short_term import redis_client
 from ..logs.logger import logger
 from .errors import AgentOSError, ErrorCode, ErrorType
+from ..config.settings import settings
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class TimeoutConfig(BaseModel):
@@ -59,6 +66,14 @@ class TimeoutEnforcer:
         self.redis_prefix = redis_prefix
         self.default_config = default_config or TimeoutConfig()
 
+        # In desktop mode, delegate to local implementation
+        if _is_desktop_mode():
+            from ..desktop_native.timeouts import local_timeout_enforcer
+            self._delegate = local_timeout_enforcer
+            logger.debug("TimeoutEnforcer using desktop-native backend")
+        else:
+            self._delegate = None
+
     def _config_key(self, task_id: str) -> str:
         return f"{self.redis_prefix}config:{task_id}"
 
@@ -71,16 +86,10 @@ class TimeoutEnforcer:
         config: TimeoutConfig,
         ttl_seconds: int = 3600,
     ) -> bool:
-        """Set timeout configuration for a task.
+        """Set timeout configuration for a task."""
+        if self._delegate is not None:
+            return await self._delegate.set_config(task_id, config)
 
-        Args:
-            task_id: The task identifier.
-            config: Timeout configuration.
-            ttl_seconds: TTL for the config in Redis.
-
-        Returns:
-            True if set successfully.
-        """
         try:
             await redis_client.client.set(
                 self._config_key(task_id),
@@ -94,14 +103,10 @@ class TimeoutEnforcer:
             return False
 
     async def get_config(self, task_id: str) -> TimeoutConfig:
-        """Get timeout configuration for a task.
+        """Get timeout configuration for a task."""
+        if self._delegate is not None:
+            return await self._delegate.get_config(task_id)
 
-        Args:
-            task_id: The task identifier.
-
-        Returns:
-            TimeoutConfig (defaults if not found).
-        """
         try:
             value = await redis_client.client.get(self._config_key(task_id))
             if value:
@@ -116,16 +121,10 @@ class TimeoutEnforcer:
         scope: str,
         seconds: int,
     ) -> TimeoutRecord:
-        """Set a deadline for a specific scope.
+        """Set a deadline for a specific scope."""
+        if self._delegate is not None:
+            return await self._delegate.set_deadline(task_id, scope, seconds)
 
-        Args:
-            task_id: The task identifier.
-            scope: Scope name (agent, tool, workflow, step).
-            seconds: Timeout in seconds.
-
-        Returns:
-            TimeoutRecord.
-        """
         deadline = time.time() + seconds
         record = TimeoutRecord(
             task_id=task_id,
@@ -137,26 +136,21 @@ class TimeoutEnforcer:
             await redis_client.client.set(
                 self._deadline_key(task_id, scope),
                 record.model_dump_json(),
-                ex=seconds + 60,  # Slightly longer than deadline for cleanup
+                ex=seconds + 60,
             )
         except Exception as e:
             logger.warning(f"Failed to set deadline for {task_id}/{scope}: {e}")
         return record
 
     async def check_deadline(self, task_id: str, scope: str) -> bool:
-        """Check if a deadline has been exceeded.
+        """Check if a deadline has been exceeded."""
+        if self._delegate is not None:
+            return await self._delegate.check_deadline(task_id, scope)
 
-        Args:
-            task_id: The task identifier.
-            scope: Scope name.
-
-        Returns:
-            True if deadline exceeded or not found (fail-safe), False if within deadline.
-        """
         try:
             value = await redis_client.client.get(self._deadline_key(task_id, scope))
             if not value:
-                return False  # No deadline set
+                return False
             record = TimeoutRecord.model_validate_json(value)
             exceeded = time.time() > record.deadline_timestamp
             if exceeded and not record.triggered:
@@ -182,20 +176,12 @@ class TimeoutEnforcer:
         coro,
         override_seconds: Optional[int] = None,
     ) -> Any:
-        """Enforce tool execution timeout.
+        """Enforce tool execution timeout."""
+        if self._delegate is not None:
+            return await self._delegate.enforce_tool(
+                task_id, tool_name, coro, override_seconds
+            )
 
-        Args:
-            task_id: The task identifier.
-            tool_name: Name of the tool being executed.
-            coro: Coroutine to execute.
-            override_seconds: Optional override timeout.
-
-        Returns:
-            Result of the coroutine.
-
-        Raises:
-            AgentOSError: If timeout is exceeded.
-        """
         config = await self.get_config(task_id)
         timeout = override_seconds or config.tool_timeout_seconds
         scope = f"tool:{tool_name}"
@@ -226,20 +212,12 @@ class TimeoutEnforcer:
         coro,
         override_seconds: Optional[int] = None,
     ) -> Any:
-        """Enforce agent execution timeout.
+        """Enforce agent execution timeout."""
+        if self._delegate is not None:
+            return await self._delegate.enforce_agent(
+                task_id, agent_name, coro, override_seconds
+            )
 
-        Args:
-            task_id: The task identifier.
-            agent_name: Name of the agent being executed.
-            coro: Coroutine to execute.
-            override_seconds: Optional override timeout.
-
-        Returns:
-            Result of the coroutine.
-
-        Raises:
-            AgentOSError: If timeout is exceeded.
-        """
         config = await self.get_config(task_id)
         timeout = override_seconds or config.agent_timeout_seconds
         scope = f"agent:{agent_name}"
@@ -270,20 +248,12 @@ class TimeoutEnforcer:
         coro,
         override_seconds: Optional[int] = None,
     ) -> Any:
-        """Enforce step execution timeout.
+        """Enforce step execution timeout."""
+        if self._delegate is not None:
+            return await self._delegate.enforce_step(
+                task_id, step_number, coro, override_seconds
+            )
 
-        Args:
-            task_id: The task identifier.
-            step_number: Step number in the plan.
-            coro: Coroutine to execute.
-            override_seconds: Optional override timeout.
-
-        Returns:
-            Result of the coroutine.
-
-        Raises:
-            AgentOSError: If timeout is exceeded.
-        """
         config = await self.get_config(task_id)
         timeout = override_seconds or config.step_timeout_seconds
         scope = f"step:{step_number}"
@@ -313,19 +283,12 @@ class TimeoutEnforcer:
         coro,
         override_seconds: Optional[int] = None,
     ) -> Any:
-        """Enforce workflow execution timeout.
+        """Enforce workflow execution timeout."""
+        if self._delegate is not None:
+            return await self._delegate.enforce_workflow(
+                task_id, coro, override_seconds
+            )
 
-        Args:
-            task_id: The task identifier.
-            coro: Coroutine to execute.
-            override_seconds: Optional override timeout.
-
-        Returns:
-            Result of the coroutine.
-
-        Raises:
-            AgentOSError: If timeout is exceeded.
-        """
         config = await self.get_config(task_id)
         timeout = override_seconds or config.workflow_timeout_seconds
         scope = "workflow"
@@ -356,12 +319,12 @@ class TimeoutEnforcer:
         scope: str,
         seconds: int,
     ):
-        """Async context manager for timeout enforcement.
+        """Async context manager for timeout enforcement."""
+        if self._delegate is not None:
+            async with self._delegate.timeout_scope(task_id, scope, seconds):
+                yield
+            return
 
-        Usage:
-            async with enforcer.timeout_scope(task_id, "my_scope", 30):
-                await long_running_operation()
-        """
         await self.set_deadline(task_id, scope, seconds)
         try:
             yield
@@ -381,14 +344,10 @@ class TimeoutEnforcer:
             await redis_client.client.delete(self._deadline_key(task_id, scope))
 
     async def cleanup(self, task_id: str) -> bool:
-        """Clean up all timeout records for a task.
+        """Clean up all timeout records for a task."""
+        if self._delegate is not None:
+            return await self._delegate.cleanup(task_id)
 
-        Args:
-            task_id: The task identifier.
-
-        Returns:
-            True if cleaned up.
-        """
         try:
             pattern = f"{self.redis_prefix}deadline:{task_id}:*"
             keys = []
