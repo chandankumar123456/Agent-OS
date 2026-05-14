@@ -33,6 +33,12 @@ if os.environ.get("AGENTOS_RUNTIME_MODE") != "grpc":
 if os.environ.get("RUNTIME_MODE") != "grpc":
     os.environ["RUNTIME_MODE"] = "grpc"
 
+# Force SQLite as the database in desktop-native mode to eliminate PostgreSQL dependency
+if not os.environ.get("DATABASE_URL") or "postgresql" in os.environ.get("DATABASE_URL", "").lower():
+    db_path = os.path.expanduser("~/.agentos/agentos.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
+
 # Ensure project root is in path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
@@ -43,6 +49,7 @@ from app.bootstrap import bootstrap, BootstrapContext, setup_signal_handlers
 from app.config.settings import settings
 from app.logs.logger import logger
 from app.runtime.mode import RuntimeMode, get_runtime_mode, is_grpc_mode
+from app.runtime.grpc_server import GRPCServer
 
 
 class DesktopRuntime:
@@ -78,15 +85,55 @@ class DesktopRuntime:
         logger.info(f"Version: {settings.VERSION}")
         logger.info("=" * 60)
         
-        # Bootstrap all components
+        # Initialize desktop-native observability systems
+        logger.info("Initializing desktop-native observability...")
+        from app.desktop_native.local_logger import local_logger
+        local_logger.initialize()
+
+        from app.desktop_native.local_metrics import local_metrics
+        await local_metrics._ensure_table()
+
+        from app.desktop_native.local_tracer import local_tracer
+        await local_tracer._ensure_table()
+
+        from app.desktop_native.local_alerts import local_alerts
+        await local_alerts.initialize()
+
+        from app.desktop_native.memory_hierarchy import memory_hierarchy
+        await memory_hierarchy.initialize()
+
+        logger.info("Desktop-native observability initialized")
+
+        # Initialize Tauri GUI bridge
+        logger.info("Initializing Tauri GUI bridge...")
+        from app.desktop_native.tauri_bridge import tauri_bridge
+        await tauri_bridge._ensure_tables()
+        logger.info("Tauri GUI bridge initialized")
+
+        # Initialize SQLite performance tuning
+        logger.info("Applying SQLite performance tuning...")
+        from app.desktop_native.sqlite_tuning import sqlite_tuning
+        tuning = await sqlite_tuning.apply_optimizations()
+        logger.info(f"SQLite tuning: {tuning}")
+
+        # Initialize AgentKernel (replaces fragmented runtime)
+        from app.desktop_native.kernel import AgentKernel
+        self.kernel = AgentKernel()
+        await self.kernel.start()
+
+        # Start gRPC server with the unified AgentKernel
+        self.grpc_server = GRPCServer(kernel=self.kernel)
+        await self.grpc_server.start()
+
+        # Keep bootstrap for compatibility (initializes DB, runtime, etc.)
         self.ctx = await bootstrap()
-        
+
         # Setup signal handlers for graceful shutdown
         setup_signal_handlers(self.ctx)
-        
+
         self._running = True
         logger.info("Desktop runtime initialized successfully")
-        
+
         return self.ctx
     
     async def run(self):
@@ -120,6 +167,10 @@ class DesktopRuntime:
     
     async def cleanup(self):
         """Cleanup all resources."""
+        if hasattr(self, "grpc_server") and self.grpc_server:
+            await self.grpc_server.stop()
+        if hasattr(self, "kernel") and self.kernel:
+            await self.kernel.stop()
         if self.ctx:
             await self.ctx.shutdown()
             self.ctx = None
