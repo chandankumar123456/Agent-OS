@@ -1,8 +1,14 @@
+import os
 from typing import Dict, Any, List, Optional
 from uuid import uuid4
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from ..memory.long_term import trace_repo, span_repo
+
+
+def _is_desktop_mode() -> bool:
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
 
 
 @dataclass
@@ -24,6 +30,9 @@ class TraceManager:
     Spans are buffered in memory and can be persisted on demand.
     This allows the orchestrator to commit spans in the same
     database transaction as task state updates.
+
+    In desktop mode, also persists to LocalTracer (SQLite) for
+    local-first diagnostics.
     """
 
     def __init__(self):
@@ -31,6 +40,13 @@ class TraceManager:
         self.trace_index: Dict[str, List[str]] = {}
         self._pending_db_ops: List[dict] = []
         self._persisted_span_ids: set = set()
+        self._local_tracer = None
+        if _is_desktop_mode():
+            try:
+                from ..desktop_native.local_tracer import local_tracer
+                self._local_tracer = local_tracer
+            except Exception:
+                pass
 
     @staticmethod
     def _status_label(status: str) -> str:
@@ -60,6 +76,13 @@ class TraceManager:
         if span_id not in self.trace_index[trace_id]:
             self.trace_index[trace_id].append(span_id)
 
+        # Also start in local tracer
+        if self._local_tracer:
+            try:
+                self._local_tracer.start_span(trace_id, agent_name, operation, metadata)
+            except Exception:
+                pass
+
         return span_id
 
     def end_span(
@@ -73,6 +96,13 @@ class TraceManager:
             span.end_time = datetime.now(timezone.utc)
             span.status = status
             span.error = error
+
+        # Also end in local tracer
+        if self._local_tracer:
+            try:
+                self._local_tracer.end_span(span_id, status, error)
+            except Exception:
+                pass
 
     async def persist_span(self, span_id: str) -> None:
         """Persist a single span to the database."""
@@ -94,6 +124,13 @@ class TraceManager:
         self._persisted_span_ids.add(span_id)
         if span.end_time:
             await span_repo.update(span_id, status=self._status_label(span.status), error=span.error)
+
+        # Also persist to local tracer
+        if self._local_tracer:
+            try:
+                await self._local_tracer.persist_span(span_id)
+            except Exception:
+                pass
 
     async def persist_trace(self, trace_id: str) -> None:
         """Persist all spans for a trace to the database."""
