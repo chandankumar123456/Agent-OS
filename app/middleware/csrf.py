@@ -9,7 +9,9 @@ Skip CSRF for:
 - API key authenticated requests (machine-to-machine)
 - Health check endpoints
 - Auth endpoints (login/signup use their own validation)
+- Desktop-native mode (local IPC, no browser)
 """
+import os
 import secrets
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -21,6 +23,12 @@ CSRF_TOKEN_HEADER = "X-CSRF-Token"
 CSRF_COOKIE_NAME = "agentos_csrf"
 CSRF_SKIP_PATHS = {"/health", "/api/v1/auth/login", "/api/v1/auth/signup"}
 CSRF_TOKEN_EXPIRY = 3600  # 1 hour
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
 
 
 def generate_csrf_token() -> str:
@@ -44,9 +52,14 @@ class CSRFMiddleware(BaseHTTPMiddleware):
     - POST/PUT/PATCH/DELETE: validate header matches cookie AND Redis-stored value.
     - API key auth is skipped (machine-to-machine).
     - If Redis is unavailable, fail CLOSED — reject the request.
+    - Desktop mode: CSRF is skipped entirely (no browser, local IPC).
     """
 
     async def dispatch(self, request: Request, call_next):
+        # In desktop mode, skip CSRF entirely (local IPC, not browser)
+        if _is_desktop_mode():
+            return await call_next(request)
+
         path = request.url.path
         method = request.method.upper()
 
