@@ -4,6 +4,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from ..memory.short_term import redis_client
 from ..logs.logger import logger
+from ..config.settings import settings
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 @dataclass
@@ -48,9 +55,19 @@ class HorizontalScalingCoordinator:
         instance_id: str,
         capabilities: List[str]
     ) -> InstanceRegistration:
-        """Register this instance with the cluster."""
+        """Register this instance with the cluster.
+
+        In desktop mode, returns standalone mode immediately.
+        """
         self._local_instance_id = instance_id
         self._local_capabilities = capabilities
+
+        if _is_desktop_mode():
+            return InstanceRegistration(
+                accepted=True,
+                assigned_tasks=[],
+                cluster_state={"standalone": True, "desktop_mode": True}
+            )
 
         if self._redis and self._redis.client:
             try:
@@ -83,7 +100,13 @@ class HorizontalScalingCoordinator:
         )
 
     async def heartbeat(self):
-        """Send a heartbeat to keep the instance registered."""
+        """Send a heartbeat to keep the instance registered.
+
+        In desktop mode, this is a no-op.
+        """
+        if _is_desktop_mode():
+            return
+
         if not self._local_instance_id:
             return
         if self._redis and self._redis.client:
@@ -104,7 +127,18 @@ class HorizontalScalingCoordinator:
                 logger.warning(f"Heartbeat failed: {e}")
 
     async def get_cluster_state(self) -> Dict[str, Any]:
-        """Get the current state of all registered instances."""
+        """Get the current state of all registered instances.
+
+        In desktop mode, returns standalone state.
+        """
+        if _is_desktop_mode():
+            return {
+                "instances": {},
+                "instance_count": 0,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "desktop_mode": True,
+            }
+
         instances: Dict[str, Any] = {}
         if self._redis and self._redis.client:
             try:
@@ -123,7 +157,13 @@ class HorizontalScalingCoordinator:
         }
 
     async def assign_task(self, task_id: str, required_capabilities: List[str] = None) -> Optional[str]:
-        """Assign a task to the least-loaded capable instance. Returns instance_id or None."""
+        """Assign a task to the least-loaded capable instance.
+
+        In desktop mode, returns the local instance_id.
+        """
+        if _is_desktop_mode():
+            return self._local_instance_id
+
         if not self._redis or not self._redis.client:
             return self._local_instance_id
 
@@ -147,7 +187,13 @@ class HorizontalScalingCoordinator:
             return None
 
     async def acquire_task_lock(self, task_id: str, instance_id: str) -> bool:
-        """Acquire a distributed lock for a task."""
+        """Acquire a distributed lock for a task.
+
+        In desktop mode, always returns True.
+        """
+        if _is_desktop_mode():
+            return True
+
         if not self._redis or not self._redis.client:
             return True
 
@@ -160,7 +206,13 @@ class HorizontalScalingCoordinator:
             return True
 
     async def release_task_lock(self, task_id: str):
-        """Release a distributed task lock."""
+        """Release a distributed task lock.
+
+        In desktop mode, this is a no-op.
+        """
+        if _is_desktop_mode():
+            return
+
         if not self._redis or not self._redis.client:
             return
 
@@ -170,7 +222,13 @@ class HorizontalScalingCoordinator:
             logger.warning(f"Task lock release failed: {e}")
 
     async def deregister_instance(self, instance_id: str):
-        """Remove an instance from the cluster."""
+        """Remove an instance from the cluster.
+
+        In desktop mode, this is a no-op.
+        """
+        if _is_desktop_mode():
+            return
+
         if self._redis and self._redis.client:
             try:
                 await self._redis.client.delete(self._instance_key(instance_id))
