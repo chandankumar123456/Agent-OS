@@ -4,6 +4,7 @@
 )]
 
 use tauri::{generate_context, generate_handler, Manager, RunEvent};
+use crate::commands::daemon::cleanup_daemon;
 
 mod commands;
 mod config;
@@ -48,6 +49,8 @@ fn main() {
             commands::daemon::get_daemon_status,
             commands::daemon::start_daemon,
             commands::daemon::stop_daemon,
+            commands::daemon::restart_daemon,
+            commands::daemon::check_daemon_installation,
             commands::config::get_config,
             commands::config::set_config,
             commands::notifications::show_notification,
@@ -66,13 +69,21 @@ fn main() {
         })
         .build(generate_context!())
         .expect("error while running tauri application")
-        .run(|_app_handle, event| match event {
+        .run(|app_handle, event| match event {
             RunEvent::ExitRequested { api, .. } => {
                 api.prevent_exit();
             }
             RunEvent::Exit => {
                 // Cleanup global shortcuts on exit
-                let _ = shortcuts::unregister_global_shortcuts(_app_handle);
+                let _ = shortcuts::unregister_global_shortcuts(app_handle);
+                
+                // Cleanup daemon process on exit
+                let rt = tokio::runtime::Handle::current();
+                rt.block_on(async {
+                    if let Err(e) = cleanup_daemon().await {
+                        log::error!("Failed to cleanup daemon on exit: {}", e);
+                    }
+                });
             }
             _ => {}
         });
