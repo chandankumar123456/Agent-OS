@@ -23,6 +23,10 @@ keyring = "3"
 dirs = "5.0"
 toml = "0.8"
 sysinfo = "0.30"
+which = "6.0"
+chrono = "0.4"
+log = "0.4"
+libc = "0.2"
 
 [features]
 default = ["custom-protocol"]
