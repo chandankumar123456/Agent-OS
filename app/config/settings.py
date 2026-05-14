@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     # Runtime communication mode: "http" (FastAPI) or "grpc" (gRPC to supervisor)
     RUNTIME_MODE: str = "http"
+    AGENTOS_RUNTIME_MODE: str = "http"  # Alias for RUNTIME_MODE
     GRPC_HOST: str = "localhost"
     GRPC_PORT: int = 50051
     GRPC_CONNECTION_TIMEOUT: float = 5.0
