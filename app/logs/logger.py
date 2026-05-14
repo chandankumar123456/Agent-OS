@@ -6,6 +6,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
+def _is_desktop_mode() -> bool:
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
+
+
 class AgentOSLogEncoder(json.JSONEncoder):
     """JSON encoder that safely handles non-serializable objects."""
     def default(self, obj):
@@ -23,12 +28,27 @@ class AgentOSLogger:
 
     Set AGENTOS_LOG_JSON=1 to enable structured JSON logging.
     Set AGENTOS_LOG_STDERR=1 to write logs to stderr (MCP stdio safety).
+
+    In desktop mode (RUNTIME_MODE=grpc), automatically uses LocalLogger
+    with rotating file output in addition to console output.
     """
 
     def __init__(self, name: str = "agent-os"):
         self.logger = logging.getLogger(name)
         self.logger.setLevel(logging.INFO)
         self._json_mode = os.environ.get("AGENTOS_LOG_JSON", "").lower() in ("1", "true", "yes")
+        self._desktop_mode = _is_desktop_mode()
+        self._local_logger = None
+
+        if self._desktop_mode:
+            # In desktop mode, try to use LocalLogger for file output
+            try:
+                from ..desktop_native.local_logger import LocalLogger
+                self._local_logger = LocalLogger(name=name)
+                self._local_logger.initialize()
+            except Exception as e:
+                # Fallback to console-only if LocalLogger fails
+                print(f"LocalLogger initialization failed: {e}", file=sys.stderr)
 
         if not self.logger.handlers:
             stream = sys.stderr if os.environ.get("AGENTOS_LOG_STDERR") else sys.stdout
@@ -69,20 +89,35 @@ class AgentOSLogger:
             extra = " ".join(parts)
             return f"{message} {extra}".strip()
 
+    def _maybe_local_log(self, level: str, message: str, task_id: Optional[str] = None, **kwargs: Any):
+        """Also log to LocalLogger if in desktop mode."""
+        if self._local_logger:
+            method = getattr(self._local_logger, level.lower(), None)
+            if method:
+                try:
+                    method(message, task_id=task_id, extra=kwargs)
+                except Exception:
+                    pass
+
     def info(self, message: str, task_id: Optional[str] = None, **kwargs: Any) -> None:
         self.logger.info(self._format("INFO", message, task_id, **kwargs))
+        self._maybe_local_log("info", message, task_id, **kwargs)
 
     def error(self, message: str, task_id: Optional[str] = None, **kwargs: Any) -> None:
         self.logger.error(self._format("ERROR", message, task_id, **kwargs))
+        self._maybe_local_log("error", message, task_id, **kwargs)
 
     def debug(self, message: str, task_id: Optional[str] = None, **kwargs: Any) -> None:
         self.logger.debug(self._format("DEBUG", message, task_id, **kwargs))
+        self._maybe_local_log("debug", message, task_id, **kwargs)
 
     def warning(self, message: str, task_id: Optional[str] = None, **kwargs: Any) -> None:
         self.logger.warning(self._format("WARNING", message, task_id, **kwargs))
+        self._maybe_local_log("warning", message, task_id, **kwargs)
 
     def critical(self, message: str, task_id: Optional[str] = None, **kwargs: Any) -> None:
         self.logger.critical(self._format("CRITICAL", message, task_id, **kwargs))
+        self._maybe_local_log("critical", message, task_id, **kwargs)
 
     def log_task(self, task_id: str, status: str, **kwargs: Any) -> None:
         self.info(f"task_lifecycle", task_id=task_id, status=status, **kwargs)
