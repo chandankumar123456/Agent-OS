@@ -46,14 +46,20 @@ class Database:
             await self.engine.dispose()
         if not DATABASE_URL:
             raise RuntimeError("DATABASE_URL is not configured")
+        engine_kwargs = {
+            "echo": False,
+            "pool_pre_ping": True,
+            "pool_recycle": 3600,
+        }
+        if not DATABASE_URL.startswith("sqlite"):
+            engine_kwargs.update({
+                "pool_size": 20,
+                "max_overflow": 40,
+                "pool_timeout": 30,
+            })
         self.engine = create_async_engine(
             DATABASE_URL,
-            echo=False,
-            pool_size=20,
-            max_overflow=40,
-            pool_pre_ping=True,
-            pool_recycle=3600,
-            pool_timeout=30,
+            **engine_kwargs,
         )
         self.session_factory = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
         self._loop = current_loop
