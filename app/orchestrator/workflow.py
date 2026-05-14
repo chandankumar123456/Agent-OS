@@ -103,10 +103,8 @@ class WorkflowEngine:
         for node in nodes:
             missing = [dep for dep in node.depends_on if dep not in node_ids]
             if missing:
-                raise UnrecoverableError(
-                    f"invalid dependency: {node.id} depends on missing nodes {missing}",
-                    error_type=ErrorType.VALIDATION_ERROR,
-                    code=ErrorCode.INVALID_DEPENDENCY
+                raise ValueError(
+                    f"invalid dependency: {node.id} depends on missing nodes {missing}"
                 )
 
         visiting: set[str] = set()
@@ -114,10 +112,8 @@ class WorkflowEngine:
 
         def visit(node_id: str) -> None:
             if node_id in visiting:
-                raise UnrecoverableError(
-                    "workflow cycle detected",
-                    error_type=ErrorType.VALIDATION_ERROR,
-                    code=ErrorCode.INVALID_DEPENDENCY
+                raise ValueError(
+                    "workflow cycle detected"
                 )
             if node_id in visited:
                 return
