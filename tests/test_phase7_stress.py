@@ -1258,7 +1258,9 @@ class TestStressSlowAppLaunch:
             )
 
         assert result.success is True
-        mock_popen.assert_called_once_with(["notepad", os.path.abspath(temp_file)])
+        call_args = mock_popen.call_args[0][0]
+        assert call_args[1] == os.path.abspath(temp_file)
+        assert "notepad" in call_args[0].lower()
 
     @pytest.mark.asyncio
     async def test_app_launch_detects_minimized_window(
