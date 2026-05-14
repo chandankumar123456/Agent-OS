@@ -31,9 +31,21 @@ export function Settings({ version, daemonConnected }: SettingsPageProps) {
   const [apiKeyLoading, setApiKeyLoading] = useState(false)
 
   useEffect(() => {
-    // Load existing API key on mount
+    // Load existing API key and config on mount
     loadApiKey()
+    loadConfig()
   }, [])
+
+  const loadConfig = async () => {
+    try {
+      const result = await invoke<{ success: boolean; config?: typeof config; error?: string }>('get_config')
+      if (result.success && result.config) {
+        setConfig(result.config)
+      }
+    } catch (error) {
+      console.error('Failed to load config:', error)
+    }
+  }
 
   const loadApiKey = async () => {
     try {
@@ -83,8 +95,19 @@ export function Settings({ version, daemonConnected }: SettingsPageProps) {
   }
 
   const handleSave = async () => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+    try {
+      const result = await invoke<{ success: boolean; error?: string }>('set_config', { config })
+      if (result.success) {
+        setSaved(true)
+        setTimeout(() => setSaved(false), 2000)
+      } else {
+        console.error('Failed to save config:', result.error)
+        alert('Failed to save settings. Please try again.')
+      }
+    } catch (error) {
+      console.error('Failed to save config:', error)
+      alert('Failed to save settings. Please try again.')
+    }
   }
 
   return (
