@@ -13,6 +13,13 @@ from ..memory.short_term import redis_client
 from ..memory.long_term import db
 from ..memory.models import TokenUsageModel
 from ..logs.logger import logger
+from ..config.settings import settings
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class CostRecord(BaseModel):
@@ -64,6 +71,14 @@ class CostTracker:
     ):
         self.redis_prefix = redis_prefix
 
+        # In desktop mode, delegate to local SQLite-backed implementation
+        if _is_desktop_mode():
+            from ..desktop_native.cost_tracker import local_cost_tracker
+            self._delegate = local_cost_tracker
+            logger.debug("CostTracker using desktop-native backend")
+        else:
+            self._delegate = None
+
     def _cost_key(self, scope: str, scope_id: str, period: str = "daily") -> str:
         return f"{self.redis_prefix}{scope}:{scope_id}:{period}"
 
@@ -97,19 +112,12 @@ class CostTracker:
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
     ) -> CostRecord:
-        """Record LLM API cost.
+        """Record LLM API cost."""
+        if self._delegate is not None:
+            return await self._delegate.record_llm_cost(
+                task_id, model, input_tokens, output_tokens, agent_id, user_id
+            )
 
-        Args:
-            task_id: Task identifier.
-            model: LLM model name.
-            input_tokens: Input token count.
-            output_tokens: Output token count.
-            agent_id: Optional agent identifier.
-            user_id: Optional user identifier.
-
-        Returns:
-            CostRecord.
-        """
         cost_usd = self._estimate_llm_cost(model, input_tokens, output_tokens)
         total_tokens = input_tokens + output_tokens
 
@@ -185,17 +193,12 @@ class CostTracker:
         cost_usd: float,
         user_id: Optional[str] = None,
     ) -> CostRecord:
-        """Record tool invocation cost.
+        """Record tool invocation cost."""
+        if self._delegate is not None:
+            return await self._delegate.record_tool_cost(
+                task_id, tool_name, cost_usd, user_id
+            )
 
-        Args:
-            task_id: Task identifier.
-            tool_name: Tool name.
-            cost_usd: Cost in USD.
-            user_id: Optional user identifier.
-
-        Returns:
-            CostRecord.
-        """
         record = CostRecord(
             task_id=task_id,
             scope="tool",
@@ -232,14 +235,7 @@ class CostTracker:
         return record
 
     async def _update_redis_aggregate(self, record: CostRecord) -> bool:
-        """Update Redis aggregate counters for a cost record.
-
-        Args:
-            record: CostRecord to aggregate.
-
-        Returns:
-            True if updated.
-        """
+        """Update Redis aggregate counters for a cost record."""
         try:
             key = self._cost_key(record.scope, record.scope_id)
             pipe = redis_client.client.pipeline()
@@ -261,16 +257,10 @@ class CostTracker:
         scope_id: str,
         period: str = "24h",
     ) -> CostBreakdown:
-        """Get cost breakdown for a scope.
+        """Get cost breakdown for a scope."""
+        if self._delegate is not None:
+            return await self._delegate.get_cost_breakdown(scope, scope_id, period)
 
-        Args:
-            scope: Scope type (task, agent, tool, user).
-            scope_id: Scope identifier.
-            period: Time period (24h, 7d, 30d).
-
-        Returns:
-            CostBreakdown.
-        """
         key = self._cost_key(scope, scope_id)
         try:
             data = await redis_client.client.hgetall(key)
@@ -318,15 +308,10 @@ class CostTracker:
         scope: str,
         scope_ids: List[str],
     ) -> List[CostBreakdown]:
-        """Get cost breakdown for multiple scopes.
+        """Get cost breakdown for multiple scopes."""
+        if self._delegate is not None:
+            return await self._delegate.get_multi_breakdown(scope, scope_ids)
 
-        Args:
-            scope: Scope type.
-            scope_ids: List of scope identifiers.
-
-        Returns:
-            List of CostBreakdown.
-        """
         breakdowns = []
         for sid in scope_ids:
             bd = await self.get_cost_breakdown(scope, sid)
@@ -338,15 +323,10 @@ class CostTracker:
         scope: str,
         limit: int = 10,
     ) -> List[CostBreakdown]:
-        """Get top costs for a scope type.
+        """Get top costs for a scope type."""
+        if self._delegate is not None:
+            return await self._delegate.get_top_costs(scope, limit)
 
-        Args:
-            scope: Scope type.
-            limit: Maximum results.
-
-        Returns:
-            List of CostBreakdown sorted by cost descending.
-        """
         try:
             pattern = f"{self.redis_prefix}{scope}:*"
             keys = []
@@ -379,15 +359,10 @@ class CostTracker:
             return []
 
     async def cleanup(self, scope: str, scope_id: str) -> bool:
-        """Clean up cost records for a scope.
+        """Clean up cost records for a scope."""
+        if self._delegate is not None:
+            return await self._delegate.cleanup(scope, scope_id)
 
-        Args:
-            scope: Scope type.
-            scope_id: Scope identifier.
-
-        Returns:
-            True if cleaned up.
-        """
         try:
             key = self._cost_key(scope, scope_id)
             await redis_client.client.delete(key)
