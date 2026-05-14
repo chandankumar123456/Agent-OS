@@ -186,7 +186,11 @@ class TestVerifierRespectsExecutionState:
             "execution_state": None,
         }
 
-        with patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+        with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm, \
+             patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+            mock_llm = AsyncMock()
+            mock_llm.complete_json = AsyncMock(return_value={"verified": True, "reason": "Tool succeeded"})
+            mock_get_llm.return_value = mock_llm
             mock_verify.return_value = []
             result = await verifier_node(state)
 
@@ -207,7 +211,11 @@ class TestVerifierRespectsExecutionState:
             "execution_state": None,
         }
 
-        with patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+        with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm, \
+             patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+            mock_llm = AsyncMock()
+            mock_llm.complete_json = AsyncMock(return_value={"verified": True, "reason": "Plan verified"})
+            mock_get_llm.return_value = mock_llm
             from app.capabilities.models import VerificationReport, VerificationResult
             mock_verify.return_value = [
                 VerificationReport(
