@@ -1,5 +1,6 @@
 use ratatui::style::{Color, Modifier, Style};
 
+#[allow(dead_code)]
 pub struct Theme {
     pub background: Color,
     pub foreground: Color,
@@ -17,6 +18,7 @@ pub struct Theme {
     pub header_fg: Color,
 }
 
+#[allow(dead_code)]
 impl Theme {
     pub fn default() -> Self {
         Self {
@@ -102,6 +104,7 @@ impl Theme {
     }
 }
 
+#[allow(dead_code)]
 pub struct Styles {
     pub theme: Theme,
 }
