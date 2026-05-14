@@ -14,6 +14,13 @@ from pydantic import BaseModel, Field
 from ..memory.short_term import redis_client
 from ..logs.logger import logger
 from ..orchestrator.queue import TaskQueue
+from ..config.settings import settings
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class WorkerStatus(str, Enum):
@@ -81,18 +88,17 @@ class WorkerPoolManager:
     ) -> WorkerInfo:
         """Register a new worker.
 
-        Args:
-            worker_id: Unique worker identifier.
-            capabilities: List of capability strings.
-
-        Returns:
-            WorkerInfo.
+        In desktop mode, this is a no-op as there are no distributed workers.
         """
         info = WorkerInfo(
             worker_id=worker_id,
             status=WorkerStatus.IDLE,
             capabilities=capabilities or [],
         )
+
+        if _is_desktop_mode():
+            logger.debug(f"Worker registration skipped in desktop mode")
+            return info
 
         try:
             await redis_client.client.set(
@@ -113,13 +119,11 @@ class WorkerPoolManager:
     async def heartbeat(self, worker_id: str, status: Optional[WorkerStatus] = None) -> bool:
         """Send a heartbeat from a worker.
 
-        Args:
-            worker_id: Worker identifier.
-            status: Optional status update.
-
-        Returns:
-            True if heartbeat accepted.
+        In desktop mode, this is a no-op.
         """
+        if _is_desktop_mode():
+            return True
+
         try:
             value = await redis_client.client.get(self._worker_key(worker_id))
             if not value:
@@ -232,9 +236,11 @@ class WorkerPoolManager:
     async def list_workers(self) -> List[WorkerInfo]:
         """List all registered workers.
 
-        Returns:
-            List of WorkerInfo.
+        In desktop mode, returns an empty list.
         """
+        if _is_desktop_mode():
+            return []
+
         workers = []
         try:
             worker_ids = await redis_client.client.smembers(self._workers_index_key())
@@ -249,9 +255,11 @@ class WorkerPoolManager:
     async def health_check(self) -> List[WorkerInfo]:
         """Run health check on all workers and mark unhealthy ones.
 
-        Returns:
-            List of unhealthy workers.
+        In desktop mode, returns an empty list.
         """
+        if _is_desktop_mode():
+            return []
+
         unhealthy = []
         try:
             workers = await self.list_workers()
@@ -306,13 +314,18 @@ class WorkerPoolManager:
     ) -> PoolStatus:
         """Manage worker pool health and scaling.
 
-        Args:
-            target_count: Desired number of active workers.
-            health_check_interval: Seconds between health checks.
-
-        Returns:
-            PoolStatus.
+        In desktop mode, returns a minimal status with no workers.
         """
+        if _is_desktop_mode():
+            return PoolStatus(
+                active_workers=0,
+                healthy_workers=0,
+                pending_tasks=0,
+                load_factor=0.0,
+                target_count=target_count,
+                workers=[],
+            )
+
         # Run health check
         await self.health_check()
 
