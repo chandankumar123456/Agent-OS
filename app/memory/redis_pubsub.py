@@ -19,6 +19,12 @@ from ..logs.logger import logger
 REDIS_URL = settings.REDIS_URL
 
 
+def _is_grpc_mode() -> bool:
+    """Check if running in gRPC mode without importing runtime.mode (avoids circular deps)."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
+
+
 class RedisPubSubClient:
     """Redis client exclusively for pub/sub. Uses its own connection pool."""
 
@@ -28,6 +34,11 @@ class RedisPubSubClient:
 
     async def connect(self) -> None:
         async with self._lock:
+            # gRPC mode: skip Redis entirely — in-memory fallbacks are used
+            if _is_grpc_mode():
+                logger.debug("Skipping PubSub Redis connect in gRPC mode")
+                return
+
             if self._client is not None:
                 try:
                     await self._client.ping()
@@ -72,6 +83,10 @@ class RedisPubSubClient:
 
     async def publish(self, channel: str, message: str) -> None:
         """Publish a message to a Redis channel. Auto-connects if necessary."""
+        # gRPC mode: silently skip (local event bus handles events)
+        if _is_grpc_mode():
+            logger.debug(f"PubSub publish skipped in gRPC mode: {channel}")
+            return
         if not self._client:
             await self.connect()
         client = self.get_client()
@@ -79,6 +94,10 @@ class RedisPubSubClient:
 
     async def subscribe(self, channel: str) -> AsyncIterator[str]:
         """Yield string messages from a Redis channel with graceful cleanup. Auto-connects if necessary."""
+        # gRPC mode: yield nothing (local event bus handles events)
+        if _is_grpc_mode():
+            logger.debug(f"PubSub subscribe skipped in gRPC mode: {channel}")
+            return
         if not self._client:
             await self.connect()
         client = self.get_client()
