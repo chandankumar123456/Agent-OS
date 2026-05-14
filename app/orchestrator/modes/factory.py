@@ -18,12 +18,9 @@ class ModeStrategyFactory:
 
     @classmethod
     def get(cls, mode: str) -> ModeStrategy:
-        from ..errors import ErrorType, ErrorCode, UnrecoverableError
         if mode not in cls._strategies:
-            raise UnrecoverableError(
-                f"Unknown mode: {mode}. Valid modes: {list(cls._strategies.keys())}",
-                ErrorType.VALIDATION_ERROR,
-                ErrorCode.VALIDATION_ERROR
+            raise ValueError(
+                f"Unknown mode: {mode}. Valid modes: {list(cls._strategies.keys())}"
             )
         return cls._strategies[mode]
 
