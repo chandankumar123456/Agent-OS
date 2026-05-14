@@ -255,3 +255,7 @@ workspace/
 
 # Duplicate directory (already in desktop/desktop-automation/)
 /desktop-automation/
+
+# SQLite temporary files
+*.db-shm
+*.db-wal
