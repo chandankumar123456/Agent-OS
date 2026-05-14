@@ -1,8 +1,8 @@
-use std::collections::HashMap;
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Config {
     pub supervisor_host: String,
     pub supervisor_port: u16,
@@ -23,6 +23,7 @@ impl Default for Config {
     }
 }
 
+#[allow(dead_code)]
 impl Config {
     pub fn supervisor_url(&self) -> String {
         format!("http://{}:{}", self.supervisor_host, self.supervisor_port)
@@ -33,6 +34,7 @@ impl Config {
     }
 }
 
+#[allow(dead_code)]
 pub fn default_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|d| d.join("agentos/tui.toml"))
 }
