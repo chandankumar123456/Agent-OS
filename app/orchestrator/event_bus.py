@@ -3,8 +3,14 @@ import json
 from typing import AsyncIterator, Dict, Any, Optional
 from datetime import datetime, timezone
 
-from ..memory.redis_pubsub import redis_pubsub_client
 from ..logs.logger import logger
+from ..config.settings import settings
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class Event:
@@ -47,6 +53,7 @@ class RedisEventBus:
 
     async def publish(self, channel: str, event: Event) -> None:
         try:
+            from ..memory.redis_pubsub import redis_pubsub_client
             await redis_pubsub_client.publish(f"agentos:{channel}", event.json())
         except Exception as e:
             logger.error(f"Event publish failed: {e}")
@@ -56,6 +63,7 @@ class RedisEventBus:
         so that callers can decide whether to reconnect.
         """
         try:
+            from ..memory.redis_pubsub import redis_pubsub_client
             async for raw in redis_pubsub_client.subscribe(f"agentos:{channel}"):
                 try:
                     yield Event.parse(raw)
@@ -68,4 +76,12 @@ class RedisEventBus:
             raise
 
 
-event_bus = RedisEventBus()
+def get_event_bus():
+    """Get the appropriate event bus for the current runtime mode."""
+    if _is_desktop_mode():
+        from ..desktop_native.event_bus import local_event_bus
+        return local_event_bus
+    return RedisEventBus()
+
+
+event_bus = get_event_bus()
