@@ -1091,10 +1091,22 @@ class DesktopSession:
             window_list_fn=lambda: self._get_window_list_for_stabilizer(),
         )
 
+        dismissed = result.get("dismissed", False)
+        method = result.get("method", "none")
+
+        # Verify popup is actually gone
+        if dismissed and self._stabilizer:
+            remaining = await self._stabilizer.detect_popup_window(
+                lambda: self._get_window_list_for_stabilizer()
+            )
+            if remaining:
+                dismissed = False
+                method = "failed_verify"
+
         return ToolOutput(
-            success=result.get("dismissed", False),
-            result={"dismissed": result.get("dismissed", False), "method": result.get("method", "none")},
-            visibility={"type": "desktop_dismiss_popup", "dismissed": result.get("dismissed", False)},
+            success=dismissed,
+            result={"dismissed": dismissed, "method": method},
+            visibility={"type": "desktop_dismiss_popup", "dismissed": dismissed},
         )
 
     async def _get_window_list_for_stabilizer(self) -> List[Dict[str, Any]]:
