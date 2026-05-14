@@ -1,24 +1,48 @@
+import os
 from typing import Dict, Any
 from collections import defaultdict
+
+
+def _is_desktop_mode() -> bool:
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
 
 
 class MetricsCollector:
     """Prometheus-compatible metrics collector.
 
     Provides counters and histograms for key system metrics.
+    In desktop mode, also delegates to LocalMetrics for SQLite persistence.
     """
 
     def __init__(self):
         self._counters: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
         self._histograms: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
+        self._local_metrics = None
+        if _is_desktop_mode():
+            try:
+                from ..desktop_native.local_metrics import local_metrics
+                self._local_metrics = local_metrics
+            except Exception:
+                pass
 
     def inc_counter(self, name: str, labels: Dict[str, str] = None, value: int = 1):
         label_key = ",".join(f'{k}="{v}"' for k, v in sorted((labels or {}).items()))
         self._counters[name][label_key] += value
+        if self._local_metrics:
+            try:
+                self._local_metrics.inc_counter(name, labels, value)
+            except Exception:
+                pass
 
     def observe_histogram(self, name: str, value: float, labels: Dict[str, str] = None):
         label_key = ",".join(f'{k}="{v}"' for k, v in sorted((labels or {}).items()))
         self._histograms[name][label_key].append(value)
+        if self._local_metrics:
+            try:
+                self._local_metrics.observe_histogram(name, value, labels)
+            except Exception:
+                pass
 
     def get_prometheus_format(self) -> str:
         lines = []
