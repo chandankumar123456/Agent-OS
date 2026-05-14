@@ -14,6 +14,13 @@ from ..memory.short_term import redis_client
 from ..memory.long_term import db
 from ..logs.logger import logger
 from .errors import AgentOSError, ErrorCode, ErrorType
+from ..config.settings import settings
+
+
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = settings.RUNTIME_MODE or "http"
+    return mode.lower() == "grpc"
 
 
 class TaskState(str, Enum):
@@ -83,6 +90,14 @@ class TaskStateMachine:
         self._local_state: Dict[str, TaskState] = {}
         self._local_history: Dict[str, List[Dict[str, Any]]] = {}
 
+        # In desktop mode, delegate to local SQLite-backed implementation
+        if _is_desktop_mode():
+            from ..desktop_native.state_machine import local_task_state_machine
+            self._delegate = local_task_state_machine
+            logger.debug("TaskStateMachine using desktop-native backend")
+        else:
+            self._delegate = None
+
     def _redis_key(self, task_id: str) -> str:
         return f"{self.redis_prefix}{task_id}"
 
@@ -90,14 +105,10 @@ class TaskStateMachine:
         return f"{self.redis_prefix}history:{task_id}"
 
     async def get_current_state(self, task_id: str) -> TaskState:
-        """Get the current state of a task.
+        """Get the current state of a task."""
+        if self._delegate is not None:
+            return await self._delegate.get_current_state(task_id)
 
-        Args:
-            task_id: The task identifier.
-
-        Returns:
-            Current TaskState (defaults to PENDING if not found).
-        """
         redis_key = self._redis_key(task_id)
         try:
             data = await redis_client.get(redis_key)
@@ -116,7 +127,6 @@ class TaskStateMachine:
                 )
                 row = result.scalar_one_or_none()
                 if row and row.status:
-                    # Map status string to TaskState
                     try:
                         return TaskState(row.status.lower())
                     except ValueError:
@@ -138,21 +148,12 @@ class TaskStateMachine:
         triggered_by: str = "system",
         context: Optional[Dict[str, Any]] = None,
     ) -> StateTransition:
-        """Execute a state transition.
+        """Execute a state transition."""
+        if self._delegate is not None:
+            return await self._delegate.transition(
+                task_id, from_state, to_state, triggered_by, context
+            )
 
-        Args:
-            task_id: The task identifier.
-            from_state: Expected current state.
-            to_state: Target state.
-            triggered_by: Component triggering the transition.
-            context: Additional transition context.
-
-        Returns:
-            StateTransition record.
-
-        Raises:
-            AgentOSError: If transition is invalid or current state mismatch.
-        """
         now = datetime.now(timezone.utc)
         validation_errors: List[str] = []
 
@@ -220,15 +221,10 @@ class TaskStateMachine:
         return transition
 
     async def get_transition_history(self, task_id: str, limit: int = 50) -> List[StateTransition]:
-        """Get transition history for a task.
+        """Get transition history for a task."""
+        if self._delegate is not None:
+            return await self._delegate.get_transition_history(task_id, limit)
 
-        Args:
-            task_id: The task identifier.
-            limit: Maximum number of transitions.
-
-        Returns:
-            List of StateTransition records.
-        """
         history_key = self._history_key(task_id)
         try:
             data = await redis_client.get(history_key)
@@ -272,15 +268,10 @@ class TaskStateMachine:
         task_id: str,
         to_state: TaskState,
     ) -> Tuple[bool, Optional[str]]:
-        """Check if a transition is valid from current state.
+        """Check if a transition is valid from current state."""
+        if self._delegate is not None:
+            return await self._delegate.can_transition(task_id, to_state)
 
-        Args:
-            task_id: The task identifier.
-            to_state: Desired target state.
-
-        Returns:
-            (is_valid, reason_or_none)
-        """
         current = await self.get_current_state(task_id)
         allowed = self.VALID_TRANSITIONS.get(current, set())
         if to_state in allowed:
@@ -288,12 +279,11 @@ class TaskStateMachine:
         return False, f"Cannot transition from {current.value} to {to_state.value}"
 
     async def reset_state(self, task_id: str, new_state: TaskState = TaskState.PENDING) -> None:
-        """Reset a task to a specific state (admin/recovery use).
+        """Reset a task to a specific state (admin/recovery use)."""
+        if self._delegate is not None:
+            await self._delegate.reset_state(task_id, new_state)
+            return
 
-        Args:
-            task_id: The task identifier.
-            new_state: State to reset to.
-        """
         # Update local state
         self._local_state[task_id] = new_state
 
@@ -311,14 +301,10 @@ class TaskStateMachine:
         logger.info(f"Task {task_id} state reset to {new_state.value}")
 
     async def is_terminal(self, task_id: str) -> bool:
-        """Check if a task is in a terminal state.
+        """Check if a task is in a terminal state."""
+        if self._delegate is not None:
+            return await self._delegate.is_terminal(task_id)
 
-        Args:
-            task_id: The task identifier.
-
-        Returns:
-            True if terminal (COMPLETED, FAILED, REJECTED).
-        """
         current = await self.get_current_state(task_id)
         return current in {TaskState.COMPLETED, TaskState.FAILED, TaskState.REJECTED}
 
