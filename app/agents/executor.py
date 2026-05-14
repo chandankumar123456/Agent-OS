@@ -12,7 +12,8 @@ from ..tools.grounding import ToolGroundingLayer
 from ..environments.desktop_env import DesktopSessionManager
 from ..environments.execution_stabilizer import ActionStabilizer
 from ..environments.window_registry import WindowRegistry
-from ..desktop.goal_loop import DesktopGoalLoop
+# Lazy import to avoid circular import with app.desktop.goal_loop
+# DesktopGoalLoop = None  # type: ignore
 from ..utils.paths import get_desktop_path as _get_desktop_path
 from ..utils.paths import remap_tool_params as _remap_tool_params
 
@@ -130,6 +131,7 @@ class ExecutorAgent:
         )
 
         # Delegate to DesktopGoalLoop
+        from ..desktop.goal_loop import DesktopGoalLoop
         goal_loop = DesktopGoalLoop(task_id=task_id_str)
         result = await goal_loop.execute(
             query=context.get("query", step),
