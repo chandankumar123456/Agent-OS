@@ -45,6 +45,12 @@ class BootstrapContext:
         self._shutdown_hooks: List[Callable] = []
         self._is_shutting_down = False
         
+        # In-memory fallbacks for gRPC/desktop-native mode
+        self.in_memory_lock: Optional[Any] = None
+        self.in_memory_queue: Optional[Any] = None
+        self.in_memory_session_store: Optional[Any] = None
+        self.in_memory_short_term: Optional[Any] = None
+        
     def add_shutdown_hook(self, hook: Callable, name: str = None):
         """Register a shutdown hook to be called during cleanup."""
         self._shutdown_hooks.append((hook, name))
@@ -178,6 +184,45 @@ async def _init_redis(ctx: BootstrapContext) -> None:
     
     ctx.add_shutdown_hook(shutdown_pubsub, "redis_pubsub")
     ctx.add_shutdown_hook(shutdown_redis, "redis")
+
+
+async def _init_in_memory_fallbacks(ctx: BootstrapContext) -> None:
+    """Initialize in-memory fallbacks for gRPC/desktop-native mode.
+
+    Creates drop-in replacements for Redis-backed components:
+    - InMemoryDistributedLock (replaces ExecutionLock)
+    - InMemoryTaskQueue (replaces TaskQueue)
+    - InMemorySessionStore (replaces SessionMemory)
+    - InMemoryShortTermMemory (replaces ShortTermMemory)
+    """
+    from .memory.in_memory import (
+        InMemoryDistributedLock,
+        InMemoryTaskQueue,
+        InMemorySessionStore,
+        InMemoryShortTermMemory,
+    )
+
+    logger.info("Initializing in-memory fallbacks for gRPC mode")
+
+    # Create lock first (queue depends on it)
+    ctx.in_memory_lock = InMemoryDistributedLock()
+    ctx.initialized.append("in_memory_lock")
+
+    # Create queue with the in-memory lock
+    ctx.in_memory_queue = InMemoryTaskQueue(
+        execution_lock=ctx.in_memory_lock,
+    )
+    ctx.initialized.append("in_memory_queue")
+
+    # Create session store
+    ctx.in_memory_session_store = InMemorySessionStore()
+    ctx.initialized.append("in_memory_session_store")
+
+    # Create short-term memory
+    ctx.in_memory_short_term = InMemoryShortTermMemory()
+    ctx.initialized.append("in_memory_short_term")
+
+    logger.info("In-memory fallbacks initialized successfully")
 
 
 async def _init_runtime(ctx: BootstrapContext) -> None:
@@ -325,6 +370,7 @@ async def bootstrap(
     skip_runtime: bool = False,
     skip_mcp: bool = False,
     skip_grpc: bool = False,
+    skip_in_memory_fallbacks: bool = False,
 ) -> BootstrapContext:
     """Bootstrap AgentOS runtime with all core components.
     
@@ -338,6 +384,7 @@ async def bootstrap(
         skip_runtime: Skip AgentRuntime initialization
         skip_mcp: Skip MCP system initialization
         skip_grpc: Skip gRPC client initialization (auto-skipped in HTTP mode)
+        skip_in_memory_fallbacks: Skip in-memory fallback initialization
     
     Returns:
         BootstrapContext containing all initialized components
@@ -364,6 +411,10 @@ async def bootstrap(
     
     if not skip_redis:
         await _init_redis(ctx)
+    
+    # Phase 2b: Initialize in-memory fallbacks (gRPC mode only)
+    if is_grpc_mode() and not skip_in_memory_fallbacks:
+        await _init_in_memory_fallbacks(ctx)
     
     # Phase 3: Initialize core runtime
     if not skip_runtime:
