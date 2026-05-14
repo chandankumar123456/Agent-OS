@@ -25,6 +25,12 @@ def _is_local_dev() -> bool:
     return os.environ.get("AGENTOS_ENV", "").lower() == "development" or os.environ.get("DEBUG", "").lower() in ("1", "true", "yes")
 
 
+def _is_desktop_mode() -> bool:
+    """Check if running in desktop-native gRPC mode."""
+    mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
+    return mode.lower() == "grpc"
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     def __init__(
         self,
@@ -100,6 +106,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             return True, 60, 0  # is_limited=True, retry_after=60, remaining=0
 
     async def dispatch(self, request: Request, call_next):
+        # In desktop mode, skip rate limiting for local IPC
+        if _is_desktop_mode():
+            return await call_next(request)
+
         if request.url.path in ["/health", "/docs", "/openapi.json"]:
             return await call_next(request)
 
