@@ -10,6 +10,7 @@ os.environ.setdefault("REDIS_URL", "")
 os.environ.setdefault("OPENAI_API_KEY", "test-key-placeholder")
 os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-env-32chars!!")
 os.environ.setdefault("RUNTIME_MODE", "http")
+os.environ.setdefault("AGENTOS_RUNTIME_MODE", "http")  # Default to HTTP mode for tests
 os.environ.setdefault("ENABLED_PROVIDERS", "openai")
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,6 +20,17 @@ if str(ROOT) not in sys.path:
 
 import pytest
 from typing import AsyncGenerator
+
+
+def is_grpc_mode() -> bool:
+    """Check if running in gRPC mode."""
+    runtime_mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "")).lower()
+    return runtime_mode == "grpc"
+
+
+def is_http_mode() -> bool:
+    """Check if running in HTTP mode."""
+    return not is_grpc_mode()
 
 
 @pytest.fixture(scope="session")
@@ -38,7 +50,11 @@ def _test_env():
 
 @pytest.fixture(autouse=True)
 def block_external_connections_in_grpc_mode(monkeypatch):
-    """Block Redis and PostgreSQL connections when running in gRPC/desktop mode."""
+    """Block Redis and PostgreSQL connections when running in gRPC/desktop mode.
+    
+    In gRPC mode, the supervisor handles Redis and we use in-memory fallbacks.
+    SQLite is still allowed for isolated unit tests.
+    """
     runtime_mode = os.environ.get("AGENTOS_RUNTIME_MODE", "").lower()
     if runtime_mode != "grpc":
         yield
@@ -61,7 +77,7 @@ def block_external_connections_in_grpc_mode(monkeypatch):
     except ImportError:
         pass
 
-    # Block asyncpg.connect
+    # Block asyncpg.connect (PostgreSQL only)
     try:
         import asyncpg
 
@@ -78,7 +94,8 @@ def block_external_connections_in_grpc_mode(monkeypatch):
     except ImportError:
         pass
 
-    # Block sqlalchemy async engine creation for postgresql dialects
+    # Block sqlalchemy async engine creation for postgresql dialects ONLY
+    # SQLite is allowed for isolated unit tests
     try:
         from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -86,7 +103,8 @@ def block_external_connections_in_grpc_mode(monkeypatch):
 
         def blocked_create_async_engine(url, **kwargs):
             url_str = str(url)
-            if "postgresql" in url_str.lower() or "postgres" in url_str.lower():
+            # Only block PostgreSQL connections, allow SQLite
+            if "postgresql" in url_str.lower() or ("postgres" in url_str.lower() and "sqlite" not in url_str.lower()):
                 import traceback
                 raise RuntimeError(
                     "POSTGRESQL ENGINE CREATION BLOCKED IN GRPC MODE.\n"
