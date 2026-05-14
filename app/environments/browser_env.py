@@ -565,11 +565,59 @@ class BrowserSession:
 class BrowserSessionManager:
     """Manages browser sessions per task_id."""
 
+    # Default TTL for sessions: 30 minutes
+    SESSION_TTL_SECONDS = 1800
+    CLEANUP_INTERVAL_SECONDS = 60
+
     def __init__(self):
         self._sessions: Dict[str, BrowserSession] = {}
+        self._session_times: Dict[str, float] = {}
         self._playwright = None
         self._browser = None
         self._lock = asyncio.Lock()
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._stop_cleanup = asyncio.Event()
+        self._start_cleanup_loop()
+
+    def _start_cleanup_loop(self):
+        """Start the background cleanup task."""
+        try:
+            loop = asyncio.get_running_loop()
+            self._cleanup_task = loop.create_task(self._cleanup_loop())
+            logger.info("BrowserSessionManager: started TTL cleanup loop")
+        except RuntimeError:
+            # No running loop, will be started later
+            pass
+
+    async def _cleanup_loop(self):
+        """Background task that periodically cleans up expired sessions."""
+        while not self._stop_cleanup.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_cleanup.wait(),
+                    timeout=self.CLEANUP_INTERVAL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                await self._reap_expired_sessions()
+
+    async def _reap_expired_sessions(self):
+        """Close sessions that have exceeded their TTL."""
+        now = time.time()
+        expired_tasks = []
+        async with self._lock:
+            for task_id, start_time in list(self._session_times.items()):
+                if now - start_time > self.SESSION_TTL_SECONDS:
+                    expired_tasks.append(task_id)
+
+        for task_id in expired_tasks:
+            logger.info(f"BrowserSessionManager: reaping expired session for task {task_id}")
+            await self.close_session(task_id)
+
+    def _stop_cleanup_loop(self):
+        """Stop the background cleanup task."""
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._stop_cleanup.set()
+            self._cleanup_task.cancel()
 
     async def _ensure_browser(self):
         if self._browser and self._browser.is_connected():
@@ -615,25 +663,31 @@ class BrowserSessionManager:
         await self._ensure_browser()
         session = BrowserSession(task_id)
         await session.bind_to_browser(self._browser)
-        self._sessions[task_id] = session
+        async with self._lock:
+            self._sessions[task_id] = session
+            self._session_times[task_id] = time.time()
         return session
 
     def get_session(self, task_id: str) -> Optional[BrowserSession]:
         return self._sessions.get(task_id)
 
     async def close_session(self, task_id: str) -> ToolOutput:
+        async with self._lock:
+            self._session_times.pop(task_id, None)
         session = self._sessions.pop(task_id, None)
         if session:
             return await session.close_context_only()
         return ToolOutput(success=True, result={"message": "No session to close"})
 
     async def close_all(self):
+        self._stop_cleanup_loop()
         for task_id, session in list(self._sessions.items()):
             try:
                 await session.close_context_only()
             except Exception:
                 pass
         self._sessions.clear()
+        self._session_times.clear()
         if self._browser:
             try:
                 await self._browser.close()
