@@ -46,7 +46,12 @@ class GuardrailSchema:
             )
         
         if "status" in output:
-            if output["status"] not in ["success", "failure", "pending"]:
+            if output["status"] not in {"success", "failure", "pending", "running",
+                                         "completed", "failed", "cancelled",
+                                         "step_executed", "step_failed",
+                                         "requires_approval", "approved", "rejected",
+                                         "planning_complete", "execution_complete",
+                                         "guardrail_blocked", "verification_complete"}:
                 errors.append(f"Invalid status: {output['status']}")
         
         if "result" in output and not output["result"]:
