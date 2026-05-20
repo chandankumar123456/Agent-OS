@@ -19,10 +19,23 @@ import os
 import sys
 import asyncio
 
-# Re-export the FastAPI app for backward compatibility with existing imports
-# and uvicorn references (e.g., uvicorn app.main:app). The actual FastAPI
-# application now lives in app.cloud_api.main.
-from app.cloud_api.main import app  # noqa: F401
+
+def _get_app():
+    """Lazy import of the FastAPI app for backward compatibility.
+
+    This allows ``uvicorn app.main:app`` to work while avoiding an
+    unconditional import of FastAPI and all middleware at module level,
+    which would otherwise pull the full web stack even in desktop/gRPC mode.
+    """
+    from app.cloud_api.main import app as _app
+    return _app
+
+
+# Lazy attribute access: ``app`` is resolved only when accessed (e.g. by uvicorn).
+def __getattr__(name: str):
+    if name == "app":
+        return _get_app()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def main():
@@ -38,6 +51,7 @@ def main():
     else:
         # Cloud/HTTP mode: run FastAPI via uvicorn
         import uvicorn
+        from app.cloud_api.main import app
         uvicorn.run(app, host="0.0.0.0", port=8000)
 
 

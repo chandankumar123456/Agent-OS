@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
     CORS_ORIGINS: str = "http://localhost:5173,http://localhost:3000,http://localhost:8000,http://localhost:4173"
 
-    USE_CELERY: bool = True
+    USE_CELERY: bool = False
     API_KEYS: Optional[str] = None
     RATE_LIMIT_PER_MINUTE: int = 60
     MAX_ACTIVE_TASKS_PER_USER: int = 5

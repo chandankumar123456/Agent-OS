@@ -7,8 +7,8 @@ from app.orchestrator.core import Orchestrator
 from app.api.routes.tasks import use_celery
 
 
-def test_use_celery_defaults_to_enabled():
-    assert use_celery() is True
+def test_use_celery_defaults_to_disabled():
+    assert use_celery() is False
 
 
 def test_execute_task_preserves_provided_task_id():

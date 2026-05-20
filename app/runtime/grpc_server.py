@@ -50,7 +50,7 @@ class GRPCServer:
     LangGraph checkpoint compatibility and SQLite persistence for local mode.
     """
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 50051, kernel=None):
+    def __init__(self, host: str = "127.0.0.1", port: int = 50051, kernel=None):
         """Initialize GRPCServer.
 
         Args:
@@ -664,7 +664,7 @@ class WorkerServiceImpl:
 
 
 # Convenience function to create and run the gRPC server
-async def run_grpc_server(host: str = "0.0.0.0", port: int = 50051):
+async def run_grpc_server(host: str = "127.0.0.1", port: int = 50051):
     """Run the gRPC server with default configuration."""
     server = GRPCServer(host=host, port=port)
     await server.serve()

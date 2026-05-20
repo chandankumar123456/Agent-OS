@@ -3,6 +3,14 @@
 This module provides the TaskStateMachine that manages task lifecycle states.
 Previously backed by Redis+PostgreSQL, now uses a simple in-memory dictionary
 for the desktop-native runtime (single-process).
+
+NOTE: This orchestrator-level state machine is intentionally ephemeral. Task
+state stored here does not survive process restarts. The persistent state
+machine lives in app/desktop_native/state_machine.py (SQLite-backed) and is
+used by the AgentKernel. Since all runtime execution flows through the
+AgentKernel and desktop_native layer, crash recovery and persistence are
+handled there. This in-memory implementation exists only to enforce valid
+state transitions within a single process lifetime.
 """
 from __future__ import annotations
 

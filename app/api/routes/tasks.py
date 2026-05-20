@@ -184,26 +184,18 @@ async def create_task(
     )
 
     if use_celery():
-        try:
-            from ...queue.tasks import celery_app
-            celery_app.send_task(
-                "agent_os.execute_task",
-                args=[str(task_id), request.query, config, user_id],
-                task_id=str(task_id)
-            )
-            logger.info(f"Enqueued task {task_id} to Celery")
-        except Exception as e:
-            logger.error(f"Celery enqueue failed: {e}")
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "error": {
-                        "code": ErrorCode.TASK_QUEUE_UNAVAILABLE.value,
-                        "message": "Task queue unavailable",
-                        "context": {"error": str(e)}
-                    }
+        # Celery infrastructure has been removed in the desktop-native migration.
+        # If USE_CELERY is explicitly set to True, reject the request gracefully.
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": {
+                    "code": ErrorCode.TASK_QUEUE_UNAVAILABLE.value,
+                    "message": "Celery task queue is no longer available. Set USE_CELERY=false.",
+                    "context": {}
                 }
-            )
+            }
+        )
     else:
         async def _run_task():
             try:
