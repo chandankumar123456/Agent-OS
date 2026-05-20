@@ -21,6 +21,7 @@ distro==1.9.0
 dnspython==2.8.0
 ecdsa==0.19.2
 email-validator==2.3.0
+# === Cloud/HTTP mode dependencies (optional for desktop mode) ===
 fastapi==0.121.0
 greenlet==3.2.4
 h11==0.16.0
@@ -75,7 +76,9 @@ six==1.17.0
 sniffio==1.3.1
 soupsieve==2.8.3
 SQLAlchemy==2.0.44
+# === Cloud/HTTP mode dependency (optional for desktop mode) ===
 sse-starlette==3.0.3
+# === Cloud/HTTP mode dependency (optional for desktop mode) ===
 starlette==0.45.3
 tenacity==9.1.4
 tiktoken==0.12.0
@@ -86,6 +89,7 @@ tzdata==2026.1
 tzlocal==5.3.1
 urllib3==2.6.3
 uuid_utils==0.14.1
+# === Cloud/HTTP mode dependency (optional for desktop mode) ===
 uvicorn==0.38.0
 vine==5.1.0
 watchfiles==1.1.1

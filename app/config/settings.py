@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     @field_validator("RATE_LIMIT_PER_MINUTE")
     @classmethod
     def validate_rate_limit(cls, v: int) -> int:
+        # In gRPC/desktop mode, rate limiting is not used (Go Supervisor handles it)
+        mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http")).lower()
+        if mode == "grpc":
+            return v
         if v < 1:
             raise ValueError("RATE_LIMIT_PER_MINUTE must be at least 1")
         return v
@@ -106,8 +110,9 @@ class Settings(BaseSettings):
             return self
         if not self.DATABASE_URL:
             raise ValueError("DATABASE_URL is required")
+        # In gRPC/desktop mode, web-specific settings (CORS, API_KEYS, rate limits)
+        # are not used because the Go Supervisor provides the HTTP API.
         # Skip Redis check in gRPC mode (supervisor handles Redis)
-        # In HTTP mode, allow running without Redis (use in-memory fallbacks)
         if self.RUNTIME_MODE.lower() != "grpc" and not self.REDIS_URL:
             import warnings
             warnings.warn(

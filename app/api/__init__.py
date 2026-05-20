@@ -1,3 +1,5 @@
+# Deprecated: Use app.cloud_api.api instead for new code.
+# These are kept for backward compatibility with existing tests and imports.
 from fastapi import APIRouter
 from .routes import tasks, auth, tools, agents, config, workflows, onboarding, analytics, chat, providers, knowledge, events, workspaces, api_keys, deployments, observability, desktop
 from ..logs.metrics import metrics_collector

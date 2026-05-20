@@ -57,4 +57,4 @@ echo "[info] Starting Agent-OS HTTP server on port 8000..."
 echo ""
 
 # 5. Start the server
-exec "$PYTHON" -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+exec "$PYTHON" -m uvicorn app.cloud_api.main:app --host 0.0.0.0 --port 8000
