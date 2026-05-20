@@ -9,8 +9,6 @@ from langgraph.types import interrupt
 from ..agents.llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.registry import tool_registry, is_task_cancelled
-from ..tools.grounding import tool_grounding_layer
-from ..workflows.decomposer import workflow_decomposer
 from ..capabilities import verification_engine, recovery_engine
 from ..capabilities.models import VerificationResult, RecoveryAction
 from ..observability import observability_bus, ObservabilityEventType
@@ -54,18 +52,12 @@ def _to_openai_messages(messages):
 
 
 def _deterministic_tool_select(description: str, available_tools: List[Dict[str, Any]]) -> Optional[str]:
-    """If a step description maps to exactly one obvious tool, return it without LLM."""
-    grounded = tool_grounding_layer.filter_tools_for_step(description, available_tools)
-    if len(grounded) == 1:
-        name = grounded[0].get("name")
-        # Only auto-select for very safe, obvious tools
-        safe_tools = {
-            "filesystem__read_file", "filesystem__list_directory", "filesystem__search_files",
-            "document__parse", "shell__execute_command", "browser_env__navigate",
-            "browser_env__screenshot", "desktop_env__screenshot", "desktop_env__get_window_list",
-        }
-        if name in safe_tools:
-            return name
+    """DEPRECATED: Always returns None to force LLM-based tool selection.
+
+    Keyword-based tool selection is removed. The LLM must dynamically select
+    tools based on step context and available tool schemas.
+    """
+    # DISABLED: All tool selection must go through the LLM reasoning loop.
     return None
 
 
@@ -123,10 +115,9 @@ Respond ONLY with valid JSON:
 
 
 async def planner_node(state: AgentState) -> Dict[str, Any]:
-    """Generate an execution plan from the user query, informed by capability assessment.
+    """Generate an execution plan from the user query using LLM.
 
-    Uses deterministic workflow decomposition first for complex multi-step tasks.
-    Falls back to LLM planner for simple or ambiguous queries.
+    ALWAYS uses LLM for plan generation. Rule-based decomposition is disabled.
     """
     query = state.get("query", "")
     task_id = state.get("task_id", "")
@@ -136,66 +127,7 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
     home_path = os.path.expanduser("~")
     desktop_path = _get_desktop_path()
 
-    # ── Deterministic Workflow Decomposition ──────────────────────────
-    phases = workflow_decomposer.decompose(query)
-    if phases:
-        logger.info(f"[planner_node] Using deterministic decomposition: {len(phases)} phases")
-        plan = []
-        for i, phase in enumerate(phases):
-            # Strict tool grounding using phase.intent (NOT description keyword matching)
-            all_tools = tool_registry.list_tools()
-            primary_tools = tool_grounding_layer.get_primary_tools(phase.intent, all_tools, exclude_desktop_for_non_desktop=True)
-            fallback_tools = tool_grounding_layer.get_fallback_tools(phase.intent, all_tools)
-
-            allowed_tool_names = [t["name"] for t in primary_tools[:8]]
-            fallback_tool_names = [t["name"] for t in fallback_tools[:4]]
-            suggested_tool = allowed_tool_names[0] if allowed_tool_names else (fallback_tool_names[0] if fallback_tool_names else None)
-
-            tool_hint = ""
-            if allowed_tool_names:
-                tool_hint = f"Use one of: {', '.join(allowed_tool_names[:5])}."
-
-            # Extract paths from query for this phase
-            paths = workflow_decomposer.extract_paths(query)
-            path_hint = ""
-            if paths and phase.name in ("file_search", "file_read", "document_processing", "content_generation"):
-                path_hint = f" Paths mentioned: {', '.join(paths[:2])}."
-
-            # Preserve decomposer-specific atomic descriptions to avoid vague desktop steps.
-            desc = phase.description.strip() if phase.description else phase.name
-            if "original task:" not in desc.lower():
-                desc = f"{desc} Original task: {query}"
-
-            # Sequential dependency gate: every non-final step is required for downstream work.
-            required = i < (len(phases) - 1)
-
-            plan.append({
-                "step_number": i + 1,
-                "description": f"{desc}.{path_hint} {tool_hint}",
-                "step_type": phase.name,
-                "tool": suggested_tool,
-                "allowed_tools": allowed_tool_names,
-                "fallback_tools": fallback_tool_names,
-                "depends_on": [i] if i > 0 else [],
-                "expected_output": f"Completed {phase.name} for: {query}",
-                "required": required,
-            })
-
-        await observability_bus.emit_safe(
-            ObservabilityEventType.PLANNER_REASONING,
-            task_id=task_id,
-            trace_id=state.get("trace_id"),
-            payload={"plan": plan, "capability_context": f"deterministic_decomposition:{[p.name for p in phases]}"},
-            source="planner_node",
-        )
-        return {
-            "plan": plan,
-            "current_step_index": 0,
-            "messages": [AIMessage(content=f"Deterministic plan: {json.dumps(plan, indent=2)}")],
-            "status": "planning_complete",
-        }
-
-    # ── Fallback to LLM planner for simple/ambiguous tasks ────────────
+    # ── LLM planner ALWAYS ────────────────────────────────────────────
     cap_assessment = state.get("capability_assessment")
     capability_context = ""
     if cap_assessment:
@@ -254,22 +186,18 @@ async def planner_node(state: AgentState) -> Dict[str, Any]:
         logger.error(f"[planner_node] Planning failed: {e}")
         plan = [{"step_number": 1, "description": query, "tool": None, "expected_output": "Answer the user's query"}]
 
-    # ── Post-process LLM plan: ensure tool constraints are always present ──
+    # ── Post-process LLM plan: validate tool names against registry ──
     available_tools = tool_registry.list_tools()
+    registered_names = {t.get("name") for t in available_tools}
     for step in plan:
-        desc = step.get("description", "")
-        # Ensure step_type is set
+        # Validate that LLM-specified tools exist; do NOT inject keyword-based tools
+        if step.get("allowed_tools"):
+            step["allowed_tools"] = [t for t in step["allowed_tools"] if t in registered_names]
+        if step.get("fallback_tools"):
+            step["fallback_tools"] = [t for t in step["fallback_tools"] if t in registered_names]
+        # If step_type is missing, let executor infer from context rather than keyword map
         if not step.get("step_type"):
-            step["step_type"] = tool_grounding_layer.classify_intent(desc)
-        step_type = step.get("step_type", "")
-        # Ensure allowed_tools are grounded if missing
-        if not step.get("allowed_tools"):
-            primary = tool_grounding_layer.get_primary_tools(step_type, available_tools, exclude_desktop_for_non_desktop=True)
-            step["allowed_tools"] = [t["name"] for t in primary[:8]]
-        # Ensure fallback_tools are grounded if missing
-        if not step.get("fallback_tools"):
-            fallback = tool_grounding_layer.get_fallback_tools(step_type, available_tools)
-            step["fallback_tools"] = [t["name"] for t in fallback[:4]]
+            step["step_type"] = "general"
 
     await observability_bus.emit_safe(
         ObservabilityEventType.PLANNER_REASONING,
@@ -377,19 +305,11 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
     if not grounded_tools and explicit_fallback:
         grounded_tools = [available_tool_map[name] for name in explicit_fallback if name in available_tool_map]
     if not grounded_tools:
-        # Legacy fallback: only if planner didn't specify constraints
-        step_type = step.get("step_type", "").lower()
-        # For ANY specialized intent, do NOT re-ground from description alone;
-        # the description may not contain the right keywords and will fall back to generic tools.
-        # Only "general" steps may use the description-based re-grounding.
-        if step_type and step_type != "general":
-            logger.warning(
-                f"[executor_node] Step {step_number} (type={step_type}) has no grounded tools and no planner constraints. "
-                f"Returning empty tool set to fail loudly."
-            )
-            grounded_tools = []
-        else:
-            grounded_tools = tool_grounding_layer.filter_tools_for_step(description, available_tools)
+        logger.warning(
+            f"[executor_node] Step {step_number} has no grounded tools and no planner constraints. "
+            f"Returning empty tool set to fail loudly."
+        )
+        grounded_tools = []
 
     grounded_tool_names = {t["name"] for t in grounded_tools}
     logger.info(f"[executor_node] Grounded tools for step {step_number}: {grounded_tool_names}")
@@ -459,32 +379,6 @@ async def executor_node(state: AgentState) -> Dict[str, Any]:
             "desktop_iterations": iterations,
             "execution_state": execution_state.to_dict(),
         }
-
-    # ── Deterministic Execution (skip LLM for obvious cases) ──────────
-    # Try planner's suggested tool first
-    det_tool = None
-    if suggested_tool and suggested_tool in grounded_tool_names:
-        det_tool = suggested_tool
-    else:
-        # Obey planner constraints: pick the first grounded tool instead of re-grounding
-        if grounded_tools:
-            det_tool = grounded_tools[0].get("name")
-
-    if det_tool and det_tool in grounded_tool_names:
-        default_params = _build_default_params(det_tool, description)
-        if default_params is not None:
-            logger.info(f"[executor_node] Deterministic execution: {det_tool}")
-            tool_params = default_params.copy()
-            return await _execute_tool_call(
-                task_id=task_id,
-                step_number=step_number,
-                description=description,
-                tool_name=det_tool,
-                tool_params=tool_params,
-                state=state,
-                idx=idx,
-                grounded_tool_names=grounded_tool_names,
-            )
 
     # ── LLM-Driven Parameter Generation Only ──────────────────────────
     tools_json = json.dumps(grounded_tools, indent=2, default=str)

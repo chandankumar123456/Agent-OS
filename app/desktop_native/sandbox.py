@@ -1,11 +1,12 @@
 """Sandbox — restricted subprocess execution for desktop-native mode.
 
-Provides a secure execution environment for untrusted code:
-- Resource limits (CPU time, memory, file size)
-- Filesystem restrictions (read-only or chroot-like)
-- Network isolation (no outbound connections)
-- Timeout enforcement
-- Process isolation
+WARNING: This sandbox provides BEST-EFFORT isolation only:
+- Timeout enforcement is reliable
+- Memory limits use ulimit on Unix (best-effort on Windows)
+- File size limits use ulimit on Unix
+- Filesystem isolation is enforced by path validation (see allowed_read_paths / allowed_write_paths)
+- Network isolation is NOT enforced on Windows (logs warning and stops execution)
+- Network isolation on Unix requires additional firewall rules
 
 Usage:
     sandbox = Sandbox()
@@ -74,21 +75,64 @@ class Sandbox:
         """
         timeout = timeout or self._default_timeout
         max_memory_mb = max_memory_mb or self._default_max_memory_mb
+        effective_max_file_size = (max_file_size_mb or self._default_max_file_size_mb) * 1024
+
+        # ── Path restriction validation ──────────────────────────────────────
+        if allowed_read_paths or allowed_write_paths:
+            cmd_lower = command.lower()
+            for path in (allowed_read_paths or []) + (allowed_write_paths or []):
+                normalized = os.path.normpath(os.path.abspath(path))
+                if normalized not in [os.path.normpath(os.path.abspath(p)) for p in (allowed_read_paths or []) + (allowed_write_paths or [])]:
+                    pass  # will be checked below
+
+            # Reject commands that access paths outside allowed lists
+            forbidden = False
+            forbidden_reason = ""
+            import re as _re
+            for match in _re.finditer(r'["\']?([A-Za-z]:[\\/][^\s"\']+|/[\w./-]+)', command):
+                path = match.group(1)
+                abs_path = os.path.normpath(os.path.abspath(path))
+                all_allowed = set()
+                for p in (allowed_read_paths or []) + (allowed_write_paths or []):
+                    all_allowed.add(os.path.normpath(os.path.abspath(p)))
+                if not any(abs_path.startswith(a) for a in all_allowed):
+                    forbidden = True
+                    forbidden_reason = f"Command references path outside allowed directories: {path}"
+                    break
+            if forbidden:
+                logger.error(f"[Sandbox] Execution blocked: {forbidden_reason}")
+                return SandboxResult(
+                    success=False,
+                    stdout="",
+                    stderr=forbidden_reason,
+                    return_code=-1,
+                    execution_time_ms=0.0,
+                    error=forbidden_reason,
+                )
+
+        # ── Network isolation enforcement ────────────────────────────────────
+        if not allow_network:
+            if sys.platform == "win32":
+                logger.error("[Sandbox] Network isolation is NOT enforceable on Windows. Execution STOPPED.")
+                return SandboxResult(
+                    success=False,
+                    stdout="",
+                    stderr="Network isolation not enforceable on Windows. Set allow_network=True explicitly if network access is required, or run on a platform with network namespace support.",
+                    return_code=-1,
+                    execution_time_ms=0.0,
+                    error="Network isolation not enforceable on Windows",
+                )
+            else:
+                logger.warning("[Sandbox] Network isolation relies on external firewall rules on Linux/macOS")
 
         start_time = asyncio.get_event_loop().time()
 
         # Prepare environment
         env = os.environ.copy()
         env.update(env_vars or {})
-        if not allow_network:
-            # On Windows, we can't easily block network at process level
-            # without Windows Firewall or WFP. We log it instead.
-            logger.warning("Network isolation not enforced on Windows (requires WFP)")
 
         # Prepare command based on platform
         if sys.platform == "win32":
-            # Use PowerShell to enforce some restrictions
-            # Note: True sandboxing on Windows requires AppContainer or Job Objects
             process = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
@@ -98,7 +142,7 @@ class Sandbox:
             )
         else:
             # On Linux/macOS, we can use timeout and ulimit
-            wrapped_command = f"ulimit -v {max_memory_mb * 1024}; ulimit -f {max_file_size_mb or self._default_max_file_size_mb * 1024}; timeout {timeout} {command}"
+            wrapped_command = f"ulimit -v {max_memory_mb * 1024}; ulimit -f {effective_max_file_size}; timeout {timeout} {command}"
             process = await asyncio.create_subprocess_shell(
                 wrapped_command,
                 stdout=asyncio.subprocess.PIPE,

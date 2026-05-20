@@ -6,9 +6,7 @@ from uuid import uuid4
 from typing import List, Dict, Any
 from .llm_client import get_llm_client
 from ..logs.logger import logger
-from ..tools.grounding import tool_grounding_layer
 from ..tools.registry import tool_registry
-from ..workflows.decomposer import workflow_decomposer
 from ..utils.paths import get_desktop_path as _get_desktop_path
 from ..utils.paths import normalize_paths_in_text as _normalize_paths_in_text
 
@@ -130,19 +128,17 @@ class PlannerAgent:
             # Normalize hallucinated paths in step text
             step_name = _normalize_paths_in_text(step_name, home_path, desktop_path)
 
-            # Extract or infer structured fields
-            step_type = item.get("step_type") or tool_grounding_layer.classify_intent(step_name)
-            allowed_tools = item.get("allowed_tools")
-            fallback_tools = item.get("fallback_tools")
+            # Extract structured fields from LLM output (NEVER infer via keyword matching)
+            step_type = item.get("step_type", "general")
+            allowed_tools = item.get("allowed_tools", [])
+            fallback_tools = item.get("fallback_tools", [])
             expected_output = item.get("expected_output", "")
             required = item.get("required", False)
 
-            if not allowed_tools:
-                primary = tool_grounding_layer.get_primary_tools(step_type, all_tools, exclude_desktop_for_non_desktop=True)
-                allowed_tools = [t["name"] for t in primary[:8]]
-            if not fallback_tools:
-                fallback = tool_grounding_layer.get_fallback_tools(step_type, all_tools)
-                fallback_tools = [t["name"] for t in fallback[:4]]
+            # Validate that LLM-specified tools actually exist in registry
+            registered_names = {t.get("name") for t in all_tools}
+            allowed_tools = [t for t in allowed_tools if t in registered_names]
+            fallback_tools = [t for t in fallback_tools if t in registered_names]
 
             normalized = {
                 "id": step_id,
@@ -201,39 +197,7 @@ class PlannerAgent:
 
         logger.info(f"Planner executing for query: {query}")
 
-        phases = workflow_decomposer.decompose(query)
-        if phases:
-            all_tools = tool_registry.list_tools()
-            steps = []
-            for i, phase in enumerate(phases):
-                primary = tool_grounding_layer.get_primary_tools(phase.intent, all_tools, exclude_desktop_for_non_desktop=True)
-                fallback = tool_grounding_layer.get_fallback_tools(phase.intent, all_tools)
-                allowed_names = [t["name"] for t in primary[:8]]
-                fallback_names = [t["name"] for t in fallback[:4]]
-                suggested = allowed_names[0] if allowed_names else (fallback_names[0] if fallback_names else None)
-                step_text = phase.description.strip() if phase.description else phase.name
-                if "original task:" not in step_text.lower():
-                    step_text = f"{step_text} Original task: {query}"
-                steps.append({
-                    "id": f"step_{i+1}",
-                    "step": step_text,
-                    "step_type": phase.name,
-                    "allowed_tools": allowed_names,
-                    "fallback_tools": fallback_names,
-                    "expected_output": f"Completed {phase.name}",
-                    "required": i < (len(phases) - 1),
-                    "agent_type": "executor",
-                    "depends_on": [f"step_{i}"] if i > 0 else [],
-                })
-            return AgentOutput(
-                task_id=input_data.task_id,
-                step_id=input_data.step_id,
-                status=AgentStatus.SUCCESS,
-                output_data={"steps": steps, "total_steps": len(steps)},
-                confidence=0.95,
-                reasoning_trace=[f"Deterministic decomposition: {len(phases)} phases"],
-            )
-
+        # ALWAYS use LLM for planning. Rule-based decomposition is disabled.
         messages = [
             {"role": "system", "content": PLANNER_PROMPT.format(
                 query=query,

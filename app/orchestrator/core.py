@@ -17,10 +17,7 @@ from .executor import StepExecutor
 from .pipeline import PipelineExecutor
 from .context import TaskContext
 from .router import AgentRouter
-from .task_runner import TaskRunner
-from ..orchestrator.event_bus import event_bus, Event
-from ..recovery.checkpoint_service import CheckpointRecoveryService
-from .modes import ModeStrategyFactory
+from .agent_loop import AgentLoop
 
 
 class Orchestrator:
@@ -28,8 +25,7 @@ class Orchestrator:
 
     All execution is delegated to:
     - AgentRuntime (agent lifecycle and execution)
-    - ModeStrategyFactory (mode selection)
-    - PipelineExecutor (task/workflow pipeline)
+    - AgentLoop (plan → execute → observe → replan)
     - WorkflowBuilder (DAG construction)
     - StepExecutor (step execution)
     """
@@ -40,7 +36,6 @@ class Orchestrator:
         self.workflow_engine = WorkflowEngine()
         self.workflow_builder = WorkflowBuilder()
         self.step_executor = StepExecutor()
-        self.task_runner = TaskRunner()
         self.retry_config = RetryConfig(
             max_retries=settings.MAX_RETRIES,
             base_delay=1.0,
@@ -48,6 +43,7 @@ class Orchestrator:
             exponential_base=2.0
         )
         self.pipeline_executor = PipelineExecutor(self)
+        self.agent_loop = AgentLoop(self)
 
     def _get_agent(self, agent_type: str):
         """Get an agent from the Router. Runtime is the ONLY execution entry point."""
@@ -221,19 +217,6 @@ class Orchestrator:
         await short_term_memory.save_context(str(context.task_id), context.context, expire=1800)
         await trace_repo.update_status(context.trace_id, TaskStatus.COMPLETED.value)
 
-    async def _execute_with_langgraph(
-        self,
-        query: str,
-        config: Dict[str, Any],
-        task_id: UUID,
-        user_id: str,
-        mode: str,
-        resume_state: Optional[Dict[str, Any]] = None,
-        resume_value: Optional[Dict[str, Any]] = None,
-    ) -> AgentOutput:
-        """Delegate LangGraph execution to TaskRunner."""
-        return await self.task_runner.run(query, config, task_id, user_id, mode, resume_state=resume_state, resume_value=resume_value)
-
     async def execute_task(
         self,
         query: str,
@@ -241,6 +224,7 @@ class Orchestrator:
         task_id: Optional[UUID] = None,
         user_id: Optional[str] = None,
     ) -> AgentOutput:
+        """Single public entry point.  All execution flows through AgentLoop."""
         task_id = task_id or uuid4()
         if not user_id:
             user_id = "system"
@@ -261,47 +245,38 @@ class Orchestrator:
                 recoverable=False,
             )
 
-        # Try LangGraph execution first
-        try:
-            return await self._execute_with_langgraph(query, config, task_id, user_id, mode)
-        except Exception as langgraph_err:
-            err_str = str(langgraph_err)
-            logger.warning(f"LangGraph execution failed, attempting checkpoint recovery: {langgraph_err}")
-            await event_bus.publish(
-                f"task:{task_id}",
-                Event("fallback.triggered", {"task_id": str(task_id), "reason": err_str, "fallback_mode": mode}, source="orchestrator"),
-            )
-            # ── Checkpoint Recovery ──────────────────────────────────────
-            try:
-                recovery_service = CheckpointRecoveryService()
-                recovered_state = await recovery_service.resume_task(str(task_id), mode, {})
-                if recovered_state:
-                    logger.info(f"Checkpoint recovered for task {task_id}, re-attempting LangGraph execution")
-                    return await self._execute_with_langgraph(query, config, task_id, user_id, mode, resume_state=recovered_state)
-            except Exception as recovery_err:
-                logger.warning(f"Checkpoint recovery failed for task {task_id}: {recovery_err}")
+        # ── AgentLoop is the SINGLE execution path ─────────────────────
+        return await self.agent_loop.run(query, config, task_id, user_id)
 
-        # falling back to legacy mode strategies
-        try:
-            strategy = ModeStrategyFactory.get(mode)
-            return await strategy.execute(self.runtime, self, query, config, task_id, user_id)
-        except ValueError as mode_err:
-            logger.error(f"Unknown mode '{mode}': {mode_err}")
-            await event_bus.publish(
-                f"task:{task_id}",
-                Event("task.failed", {"task_id": str(task_id), "error": f"Unknown mode: {mode}"}, source="orchestrator"),
-            )
-            return AgentOutput(
-                task_id=task_id,
-                step_id=uuid4(),
-                status=AgentStatus.FAILURE,
-                error_type="invalid_mode",
-                error_message=f"Unknown execution mode: {mode}",
-                recoverable=False,
-            )
+    async def _execute_with_langgraph(
+        self,
+        query: str,
+        config: Dict[str, Any],
+        task_id: UUID,
+        user_id: str,
+        mode: str,
+        resume_state: Optional[Dict[str, Any]] = None,
+        resume_value: Optional[Dict[str, Any]] = None,
+    ) -> AgentOutput:
+        """Legacy compatibility — delegates to AgentLoop.
+
+        The AgentLoop subsumes the old LangGraph execution path.
+        ``resume_state`` and ``resume_value`` are accepted but not
+        used; the AgentLoop manages its own state internally.
+        """
+        logger.info(
+            f"[core] _execute_with_langgraph delegated to AgentLoop "
+            f"(resume_state={'present' if resume_state else 'absent'}, "
+            f"resume_value={'present' if resume_value else 'absent'})"
+        )
+        return await self.agent_loop.run(query, config, task_id, user_id)
 
     async def _execute_pipeline(self, query, config=None, task_id=None, user_id=None):
-        return await self.pipeline_executor.execute(query, config, task_id, user_id)
+        """Legacy compatibility — delegates to AgentLoop.
+
+        PipelineExecutor.execute() also now routes through AgentLoop.
+        """
+        return await self.agent_loop.run(query, config, task_id, user_id)
 
     async def run_workflow(self, query: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         config = config or {}

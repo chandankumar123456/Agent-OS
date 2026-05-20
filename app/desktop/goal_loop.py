@@ -20,7 +20,6 @@ from typing import Any, Dict, List, Optional, Set
 from dataclasses import dataclass
 
 from ..agents.llm_client import get_llm_client
-from ..tools.grounding import ToolGroundingLayer
 from ..tools.registry import tool_registry
 from ..logs.metrics import metrics_collector
 
@@ -46,7 +45,6 @@ class DesktopGoalLoop:
     def __init__(self, task_id: str):
         self.task_id = task_id
         self._llm = get_llm_client()
-        self._grounding = ToolGroundingLayer()
         self.max_iterations = 5
         self.max_retries_per_action = 2
         self._snapshot_history: List[Dict[str, Any]] = []
@@ -210,16 +208,13 @@ class DesktopGoalLoop:
         desktop_state: Dict[str, Any],
         history: list,
     ) -> Optional[Dict[str, Any]]:
-        """Decide next action using LLM with tool grounding and JSON parsing.
+        """Decide next action using LLM with full tool visibility.
 
-        Phase 3: Fully LLM-driven with deterministic fallback for safety.
+        The LLM sees ALL registered tools and selects dynamically.
+        No keyword-based filtering is applied.
         """
-        grounded_tools = self._grounding.ground_tools(
-            intent="desktop_automation",
-            all_tools=[{"name": name} for name in tool_registry.tools.keys()],
-        )
-
-        prompt = self._build_executor_prompt(goal, desktop_state, history, grounded_tools)
+        all_tools = tool_registry.list_tools()
+        prompt = self._build_executor_prompt(goal, desktop_state, history, all_tools)
 
         try:
             response = await self._llm.complete_json(

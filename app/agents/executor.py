@@ -8,7 +8,6 @@ from .llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.parser import ToolCallParser
 from ..tools.registry import tool_registry
-from ..tools.grounding import ToolGroundingLayer
 from ..environments.desktop_env import DesktopSessionManager
 from ..environments.execution_stabilizer import ActionStabilizer
 from ..environments.window_registry import WindowRegistry
@@ -121,13 +120,13 @@ class ExecutorAgent:
         step = input_data.input_data.get("step", "")
         context = input_data.context
 
-        # Ground tools for desktop automation
-        grounding = ToolGroundingLayer()
+        # Pass all available tools to the desktop goal loop so the LLM can
+        # select dynamically. Keyword-based filtering is removed.
         tools_schema = input_data.input_data.get("tools", [])
-        grounded_tools = grounding.filter_tools_for_step(step, tools_schema)
+        grounded_tools = tools_schema if tools_schema else tool_registry.list_tools()
         grounded_tool_names = {t["name"] for t in grounded_tools}
         logger.debug(
-            f"ExecutorAgent: grounded {len(grounded_tool_names)} tools for desktop step"
+            f"ExecutorAgent: passing {len(grounded_tool_names)} tools for desktop step"
         )
 
         # Delegate to DesktopGoalLoop
