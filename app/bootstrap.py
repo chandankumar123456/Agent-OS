@@ -90,8 +90,9 @@ async def _check_dependencies() -> None:
         raise RuntimeError("DATABASE_URL is required but not set")
     
     # Skip Redis check in gRPC mode (supervisor handles Redis)
+    # In HTTP mode, allow running without Redis (use in-memory fallbacks)
     if not is_grpc_mode() and not settings.REDIS_URL:
-        raise RuntimeError("REDIS_URL is required but not set")
+        logger.warning("REDIS_URL is not set. Running in HTTP mode without Redis. In-memory fallbacks will be used.")
     
     if not settings.OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is required but not set")
@@ -412,8 +413,10 @@ async def bootstrap(
     if not skip_redis:
         await _init_redis(ctx)
     
-    # Phase 2b: Initialize in-memory fallbacks (gRPC mode only)
-    if is_grpc_mode() and not skip_in_memory_fallbacks:
+    # Phase 2b: Initialize in-memory fallbacks when Redis is not available
+    # (gRPC mode always uses fallbacks; HTTP mode uses them when Redis is skipped)
+    use_in_memory = (is_grpc_mode() or skip_redis) and not skip_in_memory_fallbacks
+    if use_in_memory:
         await _init_in_memory_fallbacks(ctx)
     
     # Phase 3: Initialize core runtime

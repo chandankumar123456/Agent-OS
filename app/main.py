@@ -51,8 +51,16 @@ async def lifespan(app: FastAPI):
     sys.stdout.flush()
     logger.info("Agent-OS starting up")
     
+    # Determine if Redis is available
+    redis_url = settings.REDIS_URL if hasattr(settings, 'REDIS_URL') else None
+    skip_redis = not redis_url
+    
     # Bootstrap all components via shared module
-    ctx = await bootstrap()
+    # When Redis is unavailable, skip it and enable in-memory fallbacks
+    ctx = await bootstrap(
+        skip_redis=skip_redis,
+        skip_in_memory_fallbacks=False,
+    )
     
     # Store context in app state for access in routes
     app.state.bootstrap_ctx = ctx
@@ -224,4 +232,5 @@ async def metrics_middleware(request, call_next):
 @app.get("/health")
 async def health():
     """Basic health check endpoint."""
-    return {"status": "healthy", "version": settings.VERSION}
+    from .config.mode import get_runtime_mode
+    return {"status": "healthy", "version": settings.VERSION, "mode": get_runtime_mode().value}
