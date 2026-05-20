@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
 from uuid import uuid4
 import hashlib
@@ -22,7 +22,7 @@ class APIKeyResponse(BaseModel):
     id: str
     name: str
     permissions: List[str]
-    last_used_at: str | None
+    last_used_at: Optional[str]
     created_at: str
 
 
