@@ -214,8 +214,14 @@ class Orchestrator:
         context.result = combined_result
         context.status = TaskStatus.COMPLETED
         await self._save_task_state(context)
-        await short_term_memory.save_context(str(context.task_id), context.context, expire=1800)
-        await trace_repo.update_status(context.trace_id, TaskStatus.COMPLETED.value)
+        try:
+            await short_term_memory.save_context(str(context.task_id), context.context, expire=1800)
+        except Exception as e:
+            logger.warning(f"Short-term memory save failed: {e}")
+        try:
+            await trace_repo.update_status(context.trace_id, TaskStatus.COMPLETED.value)
+        except Exception as e:
+            logger.warning(f"Trace status update failed: {e}")
 
     async def execute_task(
         self,

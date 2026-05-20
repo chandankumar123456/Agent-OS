@@ -316,12 +316,15 @@ class AgentLoop:
                 )
 
                 # Persist node outcome
-                await workflow_node_repo.update(
-                    node_row.id,
-                    status=result.get("status", StepStatus.COMPLETED.value),
-                    output_data=result.get("output_data"),
-                    confidence=result.get("confidence"),
-                )
+                try:
+                    await workflow_node_repo.update(
+                        node_row.id,
+                        status=result.get("status", StepStatus.COMPLETED.value),
+                        output_data=result.get("output_data"),
+                        confidence=result.get("confidence"),
+                    )
+                except Exception as e:
+                    logger.warning(f"[AgentLoop] Node outcome persist failed: {e}")
 
                 return result
 
@@ -333,13 +336,22 @@ class AgentLoop:
                 )
             except WorkflowPausedForApproval as pause:
                 logger.info(f"[AgentLoop] Workflow paused for approval at node {pause.node_id}")
-                await task_repo.update(
-                    str(task_id),
-                    status=TaskStatus.WAITING_APPROVAL.value,
-                )
-                await trace_repo.update_status(trace_id, TaskStatus.WAITING_APPROVAL.value)
+                try:
+                    await task_repo.update(
+                        str(task_id),
+                        status=TaskStatus.WAITING_APPROVAL.value,
+                    )
+                except Exception as e:
+                    logger.warning(f"[AgentLoop] Approval state persist failed: {e}")
+                try:
+                    await trace_repo.update_status(trace_id, TaskStatus.WAITING_APPROVAL.value)
+                except Exception as e:
+                    logger.warning(f"[AgentLoop] Approval trace update failed: {e}")
                 trace_manager.end_span(main_span, "paused", f"Waiting approval at {pause.node_id}")
-                await trace_manager.persist_trace(trace_id)
+                try:
+                    await trace_manager.persist_trace(trace_id)
+                except Exception as e:
+                    logger.warning(f"[AgentLoop] Approval trace persist failed: {e}")
                 return AgentOutput(
                     task_id=task_id,
                     step_id=uuid4(),
@@ -364,20 +376,26 @@ class AgentLoop:
                 output = node_result.get("output", {})
 
                 if status == "skipped":
-                    await workflow_node_repo.update(
-                        node_id, status=StepStatus.SKIPPED.value,
-                    )
-                    await node_trace_repo.create(
-                        task_id=str(task_id),
-                        user_id=user_id,
-                        trace_id=trace_id,
-                        node_id=node_id,
-                        status=StepStatus.SKIPPED.value,
-                        input_data=next(
-                            (n.input_data for n in persisted_nodes if str(n.id) == node_id),
-                            {},
-                        ),
-                    )
+                    try:
+                        await workflow_node_repo.update(
+                            node_id, status=StepStatus.SKIPPED.value,
+                        )
+                    except Exception as e:
+                        logger.warning(f"[AgentLoop] Skipped node persist failed: {e}")
+                    try:
+                        await node_trace_repo.create(
+                            task_id=str(task_id),
+                            user_id=user_id,
+                            trace_id=trace_id,
+                            node_id=node_id,
+                            status=StepStatus.SKIPPED.value,
+                            input_data=next(
+                                (n.input_data for n in persisted_nodes if str(n.id) == node_id),
+                                {},
+                            ),
+                        )
+                    except Exception as e:
+                        logger.warning(f"[AgentLoop] Skipped node trace persist failed: {e}")
                     continue
 
                 step_entry = {
@@ -398,12 +416,12 @@ class AgentLoop:
             # ── Update reasoning context ────────────────────────────
             reasoning_context["_iteration"] = iteration
             reasoning_context["_completed_steps"] = [
-                {"id": sid, "output": s.get("output_data")}
+                {"id": s["step_id"], "output": s.get("output_data")}
                 for s in all_step_results
                 if s["step_id"] in completed_step_ids
             ]
             reasoning_context["_failed_steps"] = [
-                {"id": sid, "output": s.get("output_data")}
+                {"id": s["step_id"], "output": s.get("output_data")}
                 for s in all_step_results
                 if s["step_id"] in failed_step_ids
             ]
@@ -530,7 +548,10 @@ class AgentLoop:
             plan_span,
             "success" if plan_result.status == AgentStatus.SUCCESS else "failure",
         )
-        await trace_manager.persist_span(plan_span)
+        try:
+            await trace_manager.persist_span(plan_span)
+        except Exception as e:
+            logger.warning(f"[AgentLoop] Plan span persist failed: {e}")
 
         if plan_result.status == AgentStatus.FAILURE:
             return plan_result, []
@@ -634,7 +655,10 @@ class AgentLoop:
         if not verifier_agent:
             # No verifier registered — optimistically consider done
             trace_manager.end_span(verify_span, "success")
-            await trace_manager.persist_span(verify_span)
+            try:
+                await trace_manager.persist_span(verify_span)
+            except Exception as e:
+                logger.warning(f"[AgentLoop] Verify span persist failed: {e}")
             return AgentOutput(
                 task_id=task_id,
                 step_id=uuid4(),
@@ -650,7 +674,10 @@ class AgentLoop:
             verify_span,
             "success" if verify_result.status == AgentStatus.SUCCESS else "failure",
         )
-        await trace_manager.persist_span(verify_span)
+        try:
+            await trace_manager.persist_span(verify_span)
+        except Exception as e:
+            logger.warning(f"[AgentLoop] Verify span persist failed: {e}")
 
         return verify_result
 
@@ -708,9 +735,15 @@ class AgentLoop:
         except Exception as e:
             logger.warning(f"[AgentLoop] Short-term memory save failed: {e}")
 
-        await trace_repo.update_status(trace_id, TaskStatus.COMPLETED.value)
+        try:
+            await trace_repo.update_status(trace_id, TaskStatus.COMPLETED.value)
+        except Exception as e:
+            logger.warning(f"[AgentLoop] Trace status update failed: {e}")
         trace_manager.end_span(main_span, "success")
-        await trace_manager.persist_trace(trace_id)
+        try:
+            await trace_manager.persist_trace(trace_id)
+        except Exception as e:
+            logger.warning(f"[AgentLoop] Trace persist failed: {e}")
 
         return AgentOutput(
             task_id=task_id,
@@ -747,9 +780,15 @@ class AgentLoop:
         except Exception as e:
             logger.error(f"[AgentLoop] Error state DB save failed: {e}")
 
-        await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
+        try:
+            await trace_repo.update_status(trace_id, TaskStatus.FAILED.value)
+        except Exception as e:
+            logger.warning(f"[AgentLoop] Trace status update failed: {e}")
         trace_manager.end_span(main_span, "failure", error_message)
-        await trace_manager.persist_trace(trace_id)
+        try:
+            await trace_manager.persist_trace(trace_id)
+        except Exception as e:
+            logger.warning(f"[AgentLoop] Trace persist failed: {e}")
 
         return AgentOutput(
             task_id=task_id,

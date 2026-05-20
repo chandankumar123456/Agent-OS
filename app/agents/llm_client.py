@@ -1,8 +1,31 @@
+import os
+
+import httpx
 from openai import AsyncOpenAI
 from typing import Optional, List, Dict, Any
 from ..config.settings import settings
 from ..logs.logger import logger
 from ..logs.metrics import metrics_collector
+
+
+def _create_openai_client(api_key: str) -> AsyncOpenAI:
+    """Create an AsyncOpenAI client with SSL error handling.
+
+    If the SSL_CERT_FILE environment variable points to a missing file,
+    the default httpx transport will raise FileNotFoundError. This helper
+    catches that and retries with SSL verification disabled.
+    """
+    try:
+        client = AsyncOpenAI(api_key=api_key)
+        return client
+    except (FileNotFoundError, OSError) as e:
+        logger.warning(
+            f"OpenAI client creation failed due to SSL/cert error: {e}. "
+            "Retrying with SSL verification disabled."
+        )
+        http_client = httpx.AsyncClient(verify=False)
+        client = AsyncOpenAI(api_key=api_key, http_client=http_client)
+        return client
 
 
 def _calculate_cost(model: str, input_tokens: int, output_tokens: int) -> float:
@@ -78,7 +101,7 @@ class LLMClient:
         if not self.api_key:
             raise RuntimeError("OpenAI API key is required")
 
-        self.client = AsyncOpenAI(api_key=self.api_key)
+        self.client = _create_openai_client(self.api_key)
         logger.info(f"LLM client initialized with model: {self.model}")
 
     async def complete(

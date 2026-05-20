@@ -19,7 +19,15 @@ StdioServerParameters = mcp_package.StdioServerParameters
 from ..logs.logger import logger
 
 # ExceptionGroup is standard in Python 3.11+
-from builtins import BaseExceptionGroup, ExceptionGroup
+try:
+    from builtins import BaseExceptionGroup, ExceptionGroup
+except (ImportError, AttributeError):
+    try:
+        from exceptiongroup import BaseExceptionGroup, ExceptionGroup
+    except ImportError:
+        # Fallback: define minimal stubs so except clauses don't crash
+        BaseExceptionGroup = BaseException
+        ExceptionGroup = Exception
 
 
 @dataclass

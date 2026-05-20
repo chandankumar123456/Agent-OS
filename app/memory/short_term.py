@@ -1,4 +1,7 @@
-import redis.asyncio as redis
+try:
+    import redis.asyncio as redis
+except ImportError:
+    redis = None  # type: ignore[assignment]
 from typing import Optional, Dict, Any
 import json
 from ..config.settings import settings
@@ -22,6 +25,10 @@ class RedisClient:
         # In gRPC mode, skip Redis entirely — in-memory fallbacks are used
         if _is_grpc_mode():
             logger.debug("Skipping Redis connect in gRPC mode (using in-memory fallbacks)")
+            return
+
+        if redis is None:
+            logger.warning("Redis package not available, skipping connection")
             return
 
         if self.client is not None:
