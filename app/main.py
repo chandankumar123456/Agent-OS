@@ -229,8 +229,4 @@ async def metrics_middleware(request, call_next):
     return response
 
 
-@app.get("/health")
-async def health():
-    """Basic health check endpoint."""
-    from .config.mode import get_runtime_mode
-    return {"status": "healthy", "version": settings.VERSION, "mode": get_runtime_mode().value}
+

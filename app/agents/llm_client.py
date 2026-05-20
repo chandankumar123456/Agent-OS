@@ -19,9 +19,9 @@ def _create_openai_client(api_key: str) -> AsyncOpenAI:
         client = AsyncOpenAI(api_key=api_key)
         return client
     except (FileNotFoundError, OSError) as e:
-        logger.warning(
-            f"OpenAI client creation failed due to SSL/cert error: {e}. "
-            "Retrying with SSL verification disabled."
+        logger.error(
+            f"SSL certificate file not found. Falling back to INSECURE connection (verify=False). "
+            f"Fix by setting SSL_CERT_FILE to a valid CA bundle path. Error: {e}"
         )
         http_client = httpx.AsyncClient(verify=False)
         client = AsyncOpenAI(api_key=api_key, http_client=http_client)

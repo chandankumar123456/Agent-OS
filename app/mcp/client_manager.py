@@ -25,8 +25,9 @@ except (ImportError, AttributeError):
     try:
         from exceptiongroup import BaseExceptionGroup, ExceptionGroup
     except ImportError:
-        # Fallback: define minimal stubs so except clauses don't crash
-        BaseExceptionGroup = BaseException
+        # Fallback: define minimal stubs so except clauses don't crash.
+        # Use Exception (not BaseException) to avoid catching KeyboardInterrupt/SystemExit.
+        BaseExceptionGroup = Exception
         ExceptionGroup = Exception
 
 

@@ -17,6 +17,8 @@ from typing import Optional
 
 # ---- Security: path resolution (from app/mcp/servers/filesystem.py) ----
 
+MAX_READ_SIZE = 10 * 1024 * 1024  # 10 MB
+
 _home = os.path.expanduser("~")
 SAFE_ROOTS = [
     os.getcwd(),
@@ -108,6 +110,9 @@ async def local_read_file(path: str) -> str:
             return f"Error: File not found: {path}"
         if target.is_dir():
             return f"Error: Path is a directory: {path}"
+        file_size = target.stat().st_size
+        if file_size > MAX_READ_SIZE:
+            return f"Error: File too large ({file_size} bytes, max {MAX_READ_SIZE} bytes): {path}"
         with open(target, "r", encoding="utf-8", errors="ignore") as f:
             return f.read()
     except Exception as e:
