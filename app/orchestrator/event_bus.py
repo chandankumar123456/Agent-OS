@@ -1,87 +1,71 @@
+"""Local in-process event bus using asyncio.
+
+Replaces the Redis pub/sub event bus with a simple asyncio-based
+implementation suitable for the desktop-native single-process runtime.
+"""
+from __future__ import annotations
+
 import asyncio
-import json
-from typing import AsyncIterator, Dict, Any, Optional
-from datetime import datetime, timezone
+from collections import defaultdict
+from typing import AsyncIterator, Dict, List, Optional
 
 from ..logs.logger import logger
-from ..config.settings import settings
+from .types import Event
+
+# Re-export Event for backward compatibility
+__all__ = ["EventBus", "event_bus", "Event"]
 
 
-def _is_desktop_mode() -> bool:
-    """Check if running in desktop-native gRPC mode."""
-    mode = settings.RUNTIME_MODE or "http"
-    return mode.lower() == "grpc"
+class EventBus:
+    """Local in-process event bus using asyncio.Queue per subscriber.
 
+    Provides publish/subscribe semantics without Redis dependency.
+    Each subscriber gets its own queue, and publish fans out to all
+    subscribers on a channel.
+    """
 
-class Event:
-    def __init__(
-        self,
-        event_type: str,
-        payload: Dict[str, Any],
-        source: str = "",
-        timestamp: Optional[str] = None,
-    ):
-        self.event_type = event_type
-        self.payload = payload
-        self.source = source
-        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
-
-    def json(self) -> str:
-        return json.dumps(
-            {
-                "type": self.event_type,
-                "payload": self.payload,
-                "source": self.source,
-                "timestamp": self.timestamp,
-            },
-            default=str,
-        )
-
-    @classmethod
-    def parse(cls, raw: str) -> "Event":
-        data = json.loads(raw)
-        return cls(
-            data["type"],
-            data.get("payload", {}),
-            data.get("source", ""),
-            data.get("timestamp"),
-        )
-
-
-class RedisEventBus:
-    """Reliable event bus backed by a dedicated Redis pub/sub connection pool."""
+    def __init__(self):
+        self._subscribers: Dict[str, List[asyncio.Queue]] = defaultdict(list)
+        self._lock = asyncio.Lock()
 
     async def publish(self, channel: str, event: Event) -> None:
-        try:
-            from ..memory.redis_pubsub import redis_pubsub_client
-            await redis_pubsub_client.publish(f"agentos:{channel}", event.json())
-        except Exception as e:
-            logger.error(f"Event publish failed: {e}")
+        """Publish an event to all subscribers on a channel."""
+        async with self._lock:
+            subscribers = list(self._subscribers.get(channel, []))
+
+        for queue in subscribers:
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                logger.warning(f"Event bus subscriber queue full on channel {channel}")
+            except Exception as e:
+                logger.warning(f"Event bus publish error on channel {channel}: {e}")
 
     async def subscribe(self, channel: str) -> AsyncIterator[Event]:
-        """Yield events from a channel.  Propagates CancelledError and unexpected exceptions
-        so that callers can decide whether to reconnect.
-        """
+        """Subscribe to events on a channel. Yields events as they arrive."""
+        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+        async with self._lock:
+            self._subscribers[channel].append(queue)
         try:
-            from ..memory.redis_pubsub import redis_pubsub_client
-            async for raw in redis_pubsub_client.subscribe(f"agentos:{channel}"):
-                try:
-                    yield Event.parse(raw)
-                except Exception as e:
-                    logger.warning(f"Failed to parse event: {e}")
+            while True:
+                event = await queue.get()
+                yield event
         except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            logger.error(f"Event subscribe failed: {e}")
-            raise
+            pass
+        finally:
+            async with self._lock:
+                try:
+                    self._subscribers[channel].remove(queue)
+                except ValueError:
+                    pass
+                if not self._subscribers[channel]:
+                    del self._subscribers[channel]
+
+    async def unsubscribe_all(self, channel: str) -> None:
+        """Remove all subscribers from a channel."""
+        async with self._lock:
+            self._subscribers.pop(channel, None)
 
 
-def get_event_bus():
-    """Get the appropriate event bus for the current runtime mode."""
-    if _is_desktop_mode():
-        from ..desktop_native.event_bus import local_event_bus
-        return local_event_bus
-    return RedisEventBus()
-
-
-event_bus = get_event_bus()
+# Module-level singleton
+event_bus = EventBus()

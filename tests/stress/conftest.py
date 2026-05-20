@@ -29,7 +29,6 @@ async def stress_async_client():
     """
     from app.memory.long_term import db
     from app.memory.short_term import redis_client
-    from app.memory.redis_pubsub import redis_pubsub_client
     from app.runtime.runtime import AgentRuntime
 
     try:
@@ -82,12 +81,6 @@ async def stress_async_client():
         logger.error(f"Redis connection failed in stress_async_client: {e}")
         raise
 
-    try:
-        await redis_pubsub_client.connect()
-    except Exception as e:
-        logger.error(f"Redis PubSub connection failed in stress_async_client: {e}")
-        raise
-
     runtime = AgentRuntime()
     try:
         await runtime.initialize()
@@ -104,11 +97,6 @@ async def stress_async_client():
         await runtime.shutdown_all()
     except Exception as e:
         logger.error(f"AgentRuntime shutdown failed in stress_async_client: {e}")
-
-    try:
-        await redis_pubsub_client.disconnect()
-    except Exception as e:
-        logger.error(f"Redis PubSub disconnect failed in stress_async_client: {e}")
 
     try:
         await redis_client.disconnect()

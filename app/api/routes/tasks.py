@@ -435,12 +435,7 @@ async def delete_task(task_id: UUID, current_user: object = Depends(get_current_
     except Exception:
         pass
 
-    # Attempt to revoke Celery task if running
-    try:
-        from ..queue.tasks import celery_app
-        celery_app.control.revoke(str(task_id), terminate=True, signal='SIGTERM')
-    except Exception:
-        pass
+    # Celery task revocation removed (desktop-native mode has no Celery workers)
 
     return {"message": "Task deleted", "task_id": str(task_id)}
 

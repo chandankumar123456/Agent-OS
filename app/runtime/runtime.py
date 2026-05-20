@@ -6,19 +6,17 @@ from ..orchestrator.errors import AgentOSError, UnrecoverableError, ErrorCode, E
 from .worker import AgentWorker
 from .factory import AgentFactory
 from .pool import AgentPool
-
-# gRPC client imports (core dependency, always available)
-from ..proto.grpc_client import GRPCClient, GRPCClientConfig
-from ..runtime.mode import get_runtime_mode, get_grpc_client_config, RuntimeMode
-from ..config.mode import get_grpc_address
-GRPC_AVAILABLE = True
+from ..runtime.mode import get_runtime_mode, RuntimeMode
 
 
 class AgentRuntime:
-    """Singleton registry mapping agent_id → AgentWorker. Manages lifecycle.
+    """Singleton registry mapping agent_id -> AgentWorker. Manages lifecycle.
 
     This is the ONLY execution entry point for all agent operations.
     No other module may instantiate agents directly.
+
+    AgentRuntime is a pure agent registry: register(), get(), list_active(),
+    shutdown_all(). It does NOT own gRPC or execution -- the kernel handles that.
     """
 
     _instance = None
@@ -33,10 +31,6 @@ class AgentRuntime:
             cls._instance._initialized = False
             cls._instance._init_lock = asyncio.Lock()
             cls._instance._register_locks: Dict[str, asyncio.Lock] = {}
-            cls._instance._init_mutex_value = None
-            # gRPC client (optional, only when in GRPC mode)
-            cls._instance._grpc_client: Optional[GRPCClient] = None
-            cls._instance._grpc_mode = False
             from ..orchestrator.errors import UnrecoverableError, ErrorCode, ErrorType
             cls._UnrecoverableError = UnrecoverableError
             cls._ErrorCode = ErrorCode
@@ -47,89 +41,47 @@ class AgentRuntime:
         """Eagerly register core system agents. Called once at app startup.
 
         Idempotent: safe to call multiple times. Subsequent calls are no-ops.
-        Uses a Redis mutex to avoid duplicate DB writes across processes.
         """
         async with self._init_lock:
             if self._initialized:
                 logger.debug("AgentRuntime.initialize() called but already initialized; skipping")
                 return
-            
-            # Initialize gRPC client if in grpc mode
-            if GRPC_AVAILABLE:
-                try:
-                    mode = get_runtime_mode()
-                    self._grpc_mode = (mode == RuntimeMode.GRPC)
-                    if self._grpc_mode:
-                        logger.info("AgentRuntime initializing in gRPC mode")
-                        config = get_grpc_client_config()
-                        self._grpc_client = GRPCClient(config)
-                        await self._grpc_client.connect()
-                        logger.info(f"gRPC client connected in mode: {mode}")
-                    else:
-                        logger.info(f"AgentRuntime initializing in HTTP mode (mode={mode})")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize gRPC client: {e}")
-                    self._grpc_mode = False
-            else:
-                logger.info("AgentRuntime initializing without gRPC support")
-            
-            logger.info("AgentRuntime initializing core agents...")
 
-            # Try to acquire a cross-process Redis mutex for DB writes
-            acquired_mutex = False
-            try:
-                from ..memory.short_term import redis_client
-                if redis_client.client:
-                    mutex_value = f"{os.getpid()}:{asyncio.get_running_loop().time()}"
-                    acquired = await redis_client.client.set(
-                        "agentos:runtime:init_mutex", mutex_value, nx=True, ex=3600
-                    )
-                    if acquired:
-                        self._init_mutex_value = mutex_value
-                        acquired_mutex = True
-                        logger.info("Acquired runtime initialization mutex")
-                    else:
-                        logger.info("Runtime initialization mutex held by another process; skipping DB writes")
+            mode = get_runtime_mode()
+            logger.info(f"AgentRuntime initializing core agents... (mode={mode})")
+
+            for core_type in ("planner", "executor", "verifier"):
+                agent_id = f"core_{core_type}"
+                if agent_id not in self._workers:
+                    try:
+                        await self.register(agent_id, {"role": core_type})
+                        logger.info(f"Registered core agent: {agent_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to register core agent {agent_id}: {e}")
                 else:
-                    # Redis unavailable (e.g., tests) — proceed locally
-                    acquired_mutex = True
-            except Exception as e:
-                logger.warning(f"Redis mutex check failed, proceeding with local init: {e}")
-                acquired_mutex = True
+                    logger.debug(f"Core agent already registered: {agent_id}")
 
-            if acquired_mutex:
+            # Persist core agents to database so they appear in API listings
+            try:
+                from ..memory.long_term import agent_repo
                 for core_type in ("planner", "executor", "verifier"):
                     agent_id = f"core_{core_type}"
-                    if agent_id not in self._workers:
-                        try:
-                            await self.register(agent_id, {"role": core_type})
-                            logger.info(f"Registered core agent: {agent_id}")
-                        except Exception as e:
-                            logger.error(f"Failed to register core agent {agent_id}: {e}")
-                    else:
-                        logger.debug(f"Core agent already registered: {agent_id}")
+                    await agent_repo.upsert(
+                        agent_key=agent_id,
+                        name=agent_id,
+                        role=core_type,
+                        status="active",
+                    )
+                logger.info("Core agents persisted to database")
+            except Exception as e:
+                logger.warning(f"Failed to persist core agents to database: {e}")
 
-                # Persist core agents to database so they appear in API listings
-                try:
-                    from ..memory.long_term import agent_repo
-                    for core_type in ("planner", "executor", "verifier"):
-                        agent_id = f"core_{core_type}"
-                        await agent_repo.upsert(
-                            agent_key=agent_id,
-                            name=agent_id,
-                            role=core_type,
-                            status="active",
-                        )
-                    logger.info("Core agents persisted to database")
-                except Exception as e:
-                    logger.warning(f"Failed to persist core agents to database: {e}")
-
-                # Load additional agents from DB (inside mutex to prevent duplicate registration)
-                try:
-                    await self.load_from_db()
-                    logger.info("Agents loaded from database into runtime")
-                except Exception as e:
-                    logger.warning(f"Failed to load agents from database: {e}")
+            # Load additional agents from DB
+            try:
+                await self.load_from_db()
+                logger.info("Agents loaded from database into runtime")
+            except Exception as e:
+                logger.warning(f"Failed to load agents from database: {e}")
 
             self._initialized = True
             logger.info("AgentRuntime initialized with core agents")
@@ -147,114 +99,19 @@ class AgentRuntime:
         self._workers.clear()
         self._register_locks.clear()
         self._initialized = False
-        # Best-effort release of Redis mutex so next test/process can acquire it
-        if self._init_mutex_value:
-            try:
-                loop = asyncio.get_running_loop()
-                from ..memory.short_term import redis_client
-                if redis_client.client:
-                    loop.create_task(redis_client.client.delete("agentos:runtime:init_mutex"))
-            except Exception:
-                pass
-            self._init_mutex_value = None
         logger.info("AgentRuntime reset")
-    
-    async def initialize_grpc_client(self) -> bool:
-        """Initialize gRPC client when in GRPC mode.
-        
-        Returns:
-            bool: True if gRPC client initialized successfully, False otherwise
-        """
-        if not GRPC_AVAILABLE:
-            logger.warning("gRPC not available (import error)")
-            return False
-        
-        try:
-            mode = get_runtime_mode()
-            # mode is a RuntimeMode enum from config.mode
-            self._grpc_mode = (mode == RuntimeMode.GRPC)
-            
-            if not self._grpc_mode:
-                logger.info("Runtime mode is HTTP, skipping gRPC client initialization")
-                return False
-            
-            # Initialize gRPC client
-            grpc_address = get_grpc_address()
-            host, port_str = grpc_address.rsplit(":", 1)
-            port = int(port_str)
-            
-            config = GRPCClientConfig(
-                host=host,
-                port=port,
-                connection_timeout=5.0,
-                keepalive_timeout=60
-            )
-            
-            self._grpc_client = GRPCClient(config)
-            await self._grpc_client.connect()
-            
-            logger.info(f"gRPC client initialized for mode={mode}, address={grpc_address}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize gRPC client: {e}")
-            self._grpc_client = None
-            self._grpc_mode = False
-            return False
-    
-    async def shutdown_grpc_client(self):
-        """Shutdown gRPC client if initialized."""
-        if self._grpc_client and self._grpc_client.is_connected:
-            try:
-                await self._grpc_client.close()
-                logger.info("gRPC client shutdown")
-            except Exception as e:
-                logger.error(f"Failed to shutdown gRPC client: {e}")
-    
+
     def is_grpc_mode(self) -> bool:
         """Check if runtime is in gRPC mode.
-        
+
         Returns:
             bool: True if gRPC mode, False if HTTP mode
         """
-        return self._grpc_mode
-    
-    async def execute_task_via_grpc(
-        self,
-        task_id: str,
-        task_type: str = "mcp_tool_call",
-        payload: str = "",
-        timeout_seconds: int = 300,
-        metadata: Optional[Dict[str, str]] = None
-    ):
-        """Execute a task via gRPC.
-        
-        Args:
-            task_id: Task identifier
-            task_type: Type of task (default: "mcp_tool_call")
-            payload: Task payload (JSON string)
-            timeout_seconds: Task timeout in seconds
-            metadata: Optional task metadata
-            
-        Returns:
-            Task execution response
-            
-        Raises:
-            RuntimeError: If gRPC client not initialized
-        """
-        if not self._grpc_client:
-            raise RuntimeError("gRPC client not initialized. Call initialize_grpc_client() first.")
-        
-        if not self._grpc_client.is_connected:
-            raise RuntimeError("gRPC client not connected.")
-        
-        return await self._grpc_client.worker.execute_task(
-            task_id=task_id,
-            task_type=task_type,
-            payload=payload,
-            timeout_seconds=timeout_seconds,
-            metadata=metadata or {}
-        )
+        try:
+            mode = get_runtime_mode()
+            return mode == RuntimeMode.GRPC
+        except Exception:
+            return False
 
     async def register(self, agent_id: str, config: Dict[str, Any]) -> AgentWorker:
         """Register and start a new agent worker."""
@@ -299,7 +156,7 @@ class AgentRuntime:
         ]
 
     async def shutdown_all(self):
-        """Stop all workers and gRPC client."""
+        """Stop all workers."""
         errors = []
         for agent_id, worker in list(self._workers.items()):
             try:
@@ -312,15 +169,7 @@ class AgentRuntime:
                 errors.append((agent_id, f"release: {e}"))
         self._workers.clear()
         self._initialized = False
-        
-        # Close gRPC client if connected
-        if self._grpc_client:
-            try:
-                await self._grpc_client.close()
-                logger.info("gRPC client closed")
-            except Exception as e:
-                errors.append(("grpc", f"close: {e}"))
-        
+
         if errors:
             logger.warning(f"Shutdown errors: {errors}")
         logger.info("All agent workers shutdown")
@@ -400,7 +249,3 @@ class AgentRuntime:
             self._workers.pop(agent_key, None)
         await self.register(agent_key, config)
         logger.info(f"Runtime loaded agent {agent_key} version {version}")
-    
-    def get_grpc_client(self) -> Optional[Any]:
-        """Get gRPC client if available."""
-        return self._grpc_client if self._grpc_client is not None else None

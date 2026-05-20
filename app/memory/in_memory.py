@@ -192,7 +192,7 @@ class InMemoryDistributedLock:
         owner: str = "system",
         ttl_seconds: Optional[int] = None,
     ) -> Optional["LockRecord"]:
-        from ..orchestrator.locks import LockRecord
+        from ..orchestrator.types import LockRecord
 
         ttl = ttl_seconds or self._default_ttl
         key = self._lock_key(task_id)
@@ -306,7 +306,7 @@ class InMemoryDistributedLock:
             return False
 
     async def get_lock_info(self, task_id: str) -> Optional["LockRecord"]:
-        from ..orchestrator.locks import LockRecord
+        from ..orchestrator.types import LockRecord
 
         key = self._lock_key(task_id)
         try:
@@ -375,7 +375,7 @@ class InMemoryTaskQueue:
         idempotency_key: Optional[str] = None,
         scheduled_for: Optional[datetime] = None,
     ) -> "QueuePosition":
-        from ..orchestrator.queue import TaskPriority, QueuePosition, QueuedTask
+        from ..orchestrator.types import TaskPriority, QueuePosition, QueuedTask
         from ..logs.logger import logger
 
         if priority is None:
@@ -412,7 +412,7 @@ class InMemoryTaskQueue:
 
             # State machine transition (best-effort)
             if self._state_machine:
-                from ..orchestrator.state_machine import TaskState
+                from ..orchestrator.types import TaskState
                 try:
                     await self._state_machine.transition(
                         task_id=task_id,
@@ -460,7 +460,7 @@ class InMemoryTaskQueue:
         worker_id: str,
         max_priority: Optional["TaskPriority"] = None,
     ) -> Optional["QueuedTask"]:
-        from ..orchestrator.queue import TaskPriority, QueuedTask
+        from ..orchestrator.types import TaskPriority, QueuedTask
         from ..logs.logger import logger
 
         try:
@@ -589,7 +589,7 @@ class InMemoryTaskQueue:
         priority: Optional["TaskPriority"] = None,
         delay_seconds: int = 0,
     ) -> bool:
-        from ..orchestrator.queue import TaskPriority, QueuedTask
+        from ..orchestrator.types import TaskPriority, QueuedTask
         from ..logs.logger import logger
 
         try:
@@ -646,7 +646,7 @@ class InMemoryTaskQueue:
         status: Optional[str] = None,
         limit: int = 100,
     ) -> List["QueuedTask"]:
-        from ..orchestrator.queue import QueuedTask
+        from ..orchestrator.types import QueuedTask
         from ..logs.logger import logger
 
         try:

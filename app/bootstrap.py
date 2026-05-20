@@ -142,13 +142,17 @@ async def _init_database(ctx: BootstrapContext) -> None:
 
 
 async def _init_redis(ctx: BootstrapContext) -> None:
-    """Initialize Redis connections (only in HTTP mode)."""
+    """Initialize Redis connections (only in HTTP mode).
+
+    In desktop-native mode (gRPC), Redis is not used. The local event bus
+    and in-memory components handle all pub/sub and caching needs.
+    """
     if is_grpc_mode():
         logger.info("Skipping Redis initialization in gRPC mode")
         return
-    
+
     from .memory.short_term import redis_client
-    
+
     try:
         await redis_client.connect()
         logger.info("Redis connected successfully")
@@ -156,16 +160,7 @@ async def _init_redis(ctx: BootstrapContext) -> None:
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
         raise RuntimeError(f"Redis connection failed: {e}") from e
-    
-    # Initialize Redis PubSub
-    try:
-        from .memory.redis_pubsub import redis_pubsub_client
-        await redis_pubsub_client.connect()
-        logger.info("Redis PubSub client connected")
-        ctx.initialized.append("redis_pubsub")
-    except Exception as e:
-        logger.error(f"Redis PubSub client connection failed: {e}")
-    
+
     # Register shutdown hooks
     async def shutdown_redis():
         try:
@@ -173,17 +168,7 @@ async def _init_redis(ctx: BootstrapContext) -> None:
             logger.info("Redis disconnected")
         except Exception as e:
             logger.error(f"Redis disconnect failed: {e}")
-    
-    async def shutdown_pubsub():
-        if "redis_pubsub" in ctx.initialized:
-            try:
-                from .memory.redis_pubsub import redis_pubsub_client
-                await redis_pubsub_client.disconnect()
-                logger.info("Redis PubSub disconnected")
-            except Exception as e:
-                logger.error(f"Redis PubSub disconnect failed: {e}")
-    
-    ctx.add_shutdown_hook(shutdown_pubsub, "redis_pubsub")
+
     ctx.add_shutdown_hook(shutdown_redis, "redis")
 
 
@@ -232,18 +217,18 @@ async def _init_runtime(ctx: BootstrapContext) -> None:
         runtime = AgentRuntime()
         await runtime.initialize()
         ctx.runtime = runtime
-        
+
         # Log runtime mode
         if runtime.is_grpc_mode():
             logger.info("AgentRuntime initialized in gRPC mode")
         else:
             logger.info("AgentRuntime initialized in HTTP mode")
-        
+
         ctx.initialized.append("runtime")
     except Exception as e:
         logger.error(f"AgentRuntime initialization failed: {e}")
         raise RuntimeError(f"AgentRuntime initialization failed: {e}") from e
-    
+
     # Register shutdown hook
     async def shutdown_runtime():
         if ctx.runtime:
@@ -252,7 +237,7 @@ async def _init_runtime(ctx: BootstrapContext) -> None:
                 logger.info("AgentRuntime shutdown")
             except Exception as e:
                 logger.error(f"AgentRuntime shutdown failed: {e}")
-    
+
     ctx.add_shutdown_hook(shutdown_runtime, "runtime")
 
 

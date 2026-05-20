@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional
 from .models import ObservabilityEvent, ObservabilityEventType
 from ..logs.logger import logger
 from ..memory.long_term import span_repo
-from ..memory.redis_pubsub import redis_pubsub_client
 
 
 class ObservabilityBus:

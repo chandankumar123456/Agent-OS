@@ -6,7 +6,6 @@ from ..logs.logger import logger
 from ..runtime.runtime import AgentRuntime
 from ..logs.tracing import trace_manager
 from ..memory.long_term import task_repo, trace_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
-from ..memory.short_term import short_term_memory
 from ..guardrails.validator import guardrails
 from ..orchestrator.retry import retry_with_backoff, RetryConfig, is_retryable
 from ..orchestrator.errors import ErrorType, UnrecoverableError, RetryableError, ErrorCode
@@ -25,7 +24,7 @@ class Orchestrator:
 
     All execution is delegated to:
     - AgentRuntime (agent lifecycle and execution)
-    - AgentLoop (plan → execute → observe → replan)
+    - AgentLoop (plan -> execute -> observe -> replan)
     - WorkflowBuilder (DAG construction)
     - StepExecutor (step execution)
     """
@@ -76,26 +75,6 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"DB save failed: {e}")
             raise
-
-    async def _hydrate_memory_context(self, context: TaskContext) -> Dict[str, Any]:
-        try:
-            cached = await short_term_memory.get_context(str(context.task_id))
-            if cached:
-                context.context.update(cached)
-        except Exception as e:
-            logger.warning(f"Short-term memory hydration failed: {e}")
-
-        try:
-            recent_tasks = await task_repo.list_by_user(context.user_id, limit=3)
-            if recent_tasks:
-                context.context["recent_tasks"] = [
-                    {"query": t.query, "status": t.status, "result_summary": str(t.result)[:200] if t.result else None}
-                    for t in recent_tasks if t.id != str(context.task_id)
-                ]
-        except Exception as e:
-            logger.warning(f"Recent tasks hydration failed: {e}")
-
-        return context.context
 
     async def _validate_input(self, query: str, config: Dict[str, Any], mode: str = "task") -> None:
         """Validate task input through guardrails. Raises UnrecoverableError on rejection."""
@@ -207,22 +186,6 @@ class Orchestrator:
             return any(keyword in result.lower() for keyword in ["complete", "done", "finished", "success"])
         return output_data.get("complete", False)
 
-    async def _save_final_state(self, context: TaskContext, combined_result: Dict[str, Any], verify_result) -> None:
-        # Defensively ensure trace_id is present in the result for trace retrieval
-        if context.trace_id and "trace_id" not in combined_result:
-            combined_result["trace_id"] = context.trace_id
-        context.result = combined_result
-        context.status = TaskStatus.COMPLETED
-        await self._save_task_state(context)
-        try:
-            await short_term_memory.save_context(str(context.task_id), context.context, expire=1800)
-        except Exception as e:
-            logger.warning(f"Short-term memory save failed: {e}")
-        try:
-            await trace_repo.update_status(context.trace_id, TaskStatus.COMPLETED.value)
-        except Exception as e:
-            logger.warning(f"Trace status update failed: {e}")
-
     async def execute_task(
         self,
         query: str,
@@ -237,7 +200,7 @@ class Orchestrator:
         config = config or {}
         mode = config.get("mode", "task")
 
-        # ── Input Guardrails Gate ──────────────────────────────────────
+        # Input Guardrails Gate
         try:
             await self._validate_input(query, config, mode)
         except UnrecoverableError as guard_err:
@@ -251,37 +214,7 @@ class Orchestrator:
                 recoverable=False,
             )
 
-        # ── AgentLoop is the SINGLE execution path ─────────────────────
-        return await self.agent_loop.run(query, config, task_id, user_id)
-
-    async def _execute_with_langgraph(
-        self,
-        query: str,
-        config: Dict[str, Any],
-        task_id: UUID,
-        user_id: str,
-        mode: str,
-        resume_state: Optional[Dict[str, Any]] = None,
-        resume_value: Optional[Dict[str, Any]] = None,
-    ) -> AgentOutput:
-        """Legacy compatibility — delegates to AgentLoop.
-
-        The AgentLoop subsumes the old LangGraph execution path.
-        ``resume_state`` and ``resume_value`` are accepted but not
-        used; the AgentLoop manages its own state internally.
-        """
-        logger.info(
-            f"[core] _execute_with_langgraph delegated to AgentLoop "
-            f"(resume_state={'present' if resume_state else 'absent'}, "
-            f"resume_value={'present' if resume_value else 'absent'})"
-        )
-        return await self.agent_loop.run(query, config, task_id, user_id)
-
-    async def _execute_pipeline(self, query, config=None, task_id=None, user_id=None):
-        """Legacy compatibility — delegates to AgentLoop.
-
-        PipelineExecutor.execute() also now routes through AgentLoop.
-        """
+        # AgentLoop is the SINGLE execution path
         return await self.agent_loop.run(query, config, task_id, user_id)
 
     async def run_workflow(self, query: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
