@@ -107,8 +107,14 @@ class Settings(BaseSettings):
         if not self.DATABASE_URL:
             raise ValueError("DATABASE_URL is required")
         # Skip Redis check in gRPC mode (supervisor handles Redis)
+        # In HTTP mode, allow running without Redis (use in-memory fallbacks)
         if self.RUNTIME_MODE.lower() != "grpc" and not self.REDIS_URL:
-            raise ValueError("REDIS_URL is required")
+            import warnings
+            warnings.warn(
+                "REDIS_URL is not set. Running in HTTP mode without Redis. "
+                "In-memory fallbacks will be used for Redis-backed features.",
+                UserWarning,
+            )
         enabled = [p.strip().lower() for p in self.ENABLED_PROVIDERS.split(",") if p.strip()]
         if "openai" in enabled and not self.OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is required when OpenAI provider is enabled")

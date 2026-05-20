@@ -126,7 +126,8 @@ class DesktopRuntime:
         await self.grpc_server.start()
 
         # Keep bootstrap for compatibility (initializes DB, runtime, etc.)
-        self.ctx = await bootstrap()
+        # Skip runtime init since kernel already created and started AgentRuntime
+        self.ctx = await bootstrap(skip_runtime=True)
 
         # Setup signal handlers for graceful shutdown
         setup_signal_handlers(self.ctx)

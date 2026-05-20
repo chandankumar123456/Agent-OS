@@ -4,13 +4,19 @@ from sqlalchemy import text
 from ...logs.metrics import metrics_collector
 from ...memory.long_term import db
 from ...memory.short_term import redis_client
+from ...config.settings import settings
+from ...config.mode import get_runtime_mode
 
 router = APIRouter(prefix="/health", tags=["health"])
 
 
 @router.get("", status_code=status.HTTP_200_OK)
 async def health_check():
-    return {"status": "ok"}
+    return {
+        "status": "healthy",
+        "version": settings.VERSION,
+        "mode": get_runtime_mode().value,
+    }
 
 
 @router.get("/ready", status_code=status.HTTP_200_OK)
@@ -36,11 +42,16 @@ async def readiness_check():
             await redis_client.client.ping()
             checks["redis"] = "ok"
         else:
-            checks["redis"] = "not_initialized"
-            healthy = False
+            # Redis is optional when REDIS_URL is not set
+            if settings.REDIS_URL:
+                checks["redis"] = "not_initialized"
+                healthy = False
+            else:
+                checks["redis"] = "skipped (no REDIS_URL)"
     except Exception as e:
         checks["redis"] = f"error: {e}"
-        healthy = False
+        if settings.REDIS_URL:
+            healthy = False
 
     if not healthy:
         from fastapi import HTTPException

@@ -40,6 +40,7 @@ class MCPWrappedTool:
 
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         from ..mcp.client_manager import mcp_client_manager
+        from .local_fallbacks import LOCAL_FALLBACKS
         logger.info(f"[registry][TRACE] MCP INVOKE: name='{self.name}' args={ {k:v for k,v in tool_input.parameters.items() if not k.startswith('_')} }")
         try:
             # Strip internal params (e.g., _task_id) before sending to MCP server,
@@ -71,6 +72,24 @@ class MCPWrappedTool:
             return ToolOutput(success=True, result={"output": content}, visibility=visibility)
         except Exception as e:
             logger.error(f"[registry][TRACE] MCP ERROR: name='{self.name}' error={e}")
+            # Fallback to local implementation if MCP server is unavailable
+            fallback_fn = LOCAL_FALLBACKS.get(self.name)
+            if fallback_fn is not None:
+                logger.info(f"[registry][TRACE] MCP FALLBACK: name='{self.name}' using local implementation")
+                try:
+                    arguments = {k: v for k, v in tool_input.parameters.items() if not k.startswith("_")}
+                    fallback_result = await fallback_fn(**arguments)
+                    visibility = None
+                    if self.name.startswith("filesystem__"):
+                        path = tool_input.parameters.get("path", "")
+                        visibility = {"type": "file_operation", "path": path, "operation": self.name}
+                    elif self.name.startswith("shell__"):
+                        cmd = tool_input.parameters.get("command", "")
+                        visibility = {"type": "shell_output", "command": cmd}
+                    return ToolOutput(success=True, result={"output": fallback_result}, visibility=visibility)
+                except Exception as fallback_err:
+                    logger.error(f"[registry][TRACE] MCP FALLBACK ERROR: name='{self.name}' error={fallback_err}")
+                    return ToolOutput(success=False, error=f"MCP failed: {e}; fallback failed: {fallback_err}")
             return ToolOutput(success=False, error=str(e))
 
 
