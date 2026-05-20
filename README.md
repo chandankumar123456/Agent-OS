@@ -154,16 +154,36 @@ The system is written in **Python** (asyncio, LangGraph, gRPC), **Go** (supervis
 
 | Component   | Language   | Framework/Libraries                                       | Purpose                              |
 |-------------|------------|----------------------------------------------------------|--------------------------------------|
-| Kernel      | Python 3.11| asyncio, aiosqlite, LangGraph, Pydantic 2                | Desktop-native execution engine      |
-| API Server  | Python 3.11| FastAPI, Uvicorn, SQLAlchemy 2.0, asyncpg                | HTTP/WS API for cloud mode           |
+| Unified Core| Python 3.11| asyncio, aiosqlite, LangGraph, Pydantic 2                | `app/core/` - unified runtime API    |
+| Kernel      | Python 3.11| asyncio, aiosqlite, SQLite (WAL)                         | Desktop-native execution engine      |
+| Cloud API   | Python 3.11| FastAPI, Uvicorn, SQLAlchemy 2.0 (OPTIONAL)              | `app/cloud_api/` - HTTP/WS for cloud deployment only |
 | Orchestrator| Python     | LangGraph, LangChain, Pydantic 2                         | Agent orchestration & state graphs   |
-| Task Queue  | Python     | asyncio.PriorityQueue + SQLite (desktop) / Redis (cloud) | Async task processing                |
+| Task Queue  | Python     | asyncio.PriorityQueue + SQLite                           | Async task processing (local-first)  |
 | Supervisor  | Go 1.23    | gRPC, gorilla/websocket, modernc/sqlite                  | Control plane, task lifecycle, SQLite |
 | CLI         | Rust       | clap, reqwest, tokio, comfy-table                         | Terminal user commands               |
 | TUI         | Rust       | ratatui 0.26, crossterm, tokio-tungstenite                | Terminal dashboard                   |
 | Desktop     | Rust       | tonic, prost, windows (Win32 API), image                  | Native desktop automation (gRPC)     |
 | GUI         | TypeScript | React 18, Tailwind CSS, Tauri 1.5                        | Desktop GUI application              |
-| Database    | —          | SQLite (WAL, primary) / PostgreSQL 16 (cloud opt)        | Persistence                          |
+| Database    | --         | SQLite (WAL, sole dependency in desktop mode)            | Persistence                          |
+
+> **Note:** Redis, Celery, and PostgreSQL have been removed from the desktop runtime path. They are no longer required dependencies. FastAPI is preserved in `app/cloud_api/` as an optional module for cloud/remote deployment scenarios only. The desktop-native mode (default) requires only Python, SQLite, and the Go Supervisor.
+
+### Quick Start (Desktop-Native Mode)
+
+Desktop-native is the default and recommended mode. No external infrastructure required.
+
+```bash
+# Start the Go Supervisor (which manages the Python runtime)
+./supervisor/agentos-supervisor
+
+# Or start the Python runtime directly for development
+AGENTOS_RUNTIME_MODE=grpc python -m app.desktop_entry
+```
+
+The desktop entry point forces:
+- `AGENTOS_RUNTIME_MODE=grpc`
+- `DATABASE_URL=sqlite+aiosqlite:///$HOME/.agentos/agentos.db`
+- No Redis, no PostgreSQL, no Celery, no FastAPI
 
 ---
 
@@ -171,14 +191,16 @@ The system is written in **Python** (asyncio, LangGraph, gRPC), **Go** (supervis
 
 ### 2.1 Python Backend (`app/`)
 
-The Python backend is the core execution engine. It is organized into 19 packages under `app/`, with the new `desktop_native/` package serving as the primary runtime in desktop mode:
+The Python backend is the core execution engine. The unified public API is through `app/core/`, which consolidates access to the kernel, orchestration, state management, agents, memory, tools, recovery, and observability. Implementation details remain in their respective packages (`desktop_native/`, `orchestrator/`, `agents/`, `tools/`, etc.) but all external access is through the `app.core` namespace.
 
 | Package              | Lines   | Key Responsibilities                                          |
 |----------------------|---------|---------------------------------------------------------------|
+| `app/core/`          | ~500    | **Unified public API**: kernel, orchestration, state, execution, agents, memory, tools, recovery, observability |
 | `app/config/`        | ~275    | Settings management, runtime mode detection (HTTP/gRPC)       |
 | `app/bootstrap.py`   | 420     | Canonical initialization sequence, lifecycle management       |
-| `app/main.py`        | 223     | FastAPI web server entry point, middleware, error handlers    |
+| `app/main.py`        | ~50     | Mode-detecting entry point (routes to desktop or cloud)       |
 | `app/desktop_entry.py`| 241    | Canonical desktop entry point; forces SQLite, starts gRPC    |
+| `app/cloud_api/`     | ~4,500  | **OPTIONAL** FastAPI server for cloud deployment (relocated from app/main.py + app/api/ + app/middleware/) |
 | `app/desktop_native/` | ~5,256  | Unified desktop-native runtime kernel and subsystems          |
 | `app/runtime/`       | ~3,309  | AgentRuntime singleton, worker pool, factory, scaling, gRPC  |
 | `app/orchestrator/`  | ~5,836  | Core orchestrator, task runner, workflow, queue, state machine|
