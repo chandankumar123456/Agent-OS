@@ -117,6 +117,7 @@ class DesktopRuntime:
         logger.info(f"SQLite tuning: {tuning}")
 
         # Initialize AgentKernel (replaces fragmented runtime)
+        # Public API: from app.core.kernel import UnifiedKernel
         from app.desktop_native.kernel import AgentKernel
         self.kernel = AgentKernel()
         await self.kernel.start()

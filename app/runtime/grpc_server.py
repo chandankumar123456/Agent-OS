@@ -51,6 +51,15 @@ class GRPCServer:
     """
 
     def __init__(self, host: str = "0.0.0.0", port: int = 50051, kernel=None):
+        """Initialize GRPCServer.
+
+        Args:
+            host: Bind address for the gRPC server.
+            port: Port number.
+            kernel: Optional AgentKernel or UnifiedKernel (from app.core.kernel)
+                    instance. If provided, the server delegates to the kernel
+                    instead of creating its own runtime.
+        """
         self._host = host
         self._port = port
         self._server = None
