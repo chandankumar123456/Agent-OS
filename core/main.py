@@ -4,14 +4,14 @@ This module provides the HTTP API and WebSocket interface for AgentOS.
 It is now a thin wrapper around the shared bootstrap module, adding
 only FastAPI-specific components (routes, middleware, CORS, etc.).
 
-For desktop-native mode, use `app.desktop_entry` instead.
+For the unified kernel entry point, use: python -m core
 
 Usage:
-    # Development
-    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Development (via adapter)
+    python -m core --http --http-port 8000
     
-    # Production
-    python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    # Legacy standalone (deprecated)
+    python -m uvicorn core.main:app --host 0.0.0.0 --port 8000
 """
 
 from fastapi import FastAPI, Request

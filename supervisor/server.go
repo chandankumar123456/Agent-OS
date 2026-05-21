@@ -204,7 +204,7 @@ func (s *Supervisor) startPythonRuntime() error {
 		return err
 	}
 
-	cmd := exec.Command(pythonPath, "-m", "app.desktop_entry")
+	cmd := exec.Command(pythonPath, "-m", "core")
 	cmd.Env = append(os.Environ(),
 		"AGENTOS_RUNTIME_MODE=grpc",
 		fmt.Sprintf("AGENTOS_API_KEY=%s", s.apiKey),

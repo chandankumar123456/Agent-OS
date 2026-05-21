@@ -1,8 +1,31 @@
 version: '3.8'
 
 services:
+  kernel:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=gpt-4o
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+  # Full-stack services (postgres, redis, celery worker) are available
+  # via the "full" profile for development/testing:
+  #   docker compose --profile full up
   postgres:
     image: postgres:16-alpine
+    profiles: ["full"]
     environment:
       POSTGRES_USER: agentos
       POSTGRES_PASSWORD: agentos
@@ -19,6 +42,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    profiles: ["full"]
     ports:
       - "6379:6379"
     volumes:
@@ -28,71 +52,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
-
-  api:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://agentos:agentos@postgres:5432/agentos
-      - REDIS_URL=redis://:@redis:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=gpt-4o
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # Dev mode: uncomment below for hot-reload (mounts entire project)
-    # volumes:
-    #   - ..:/app
-    # command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 128M
-
-  worker:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile
-    environment:
-      - DATABASE_URL=postgresql+asyncpg://agentos:agentos@postgres:5432/agentos
-      - REDIS_URL=redis://:@redis:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=gpt-4o
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # Dev mode: uncomment below for live code sync
-    # volumes:
-    #   - ..:/app
-    # Run migrations before starting the Celery worker
-    command: sh -c "scripts/migrate.sh && exec celery -A app.queue.tasks worker --loglevel=info --concurrency=4 --prefetch-multiplier=1"
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A app.queue.tasks inspect ping || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          cpus: '1.0'
-          memory: 512M
-        reservations:
-          cpus: '0.25'
-          memory: 128M
 
 volumes:
   postgres_data:

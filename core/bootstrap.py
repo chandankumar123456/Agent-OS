@@ -1,8 +1,8 @@
-"""AgentOS Bootstrap Module — Shared initialization for all runtime modes.
+"""AgentOS Bootstrap Module -- Shared initialization for all runtime modes.
 
 This module provides the canonical initialization sequence for AgentOS,
-used by both the FastAPI web server (app.main) and the desktop-native
-entry point (app.desktop_entry).
+used by the unified entry point (python -m core) and the optional HTTP
+adapter (core.adapters.http).
 
 Design Principles:
 - No FastAPI dependencies in core bootstrapping
@@ -18,7 +18,7 @@ import sys
 from contextlib import asynccontextmanager
 from typing import Dict, Any, List, Optional, Callable
 
-# Core runtime imports (no FastAPI)
+# Core runtime imports (no FastAPI or HTTP dependencies)
 from .config.settings import settings
 from .logs.logger import logger
 from .runtime.runtime import AgentRuntime
@@ -101,7 +101,7 @@ async def _check_dependencies() -> None:
         raise RuntimeError(
             "SECRET_KEY is required but not set or empty. "
             "Set a persistent SECRET_KEY in your environment "
-            "so that all processes (FastAPI, Celery workers, runtime) share the same key."
+            "so that all processes (kernel, HTTP adapter, workers) share the same key."
         )
 
     if len(settings.SECRET_KEY) < 32:
@@ -376,7 +376,7 @@ async def bootstrap(
     """Bootstrap AgentOS runtime with all core components.
     
     This is the canonical initialization sequence for AgentOS,
-    used by both HTTP (FastAPI) and gRPC (desktop-native) modes.
+    used by both the kernel entry point and the optional HTTP adapter.
     
     Args:
         skip_dependencies_check: Skip environment validation

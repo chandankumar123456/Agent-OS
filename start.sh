@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Agent-OS Startup Script
-# Starts the FastAPI HTTP server with minimal configuration.
+# Starts the unified kernel with optional HTTP adapter.
 
 set -e
 
@@ -35,26 +35,21 @@ else
     echo "[ok] SSL_CERT_FILE already set: $SSL_CERT_FILE"
 fi
 
-# 3. Install Python dependencies if needed
-PYTHON=python3.12
+# 3. Find Python
+PYTHON=python3.11
 if ! command -v "$PYTHON" &> /dev/null; then
     PYTHON=python3
 fi
 
-if ! "$PYTHON" -c "import fastapi" &> /dev/null; then
-    echo "[setup] Installing Python dependencies..."
-    "$PYTHON" -m pip install -r requirements.txt --quiet
-else
-    echo "[ok] Python dependencies already installed"
+# 4. Collect extra flags
+EXTRA_FLAGS=""
+if [ "${AGENTOS_HTTP:-}" = "1" ] || [ "${AGENTOS_HTTP:-}" = "true" ]; then
+    EXTRA_FLAGS="--http"
+    echo "[info] HTTP adapter enabled"
 fi
 
-# 4. Set default runtime mode to HTTP if not set
-export AGENTOS_RUNTIME_MODE="${AGENTOS_RUNTIME_MODE:-http}"
-export RUNTIME_MODE="${RUNTIME_MODE:-http}"
-
-echo "[info] Runtime mode: $AGENTOS_RUNTIME_MODE"
-echo "[info] Starting Agent-OS HTTP server on port 8000..."
+echo "[info] Starting Agent-OS kernel..."
 echo ""
 
-# 5. Start the server
-exec "$PYTHON" -m uvicorn core.main:app --host 0.0.0.0 --port 8000
+# 5. Start the unified kernel
+exec "$PYTHON" -m core $EXTRA_FLAGS "$@"
