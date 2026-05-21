@@ -6,17 +6,11 @@ Tests end-to-end communication between Python runtime and Go supervisor
 
 import pytest
 import asyncio
-import subprocess
-import sys
-import time
-import tempfile
-import os
 import uuid
-from datetime import datetime
 from pathlib import Path
 
 # Import proto modules
-from core.proto import checkpoint_pb2, runtime_pb2, worker_pb2
+from core.proto import checkpoint_pb2
 
 
 @pytest.fixture
@@ -76,7 +70,7 @@ class TestServiceImplementations:
     @pytest.mark.asyncio
     async def test_runtime_service_health_check(self):
         """Test RuntimeService health check."""
-        from core.runtime.grpc_server import GRPCServer, RuntimeServiceImpl
+        from core.runtime.grpc_server import RuntimeServiceImpl
         from core.runtime.runtime import AgentRuntime
         from core.orchestrator.core import Orchestrator
 
@@ -227,7 +221,7 @@ class TestConcurrentOperations:
     @pytest.mark.asyncio
     async def test_concurrent_health_checks(self):
         """Test multiple concurrent health checks."""
-        from core.runtime.grpc_server import GRPCServer, RuntimeServiceImpl
+        from core.runtime.grpc_server import RuntimeServiceImpl
         from core.runtime.runtime import AgentRuntime
         from core.orchestrator.core import Orchestrator
 
@@ -286,7 +280,7 @@ class TestCheckpointPersistence:
     @pytest.mark.asyncio
     async def test_checkpoint_lifecycle(self, temp_db_path):
         """Test complete checkpoint lifecycle."""
-        from core.runtime.grpc_server import GRPCServer, CheckpointServiceImpl
+        from core.runtime.grpc_server import CheckpointServiceImpl
         from core.langgraph.sqlite_checkpointer import SQLiteCheckpointSaver
 
         checkpointer = SQLiteCheckpointSaver(db_path=temp_db_path)

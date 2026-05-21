@@ -1,11 +1,9 @@
 """Tests for TaskStateMachine transitions, invalid transitions, and checkpoint recovery."""
 import pytest
-from datetime import datetime
 
 from core.orchestrator.state_machine import (
     TaskStateMachine,
     TaskState,
-    StateTransition,
     AgentOSError,
     ErrorCode,
 )

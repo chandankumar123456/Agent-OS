@@ -3,7 +3,6 @@
 Tests the gRPC client implementation for AgentOS runtime supervisor communication.
 """
 
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4

@@ -9,8 +9,6 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field
 
-from ..logs.logger import logger
-from ..orchestrator.errors import AgentOSError, ErrorCode, ErrorType
 
 
 class FailureType(str, Enum):

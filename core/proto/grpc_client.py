@@ -23,13 +23,11 @@ Usage:
     await client.close()
 """
 
-import asyncio
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Optional
 from dataclasses import dataclass
 
 import grpc
-from google.protobuf import empty_pb2
 
 from ..logs.logger import logger
 
@@ -57,10 +55,10 @@ class GRPCClientConfig:
 
 class RuntimeServiceClient:
     """Client for RuntimeService gRPC calls."""
-    
+
     def __init__(self, stub):
         self._stub = stub
-    
+
     async def create_task(
         self,
         query: str,
@@ -72,7 +70,7 @@ class RuntimeServiceClient:
     ):
         """Create a new task."""
         from ..proto import runtime_pb2
-        
+
         request = runtime_pb2.CreateTaskRequest(
             query=query,
             type=task_type,  # Proto field is 'type', not 'task_type'
@@ -82,21 +80,21 @@ class RuntimeServiceClient:
             config=config or {}
         )
         return await self._stub.CreateTask(request)
-    
+
     async def get_task(self, task_id: str):
         """Get task by ID."""
         from ..proto import runtime_pb2
-        
+
         request = runtime_pb2.GetTaskRequest(task_id=task_id)
         return await self._stub.GetTask(request)
-    
+
     async def cancel_task(self, task_id: str, reason: str = ""):
         """Cancel a task."""
         from ..proto import runtime_pb2
-        
+
         request = runtime_pb2.CancelTaskRequest(task_id=task_id, reason=reason)
         return await self._stub.CancelTask(request)
-    
+
     async def list_tasks(
         self,
         filter_status: int = 0,  # TASK_STATUS_UNSPECIFIED
@@ -106,7 +104,7 @@ class RuntimeServiceClient:
     ):
         """List tasks with optional filtering."""
         from ..proto import runtime_pb2
-        
+
         request = runtime_pb2.ListTasksRequest(
             filter_status=filter_status,
             limit=limit,
@@ -114,28 +112,28 @@ class RuntimeServiceClient:
             include_completed=include_completed
         )
         return await self._stub.ListTasks(request)
-    
+
     async def health_check(self):
         """Health check endpoint."""
         from ..proto import runtime_pb2
-        
+
         request = runtime_pb2.HealthCheckRequest()
         return await self._stub.HealthCheck(request)
-    
+
     async def get_runtime_status(self, include_metrics: bool = False):
         """Get runtime status."""
         from ..proto import runtime_pb2
-        
+
         request = runtime_pb2.GetRuntimeStatusRequest(include_metrics=include_metrics)
         return await self._stub.GetRuntimeStatus(request)
 
 
 class CheckpointServiceClient:
     """Client for CheckpointService gRPC calls."""
-    
+
     def __init__(self, stub):
         self._stub = stub
-    
+
     async def save_checkpoint(
         self,
         thread_id: str,
@@ -149,7 +147,7 @@ class CheckpointServiceClient:
     ):
         """Save checkpoint state."""
         from ..proto import checkpoint_pb2
-        
+
         request = checkpoint_pb2.SaveCheckpointRequest(
             thread_id=thread_id,
             checkpoint_type=checkpoint_type,
@@ -161,14 +159,14 @@ class CheckpointServiceClient:
             task_id=task_id
         )
         return await self._stub.SaveCheckpoint(request)
-    
+
     async def get_checkpoint(self, checkpoint_id: str):
         """Get checkpoint by ID."""
         from ..proto import checkpoint_pb2
-        
+
         request = checkpoint_pb2.GetCheckpointRequest(checkpoint_id=checkpoint_id)
         return await self._stub.GetCheckpoint(request)
-    
+
     async def list_checkpoints(
         self,
         thread_id: str,
@@ -178,7 +176,7 @@ class CheckpointServiceClient:
     ):
         """List checkpoints for a thread."""
         from ..proto import checkpoint_pb2
-        
+
         request = checkpoint_pb2.ListCheckpointsRequest(
             thread_id=thread_id,
             limit=limit,
@@ -186,31 +184,31 @@ class CheckpointServiceClient:
             include_metadata=include_metadata
         )
         return await self._stub.ListCheckpoints(request)
-    
+
     async def get_latest_checkpoint(self, thread_id: str, include_metadata: bool = True):
         """Get latest checkpoint for a thread."""
         from ..proto import checkpoint_pb2
-        
+
         request = checkpoint_pb2.GetLatestCheckpointRequest(
             thread_id=thread_id,
             include_metadata=include_metadata
         )
         return await self._stub.GetLatestCheckpoint(request)
-    
+
     async def health_check(self):
         """Health check endpoint."""
         from ..proto import checkpoint_pb2
-        
+
         request = checkpoint_pb2.CheckpointHealthRequest()
         return await self._stub.CheckpointHealth(request)
 
 
 class WorkerServiceClient:
     """Client for WorkerService gRPC calls."""
-    
+
     def __init__(self, stub):
         self._stub = stub
-    
+
     async def execute_task(
         self,
         task_id: str,
@@ -221,7 +219,7 @@ class WorkerServiceClient:
     ):
         """Execute a task."""
         from ..proto import worker_pb2
-        
+
         request = worker_pb2.TaskRequest(
             task_id=task_id,
             task_type=task_type,
@@ -230,21 +228,21 @@ class WorkerServiceClient:
             metadata=metadata or {}
         )
         return await self._stub.ExecuteTask(request)
-    
+
     async def health_check(self, worker_id: str = ""):
         """Health check endpoint."""
         from ..proto import worker_pb2
-        
+
         request = worker_pb2.HealthRequest(worker_id=worker_id)
         return await self._stub.HealthCheck(request)
 
 
 class APIKeyInterceptor(grpc.aio.UnaryUnaryClientInterceptor):
     """Interceptor that adds API key to every gRPC call."""
-    
+
     def __init__(self, api_key: str):
         self._api_key = api_key
-    
+
     async def intercept_unary_unary(self, continuation, client_call_details, request):
         metadata = list(client_call_details.metadata or [])
         metadata.append(("x-api-key", self._api_key))
@@ -259,7 +257,7 @@ class GRPCClient:
     LangGraph checkpoint compatibility and SQLite persistence for local mode.
     Supports TLS + API key authentication.
     """
-    
+
     def __init__(self, config: Optional[GRPCClientConfig] = None):
         self._config = config or GRPCClientConfig()
         self._channel = None
@@ -267,33 +265,33 @@ class GRPCClient:
         self._checkpoint_service = None
         self._worker_service = None
         self._connected = False
-    
+
     @property
     def runtime(self) -> RuntimeServiceClient:
         """RuntimeService client."""
         return self._runtime_service
-    
+
     @property
     def checkpoint(self) -> CheckpointServiceClient:
         """CheckpointService client."""
         return self._checkpoint_service
-    
+
     @property
     def worker(self) -> WorkerServiceClient:
         """WorkerService client."""
         return self._worker_service
-    
+
     @property
     def is_connected(self) -> bool:
         """Check if client is connected."""
         return self._connected
-    
+
     def _load_api_key(self) -> Optional[str]:
         """Load API key from config or environment."""
         if self._config.api_key:
             return self._config.api_key
         return os.environ.get("AGENTOS_API_KEY")
-    
+
     def _is_desktop_mode(self) -> bool:
         """Check if running in desktop-native gRPC mode."""
         mode = os.environ.get("AGENTOS_RUNTIME_MODE", os.environ.get("RUNTIME_MODE", "http"))
@@ -374,66 +372,66 @@ class GRPCClient:
             if is_desktop:
                 logger.warning(f"gRPC client using INSECURE connection in desktop mode to {target}")
             return channel
-    
+
     def _default_ca_path(self) -> str:
         """Get default CA certificate path."""
         home = os.path.expanduser("~")
         return os.path.join(home, ".agentos", "certs", "ca.crt")
-    
+
     def _default_client_cert_path(self) -> str:
         """Get default client certificate path."""
         home = os.path.expanduser("~")
         return os.path.join(home, ".agentos", "certs", "client.crt")
-    
+
     def _default_client_key_path(self) -> str:
         """Get default client key path."""
         home = os.path.expanduser("~")
         return os.path.join(home, ".agentos", "certs", "client.key")
-    
+
     async def connect(self):
         """Establish gRPC connection to supervisor."""
         try:
             self._channel = self._build_channel()
-            
+
             # Create stubs
             runtime_stub = runtime_pb2_grpc.RuntimeServiceStub(self._channel)
             checkpoint_stub = checkpoint_pb2_grpc.CheckpointServiceStub(self._channel)
             worker_stub = worker_pb2_grpc.WorkerExecutorStub(self._channel)
-            
+
             # Initialize service clients
             self._runtime_service = RuntimeServiceClient(runtime_stub)
             self._checkpoint_service = CheckpointServiceClient(checkpoint_stub)
             self._worker_service = WorkerServiceClient(worker_stub)
-            
+
             self._connected = True
             logger.info(f"gRPC client connected to {self._config.host}:{self._config.port}")
-            
+
         except Exception as e:
             logger.error(f"Failed to connect to gRPC server: {e}")
             raise
-    
+
     async def close(self):
         """Close gRPC connection."""
         if self._channel:
             await self._channel.close()
             self._connected = False
             logger.info("gRPC client disconnected")
-    
+
     async def __aenter__(self):
         """Async context manager entry."""
         await self.connect()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         """Async context manager exit."""
         await self.close()
         return False
-    
+
     async def health_check(self) -> bool:
         """Check if supervisor is healthy."""
         if not self._connected:
             return False
-        
+
         try:
             # Check runtime and worker services
             await self._runtime_service.health_check()

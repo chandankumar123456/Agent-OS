@@ -4,7 +4,6 @@ Provides durable storage for agent outputs (files, images, data) with
 metadata tracking, versioning, and namespace isolation per task.
 """
 import hashlib
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional

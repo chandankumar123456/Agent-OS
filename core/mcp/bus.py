@@ -61,7 +61,6 @@ class RedisMCPBus(MCPBus):
         self._handlers: Dict[str, List[Callable]] = {}
 
     async def publish(self, channel: str, message: MCPMessage) -> None:
-        import json
         payload = message.model_dump_json() if hasattr(message, 'model_dump_json') else str(message)
         await self._redis.publish(channel, payload)
 

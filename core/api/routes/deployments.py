@@ -1,8 +1,8 @@
 import secrets
 import hashlib
-from fastapi import APIRouter, HTTPException, Depends, Header
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, List
+from typing import Optional
 from ...memory.long_term import deployment_repo
 from ...api.deps import get_current_user
 from ...logs.logger import logger
@@ -36,7 +36,7 @@ async def create_deployment(body: CreateDeploymentRequest, current_user: object 
     if body.auth_type == "api_key":
         api_key = f"aos_{secrets.token_urlsafe(32)}"
         api_key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    
+
     deployment = await deployment_repo.create(
         user_id=user_id,
         workflow_id=body.workflow_id,
@@ -46,7 +46,7 @@ async def create_deployment(body: CreateDeploymentRequest, current_user: object 
         api_key_hash=api_key_hash,
         description=body.description,
     )
-    
+
     result = {
         "deployment_id": deployment.id,
         "endpoint_url": f"/public/{deployment.endpoint_path}",

@@ -48,7 +48,7 @@ if project_root not in sys.path:
 from core.bootstrap import bootstrap, BootstrapContext, setup_signal_handlers
 from core.config.settings import settings
 from core.logs.logger import logger
-from core.runtime.mode import RuntimeMode, get_runtime_mode, is_grpc_mode
+from core.runtime.mode import get_runtime_mode, is_grpc_mode
 from core.runtime.grpc_server import GRPCServer
 
 
@@ -58,12 +58,12 @@ class DesktopRuntime:
     Manages the lifecycle of AgentOS in desktop-native mode,
     providing a clean interface for the supervisor to interact with.
     """
-    
+
     def __init__(self):
         self.ctx: Optional[BootstrapContext] = None
         self._running = False
         self._shutdown_event = asyncio.Event()
-    
+
     async def initialize(self) -> BootstrapContext:
         """Initialize the desktop runtime.
         
@@ -78,13 +78,13 @@ class DesktopRuntime:
             logger.warning("AGENTOS_RUNTIME_MODE is not set to 'grpc'")
             logger.warning("Forcing gRPC mode for desktop-native operation")
             os.environ["AGENTOS_RUNTIME_MODE"] = "grpc"
-        
+
         logger.info("=" * 60)
         logger.info("AgentOS Desktop-Native Runtime Starting")
         logger.info(f"Runtime Mode: {get_runtime_mode()}")
         logger.info(f"Version: {settings.VERSION}")
         logger.info("=" * 60)
-        
+
         # Initialize desktop-native observability systems
         logger.info("Initializing desktop-native observability...")
         from core.desktop_native.local_logger import local_logger
@@ -136,7 +136,7 @@ class DesktopRuntime:
         logger.info("Desktop runtime initialized successfully")
 
         return self.ctx
-    
+
     async def run(self):
         """Run the desktop runtime main loop.
         
@@ -148,11 +148,11 @@ class DesktopRuntime:
         """
         if not self.ctx:
             raise RuntimeError("Runtime not initialized. Call initialize() first.")
-        
+
         logger.info("Desktop runtime entering main loop")
         logger.info("Waiting for tasks via gRPC...")
         logger.info("Press Ctrl+C to shutdown gracefully")
-        
+
         try:
             # Wait for shutdown signal
             await self._shutdown_event.wait()
@@ -160,12 +160,12 @@ class DesktopRuntime:
             logger.info("Main loop cancelled")
         finally:
             self._running = False
-    
+
     def shutdown(self):
         """Signal the runtime to shutdown gracefully."""
         logger.info("Shutdown requested")
         self._shutdown_event.set()
-    
+
     async def cleanup(self):
         """Cleanup all resources."""
         if hasattr(self, "grpc_server") and self.grpc_server:
@@ -177,17 +177,17 @@ class DesktopRuntime:
             self.ctx = None
         self._running = False
         logger.info("Desktop runtime cleanup complete")
-    
+
     @property
     def is_running(self) -> bool:
         """Check if runtime is currently running."""
         return self._running
-    
+
     @property
     def runtime(self) -> Optional[object]:
         """Get the AgentRuntime instance."""
         return self.ctx.runtime if self.ctx else None
-    
+
     @property
     def grpc_client(self) -> Optional[object]:
         """Get the gRPC client instance."""
@@ -208,14 +208,14 @@ async def main():
     """
     desktop = DesktopRuntime()
     exit_code = 0
-    
+
     try:
         # Initialize
         await desktop.initialize()
-        
+
         # Run main loop
         await desktop.run()
-        
+
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
     except Exception as e:
@@ -224,7 +224,7 @@ async def main():
     finally:
         # Cleanup
         await desktop.cleanup()
-    
+
     return exit_code
 
 
@@ -232,7 +232,7 @@ if __name__ == "__main__":
     # Set event loop policy for Windows
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
+
     # Run main
     try:
         exit_code = asyncio.run(main())

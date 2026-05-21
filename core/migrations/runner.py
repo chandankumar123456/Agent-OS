@@ -2,7 +2,6 @@
 Migration runner for AgentOS
 Tracks applied migrations and runs pending ones in order.
 """
-import os
 import re
 from pathlib import Path
 from typing import List, Tuple

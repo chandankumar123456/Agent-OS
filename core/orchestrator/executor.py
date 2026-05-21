@@ -4,7 +4,6 @@ from ..agents.base import AgentInput, AgentStatus, AgentRole
 from ..agents.types import StepStatus
 from ..memory.long_term import workflow_node_repo, node_trace_repo
 from ..logs.tracing import trace_manager
-from ..logs.logger import logger
 from ..orchestrator.errors import UnrecoverableError, ErrorType, WorkflowPausedForApproval
 
 

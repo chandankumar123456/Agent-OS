@@ -5,7 +5,6 @@ serialization, active-window detection, and refresh — all in a headless
 environment with OS-specific modules mocked out.
 """
 
-import sys
 import pytest
 from unittest.mock import patch, MagicMock
 

@@ -3,7 +3,7 @@
 Integrates with TokenUsageModel for LLM costs and Redis for real-time
 aggregation. Provides cost breakdowns per task, agent, tool, and user.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -175,7 +175,7 @@ class CostTracker:
             await self._update_redis_aggregate(user_record)
 
         logger.debug(
-            f"LLM cost recorded",
+            "LLM cost recorded",
             extra={
                 "task_id": task_id,
                 "model": model,
@@ -229,7 +229,7 @@ class CostTracker:
             await self._update_redis_aggregate(user_record)
 
         logger.debug(
-            f"Tool cost recorded",
+            "Tool cost recorded",
             extra={"task_id": task_id, "tool": tool_name, "cost_usd": cost_usd},
         )
         return record

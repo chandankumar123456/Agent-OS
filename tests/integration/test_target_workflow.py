@@ -11,7 +11,6 @@ This test verifies:
 6. No false 'filesystem tools unavailable' errors.
 """
 import pytest
-import json
 from unittest.mock import AsyncMock, patch, MagicMock
 
 from core.langgraph.nodes import executor_node, planner_node

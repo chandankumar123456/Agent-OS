@@ -12,11 +12,10 @@ Design:
 """
 
 import asyncio
-import json
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 
 class _ExpiringDict:
@@ -460,7 +459,7 @@ class InMemoryTaskQueue:
         worker_id: str,
         max_priority: Optional["TaskPriority"] = None,
     ) -> Optional["QueuedTask"]:
-        from ..orchestrator.queue import TaskPriority, QueuedTask
+        from ..orchestrator.queue import QueuedTask
         from ..logs.logger import logger
 
         try:
@@ -589,7 +588,7 @@ class InMemoryTaskQueue:
         priority: Optional["TaskPriority"] = None,
         delay_seconds: int = 0,
     ) -> bool:
-        from ..orchestrator.queue import TaskPriority, QueuedTask
+        from ..orchestrator.queue import QueuedTask
         from ..logs.logger import logger
 
         try:

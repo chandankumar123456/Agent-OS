@@ -10,7 +10,6 @@ from .state import AgentState
 from .nodes import planner_node, executor_node, verifier_node, approval_node, summarizer_node
 from .checkpointer import PostgresCheckpointSaver
 from ..logs.logger import logger
-from ..agents.llm_client import get_llm_client
 
 _MAX_CACHE_SIZE = 50
 

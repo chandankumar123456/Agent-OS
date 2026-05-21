@@ -5,7 +5,7 @@ from .verifier import VerifierAgent
 
 __all__ = [
     "AgentInput",
-    "AgentOutput", 
+    "AgentOutput",
     "AgentRole",
     "AgentStatus",
     "PlannerAgent",

@@ -5,7 +5,7 @@ persistence interface with Redis for fast access and PostgreSQL for durability.
 Supports size-based LRU eviction, TTL expiry, and optional LLM summarization
 of memory contents.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 

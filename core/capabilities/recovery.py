@@ -79,7 +79,7 @@ class DesktopRecoveryPlanner:
             return RecoveryDecision(
                 task_id=task_id,
                 action=RecoveryAction.SWITCH_TOOL,
-                reason=f"Desktop recovery: focus/activation error detected, switching to ensure_focus",
+                reason="Desktop recovery: focus/activation error detected, switching to ensure_focus",
                 next_tool="desktop_env__ensure_focus",
             )
 
@@ -88,7 +88,7 @@ class DesktopRecoveryPlanner:
             return RecoveryDecision(
                 task_id=task_id,
                 action=RecoveryAction.SWITCH_TOOL,
-                reason=f"Desktop recovery: stale UI element detected, rebuilding UI tree",
+                reason="Desktop recovery: stale UI element detected, rebuilding UI tree",
                 next_tool="desktop__get_ui_tree",
             )
 
@@ -97,7 +97,7 @@ class DesktopRecoveryPlanner:
             return RecoveryDecision(
                 task_id=task_id,
                 action=RecoveryAction.SWITCH_TOOL,
-                reason=f"Desktop recovery: popup/dialog blocking, pressing Esc to dismiss",
+                reason="Desktop recovery: popup/dialog blocking, pressing Esc to dismiss",
                 next_tool="desktop_env__press_key",
             )
 
@@ -106,7 +106,7 @@ class DesktopRecoveryPlanner:
             return RecoveryDecision(
                 task_id=task_id,
                 action=RecoveryAction.SWITCH_TOOL,
-                reason=f"Desktop recovery: coordinate/vision failure, taking screenshot for visual analysis",
+                reason="Desktop recovery: coordinate/vision failure, taking screenshot for visual analysis",
                 next_tool="desktop_env__screenshot",
             )
 
@@ -273,7 +273,7 @@ class RecoveryEngine:
         """
         # If canonical execution state shows terminal success, do NOT recover
         if execution_state:
-            from ..execution_state import ExecutionState, ExecutionVerdict
+            from ..execution_state import ExecutionState
             state = ExecutionState.from_dict(execution_state)
             # Find the current step from step_id or check any terminal success
             for step_rec in state.steps.values():

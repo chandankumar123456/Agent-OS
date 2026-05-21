@@ -8,13 +8,12 @@ Verifies:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from core.orchestrator.errors import (
     ErrorCode, ErrorType, AgentOSError, UnrecoverableError, RetryableError
 )
 from core.orchestrator.core import Orchestrator
-from core.guardrails.validator import Guardrails
 from core.agents.base import AgentStatus
 from core.guardrails.schema import ValidationResult
 

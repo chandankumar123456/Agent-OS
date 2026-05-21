@@ -9,7 +9,7 @@ Every decision is dynamically generated — no keyword routing, no static plans.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 
 from ..agents.base import AgentInput, AgentOutput, AgentRole, AgentStatus
@@ -21,8 +21,6 @@ from ..memory.long_term import (
     trace_repo,
     node_trace_repo,
     workflow_node_repo,
-    workflow_repo,
-    workflow_edge_repo,
 )
 from ..memory.short_term import short_term_memory
 from ..orchestrator.errors import (
@@ -31,7 +29,7 @@ from ..orchestrator.errors import (
     WorkflowPausedForApproval,
     ErrorCode,
 )
-from ..orchestrator.retry import retry_with_backoff, RetryConfig, is_retryable
+from ..orchestrator.retry import RetryConfig
 from ..tools.registry import tool_registry
 from ..guardrails.validator import guardrails
 
@@ -600,7 +598,7 @@ class AgentLoop:
 
         parts.append(f"Original task: {original_query}")
         parts.append(f"\nIteration: {iteration}")
-        parts.append(f"\nSteps already completed:")
+        parts.append("\nSteps already completed:")
 
         for step in completed_steps:
             sid = step.get("step_id", "?")
@@ -611,15 +609,15 @@ class AgentLoop:
 
         failed_steps_data = reasoning_context.get("_failed_steps", [])
         if failed_steps_data:
-            parts.append(f"\nSteps that FAILED and need attention:")
+            parts.append("\nSteps that FAILED and need attention:")
             for fs in failed_steps_data:
                 parts.append(f"  - {fs.get('id', '?')}: {str(fs.get('output', {}))[:300]}")
 
         parts.append(
-            f"\nBased on the results above, generate a plan for the REMAINING "
-            f"steps needed to fully complete the original task. "
-            f"Do NOT repeat steps that already succeeded. "
-            f"Only include steps that are still needed."
+            "\nBased on the results above, generate a plan for the REMAINING "
+            "steps needed to fully complete the original task. "
+            "Do NOT repeat steps that already succeeded. "
+            "Only include steps that are still needed."
         )
 
         return "\n".join(parts)

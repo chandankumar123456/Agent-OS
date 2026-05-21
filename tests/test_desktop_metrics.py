@@ -1,5 +1,4 @@
 """Tests for desktop-specific metrics helpers (OR2)."""
-import pytest
 from core.logs.metrics import MetricsCollector
 
 

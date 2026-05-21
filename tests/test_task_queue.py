@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from core.orchestrator.queue import TaskQueue, TaskPriority, QueuePosition
+from core.orchestrator.queue import TaskQueue, TaskPriority
 
 
 @pytest.fixture

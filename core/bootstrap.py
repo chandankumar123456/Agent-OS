@@ -12,17 +12,16 @@ Design Principles:
 """
 
 import asyncio
-import os
 import signal
 import sys
 from contextlib import asynccontextmanager
-from typing import Dict, Any, List, Optional, Callable
+from typing import Any, List, Optional, Callable
 
 # Core runtime imports (no FastAPI or HTTP dependencies)
 from .config.settings import settings
 from .logs.logger import logger
 from .runtime.runtime import AgentRuntime
-from .runtime.mode import RuntimeMode, get_runtime_mode, is_grpc_mode
+from .runtime.mode import get_runtime_mode, is_grpc_mode
 from .migrations.runner import run_pending_migrations
 from .mcp.monitor import mcp_health_monitor
 
@@ -37,33 +36,33 @@ class BootstrapContext:
     This is the canonical container for runtime state, passed between
     bootstrap phases and available throughout the application lifecycle.
     """
-    
+
     def __init__(self):
         self.runtime: Optional[AgentRuntime] = None
         self.grpc_client: Optional[Any] = None
         self.initialized: List[str] = []
         self._shutdown_hooks: List[Callable] = []
         self._is_shutting_down = False
-        
+
         # In-memory fallbacks for gRPC/desktop-native mode
         self.in_memory_lock: Optional[Any] = None
         self.in_memory_queue: Optional[Any] = None
         self.in_memory_session_store: Optional[Any] = None
         self.in_memory_short_term: Optional[Any] = None
-        
+
     def add_shutdown_hook(self, hook: Callable, name: str = None):
         """Register a shutdown hook to be called during cleanup."""
         self._shutdown_hooks.append((hook, name))
-        
+
     async def shutdown(self):
         """Execute all shutdown hooks in reverse order."""
         if self._is_shutting_down:
             return
         self._is_shutting_down = True
-        
+
         logger.info("AgentOS shutting down...")
         errors = []
-        
+
         # Execute hooks in reverse order (LIFO)
         for hook, name in reversed(self._shutdown_hooks):
             try:
@@ -77,7 +76,7 @@ class BootstrapContext:
                 error_msg = f"Shutdown hook failed{f' ({name})' if name else ''}: {e}"
                 logger.error(error_msg)
                 errors.append(error_msg)
-        
+
         if errors:
             logger.warning(f"Shutdown completed with {len(errors)} errors")
         else:
@@ -88,12 +87,12 @@ async def _check_dependencies() -> None:
     """Validate required environment configuration."""
     if not settings.DATABASE_URL:
         raise RuntimeError("DATABASE_URL is required but not set")
-    
+
     # Skip Redis check in gRPC mode (supervisor handles Redis)
     # In HTTP mode, allow running without Redis (use in-memory fallbacks)
     if not is_grpc_mode() and not settings.REDIS_URL:
         logger.warning("REDIS_URL is not set. Running in HTTP mode without Redis. In-memory fallbacks will be used.")
-    
+
     if not settings.OPENAI_API_KEY:
         raise RuntimeError("OPENAI_API_KEY is required but not set")
 
@@ -114,7 +113,7 @@ async def _check_dependencies() -> None:
 async def _init_database(ctx: BootstrapContext) -> None:
     """Initialize database connections and run migrations."""
     from .memory.long_term import db
-    
+
     try:
         await db.connect()
         logger.info("Database connected successfully")
@@ -122,14 +121,14 @@ async def _init_database(ctx: BootstrapContext) -> None:
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
         raise RuntimeError(f"Database connection failed: {e}") from e
-    
+
     try:
         await run_pending_migrations()
         logger.info("Database migrations applied")
     except Exception as e:
         logger.error(f"Migration failed: {e}")
         raise RuntimeError(f"Migration failed: {e}") from e
-    
+
     # Register shutdown hook
     async def shutdown_db():
         try:
@@ -137,7 +136,7 @@ async def _init_database(ctx: BootstrapContext) -> None:
             logger.info("Database disconnected")
         except Exception as e:
             logger.error(f"Database disconnect failed: {e}")
-    
+
     ctx.add_shutdown_hook(shutdown_db, "database")
 
 
@@ -146,9 +145,9 @@ async def _init_redis(ctx: BootstrapContext) -> None:
     if is_grpc_mode():
         logger.info("Skipping Redis initialization in gRPC mode")
         return
-    
+
     from .memory.short_term import redis_client
-    
+
     try:
         await redis_client.connect()
         logger.info("Redis connected successfully")
@@ -156,7 +155,7 @@ async def _init_redis(ctx: BootstrapContext) -> None:
     except Exception as e:
         logger.error(f"Redis connection failed: {e}")
         raise RuntimeError(f"Redis connection failed: {e}") from e
-    
+
     # Initialize Redis PubSub
     try:
         from .memory.redis_pubsub import redis_pubsub_client
@@ -165,7 +164,7 @@ async def _init_redis(ctx: BootstrapContext) -> None:
         ctx.initialized.append("redis_pubsub")
     except Exception as e:
         logger.error(f"Redis PubSub client connection failed: {e}")
-    
+
     # Register shutdown hooks
     async def shutdown_redis():
         try:
@@ -173,7 +172,7 @@ async def _init_redis(ctx: BootstrapContext) -> None:
             logger.info("Redis disconnected")
         except Exception as e:
             logger.error(f"Redis disconnect failed: {e}")
-    
+
     async def shutdown_pubsub():
         if "redis_pubsub" in ctx.initialized:
             try:
@@ -182,7 +181,7 @@ async def _init_redis(ctx: BootstrapContext) -> None:
                 logger.info("Redis PubSub disconnected")
             except Exception as e:
                 logger.error(f"Redis PubSub disconnect failed: {e}")
-    
+
     ctx.add_shutdown_hook(shutdown_pubsub, "redis_pubsub")
     ctx.add_shutdown_hook(shutdown_redis, "redis")
 
@@ -232,18 +231,18 @@ async def _init_runtime(ctx: BootstrapContext) -> None:
         runtime = AgentRuntime()
         await runtime.initialize()
         ctx.runtime = runtime
-        
+
         # Log runtime mode
         if runtime.is_grpc_mode():
             logger.info("AgentRuntime initialized in gRPC mode")
         else:
             logger.info("AgentRuntime initialized in HTTP mode")
-        
+
         ctx.initialized.append("runtime")
     except Exception as e:
         logger.error(f"AgentRuntime initialization failed: {e}")
         raise RuntimeError(f"AgentRuntime initialization failed: {e}") from e
-    
+
     # Register shutdown hook
     async def shutdown_runtime():
         if ctx.runtime:
@@ -252,7 +251,7 @@ async def _init_runtime(ctx: BootstrapContext) -> None:
                 logger.info("AgentRuntime shutdown")
             except Exception as e:
                 logger.error(f"AgentRuntime shutdown failed: {e}")
-    
+
     ctx.add_shutdown_hook(shutdown_runtime, "runtime")
 
 
@@ -265,7 +264,7 @@ async def _init_mcp_system(ctx: BootstrapContext) -> None:
         ctx.initialized.append("mcp_monitor")
     except Exception as e:
         logger.error(f"MCP health monitor start failed: {e}")
-    
+
     # Register built-in tools
     try:
         from .tools.builtin import register_builtin_tools
@@ -275,7 +274,7 @@ async def _init_mcp_system(ctx: BootstrapContext) -> None:
         ctx.initialized.append("builtin_tools")
     except Exception as e:
         logger.error(f"Built-in tools registration failed: {e}")
-    
+
     # Start MCP system servers
     try:
         from .mcp.client_manager import mcp_client_manager
@@ -284,7 +283,7 @@ async def _init_mcp_system(ctx: BootstrapContext) -> None:
         ctx.initialized.append("mcp_servers")
     except BaseException as e:
         logger.error(f"MCP system servers start failed: {e}")
-    
+
     # Discover MCP tools
     try:
         from .tools.registry import tool_registry
@@ -293,7 +292,7 @@ async def _init_mcp_system(ctx: BootstrapContext) -> None:
         ctx.initialized.append("mcp_tools_discovered")
     except Exception as e:
         logger.error(f"MCP tool discovery failed at startup: {e}")
-    
+
     # Register shutdown hooks
     async def shutdown_mcp_servers():
         if "mcp_servers" in ctx.initialized:
@@ -303,14 +302,14 @@ async def _init_mcp_system(ctx: BootstrapContext) -> None:
                 logger.info("MCP system servers stopped")
             except Exception as e:
                 logger.error(f"MCP system servers stop failed: {e}")
-    
+
     async def shutdown_mcp_monitor():
         if "mcp_monitor" in ctx.initialized:
             try:
                 mcp_health_monitor.stop()
             except Exception as e:
                 logger.error(f"MCP health monitor stop failed: {e}")
-    
+
     async def shutdown_desktop_sessions():
         try:
             from .environments.desktop_env import DesktopSessionManager
@@ -318,7 +317,7 @@ async def _init_mcp_system(ctx: BootstrapContext) -> None:
             logger.info("Desktop sessions closed")
         except Exception as e:
             logger.error(f"Desktop session close_all failed: {e}")
-    
+
     ctx.add_shutdown_hook(shutdown_mcp_servers, "mcp_servers")
     ctx.add_shutdown_hook(shutdown_mcp_monitor, "mcp_monitor")
     ctx.add_shutdown_hook(shutdown_desktop_sessions, "desktop_sessions")
@@ -329,11 +328,11 @@ async def _init_grpc_client(ctx: BootstrapContext) -> None:
     if not is_grpc_mode():
         logger.info("Running in HTTP mode, skipping gRPC client initialization")
         return
-    
+
     if not GRPC_AVAILABLE:
         logger.warning("gRPC not available (import error), skipping gRPC client")
         return
-    
+
     try:
         grpc_config = GRPCClientConfig(
             host=settings.GRPC_HOST,
@@ -351,7 +350,7 @@ async def _init_grpc_client(ctx: BootstrapContext) -> None:
     except Exception as e:
         logger.error(f"gRPC client initialization failed: {e}")
         raise RuntimeError(f"gRPC client initialization failed: {e}") from e
-    
+
     # Register shutdown hook
     async def shutdown_grpc():
         if ctx.grpc_client:
@@ -360,7 +359,7 @@ async def _init_grpc_client(ctx: BootstrapContext) -> None:
                 logger.info("gRPC client closed")
             except Exception as e:
                 logger.error(f"gRPC client close failed: {e}")
-    
+
     ctx.add_shutdown_hook(shutdown_grpc, "grpc_client")
 
 
@@ -394,48 +393,48 @@ async def bootstrap(
         RuntimeError: If any required component fails to initialize
     """
     ctx = BootstrapContext()
-    
+
     logger.info("=" * 60)
     logger.info("AgentOS Bootstrap Starting")
     logger.info(f"Runtime Mode: {get_runtime_mode()}")
     logger.info(f"Version: {settings.VERSION}")
     logger.info("=" * 60)
-    
+
     # Phase 1: Validate dependencies
     if not skip_dependencies_check:
         await _check_dependencies()
         logger.info("Dependencies validated")
-    
+
     # Phase 2: Initialize persistence layer
     if not skip_database:
         await _init_database(ctx)
-    
+
     if not skip_redis:
         await _init_redis(ctx)
-    
+
     # Phase 2b: Initialize in-memory fallbacks when Redis is not available
     # (gRPC mode always uses fallbacks; HTTP mode uses them when Redis is skipped)
     use_in_memory = (is_grpc_mode() or skip_redis) and not skip_in_memory_fallbacks
     if use_in_memory:
         await _init_in_memory_fallbacks(ctx)
-    
+
     # Phase 3: Initialize core runtime
     if not skip_runtime:
         await _init_runtime(ctx)
-    
+
     # Phase 4: Initialize MCP/tool systems
     if not skip_mcp:
         await _init_mcp_system(ctx)
-    
+
     # Phase 5: Initialize gRPC client (gRPC mode only)
     if not skip_grpc:
         await _init_grpc_client(ctx)
-    
+
     logger.info("=" * 60)
-    logger.info(f"AgentOS Bootstrap Complete")
+    logger.info("AgentOS Bootstrap Complete")
     logger.info(f"Initialized: {', '.join(ctx.initialized)}")
     logger.info("=" * 60)
-    
+
     return ctx
 
 
@@ -466,10 +465,10 @@ def setup_signal_handlers(ctx: BootstrapContext):
         logger.info(f"Received {signame}, initiating graceful shutdown...")
         # Create task for async shutdown
         asyncio.create_task(ctx.shutdown())
-    
+
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    
+
     if sys.platform == "win32":
         # Windows-specific signal handling
         signal.signal(signal.SIGBREAK, signal_handler)

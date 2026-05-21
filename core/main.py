@@ -36,7 +36,7 @@ from fastapi import HTTPException
 
 
 # Import bootstrap for shared initialization
-from .bootstrap import bootstrap, BootstrapContext, setup_signal_handlers
+from .bootstrap import bootstrap, setup_signal_handlers
 
 
 @asynccontextmanager
@@ -50,30 +50,30 @@ async def lifespan(app: FastAPI):
     sys.stdout.write("[LIFESPAN] Agent-OS starting up\n")
     sys.stdout.flush()
     logger.info("Agent-OS starting up")
-    
+
     # Determine if Redis is available
     redis_url = settings.REDIS_URL if hasattr(settings, 'REDIS_URL') else None
     skip_redis = not redis_url
-    
+
     # Bootstrap all components via shared module
     # When Redis is unavailable, skip it and enable in-memory fallbacks
     ctx = await bootstrap(
         skip_redis=skip_redis,
         skip_in_memory_fallbacks=False,
     )
-    
+
     # Store context in app state for access in routes
     app.state.bootstrap_ctx = ctx
     app.state.runtime = ctx.runtime
     app.state.grpc_client = ctx.grpc_client
-    
+
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers(ctx)
-    
+
     logger.info(f"Agent-OS startup complete. Initialized: {', '.join(ctx.initialized)}")
-    
+
     yield
-    
+
     # Shutdown is handled by bootstrap context
     logger.info("Agent-OS shutting down")
 

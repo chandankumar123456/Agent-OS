@@ -5,8 +5,6 @@ completes without crashes when the LLM client is mocked to return predictable
 JSON responses.
 """
 import os
-import sys
-import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from uuid import uuid4
 
@@ -85,7 +83,7 @@ class TestCorePipelineImports:
 
     def test_import_llm_client(self):
         """Verify the LLM client module can be imported."""
-        from core.agents.llm_client import LLMClient, get_llm_client
+        from core.agents.llm_client import LLMClient
         assert LLMClient is not None
 
     def test_import_desktop_entry(self):
@@ -180,7 +178,6 @@ class TestCorePipeline:
         """Full pipeline: plan -> execute -> verify with mocked agents."""
         from core.orchestrator.core import Orchestrator
         from core.agents.base import AgentOutput, AgentStatus
-        from core.orchestrator.agent_loop import AgentLoop
 
         orch = Orchestrator()
 

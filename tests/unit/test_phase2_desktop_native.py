@@ -7,7 +7,6 @@ import asyncio
 import os
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
 
 # Must set before any app imports
 os.environ["AGENTOS_RUNTIME_MODE"] = "grpc"

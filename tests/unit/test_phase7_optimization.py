@@ -187,7 +187,6 @@ class TestKernelIntegration:
     async def test_kernel_crash_recovery_scan(self):
         """Verify kernel runs crash recovery on startup."""
         from core.desktop_native.kernel import AgentKernel
-        from core.desktop_native.crash_recovery import crash_recovery
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()

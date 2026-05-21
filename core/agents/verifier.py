@@ -1,6 +1,4 @@
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
-from uuid import uuid4
-from typing import List, Dict, Any
 from .llm_client import get_llm_client
 from ..logs.logger import logger
 
@@ -22,20 +20,20 @@ Return your response as JSON:
 class VerifierAgent:
     name: str = "verifier"
     role: AgentRole = AgentRole.VERIFIER
-    
+
     async def execute(self, input_data: AgentInput) -> AgentOutput:
         output = input_data.input_data.get("output", {})
         query = input_data.context.get("query", "")
-        
+
         logger.info(f"Verifying output for query: {query}")
-        
+
         messages = [
             {"role": "system", "content": VERIFIER_PROMPT.format(
                 output=str(output),
                 query=query
             )}
         ]
-        
+
         try:
             result = await get_llm_client().complete_json(messages)
             if not isinstance(result, dict):
@@ -43,7 +41,7 @@ class VerifierAgent:
 
             is_valid = bool(result.get("valid", False))
             confidence = float(result.get("confidence", 0.5))
-            
+
             return AgentOutput(
                 task_id=input_data.task_id,
                 step_id=input_data.step_id,
@@ -51,7 +49,7 @@ class VerifierAgent:
                 output_data=result,
                 confidence=confidence,
                 reasoning_trace=[
-                    f"Verified output",
+                    "Verified output",
                     f"Valid: {is_valid}",
                     f"Confidence: {confidence}"
                 ]

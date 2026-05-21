@@ -18,7 +18,6 @@ try:
     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 except ImportError:
     # Fallback for different langgraph versions
-    from langgraph.checkpoint.serde.base import SerializerProtocol
     class JsonPlusSerializer:
         def dumps_typed(self, obj):
             return json.loads(json.dumps(obj, default=str))
@@ -68,11 +67,11 @@ class SQLiteCheckpointSaver(BaseCheckpointSaver):
         super().__init__()
         self._session_factory = session_factory
         self._db_path = db_path or str(Path(__file__).parent.parent.parent / "data" / "checkpoints.db")
-        
+
         # Ensure the directory exists
         db_dir = Path(self._db_path).parent
         db_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self._local = threading.local()
         self._lock = threading.Lock()
         self._ensure_schema()

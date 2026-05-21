@@ -13,9 +13,9 @@ Features:
 import json
 import hashlib
 from enum import Enum
-from typing import Dict, Any, List, Optional, Set, Iterator
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from threading import Lock
 
 from pydantic import BaseModel, Field

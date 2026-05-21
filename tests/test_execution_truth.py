@@ -4,12 +4,11 @@ Validates the systemic fix: tool success must become canonical truth
 that prevents re-verification, recovery, and fallback loops.
 """
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
 from core.execution_state import (
     ExecutionState,
     ToolExecutionRecord,
-    StepExecutionRecord,
     ExecutionVerdict,
 )
 from core.langgraph.nodes import verifier_node
@@ -314,7 +313,7 @@ class TestNoFallbackLoop:
         """The infamous bug: open_application succeeds, but verifier fails,
         causing recovery to trigger press_key(win) fallback. This test ensures
         that with canonical execution state, no fallback occurs."""
-        
+
         # Simulate the exact state after open_application succeeds
         execution_state = ExecutionState(task_id="test-task")
         execution_state.record_tool(

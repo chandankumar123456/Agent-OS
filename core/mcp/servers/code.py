@@ -5,7 +5,6 @@ import core.mcp.servers._stdio_sanitize  # noqa: F401, E402
 
 import json
 import os
-import sys
 
 os.environ["AGENTOS_LOG_STDERR"] = "1"
 

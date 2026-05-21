@@ -6,9 +6,7 @@ with mocked gRPC channels.
 """
 
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from google.protobuf import empty_pb2
 
 from core.proto.grpc_client import (
     GRPCClient,
@@ -298,7 +296,7 @@ class TestGRPCClient:
         # Mock the async channel and stubs
         mock_channel = AsyncMock()
         mock_channel.close = AsyncMock()
-        
+
         # Create separate stubs for each service
         runtime_stub = MagicMock()
         runtime_stub.CreateTask = AsyncMock()
@@ -307,14 +305,14 @@ class TestGRPCClient:
         runtime_stub.ListTasks = AsyncMock()
         runtime_stub.HealthCheck = AsyncMock()
         runtime_stub.GetRuntimeStatus = AsyncMock()
-        
+
         checkpoint_stub = MagicMock()
         checkpoint_stub.SaveCheckpoint = AsyncMock()
         checkpoint_stub.GetCheckpoint = AsyncMock()
         checkpoint_stub.ListCheckpoints = AsyncMock()
         checkpoint_stub.GetLatestCheckpoint = AsyncMock()
         checkpoint_stub.CheckpointHealth = AsyncMock()
-        
+
         worker_stub = MagicMock()
         worker_stub.ExecuteTask = AsyncMock()
         worker_stub.HealthCheck = AsyncMock()
@@ -322,10 +320,10 @@ class TestGRPCClient:
         # Create mock modules for the gRPC imports
         mock_runtime_grpc = MagicMock()
         mock_runtime_grpc.RuntimeServiceStub.return_value = runtime_stub
-        
+
         mock_checkpoint_grpc = MagicMock()
         mock_checkpoint_grpc.CheckpointServiceStub.return_value = checkpoint_stub
-        
+
         mock_worker_grpc = MagicMock()
         mock_worker_grpc.WorkerExecutorStub.return_value = worker_stub
 
@@ -363,7 +361,7 @@ class TestGRPCClient:
         # Mock the async channel
         mock_channel = AsyncMock()
         mock_channel.close = AsyncMock()
-        
+
         with patch('core.proto.grpc_client.grpc.aio.insecure_channel', return_value=mock_channel) as mock_grpc_channel:
             mock_runtime_stub = MagicMock()
             mock_runtime_stub.CreateTask = AsyncMock()

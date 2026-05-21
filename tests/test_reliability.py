@@ -1,6 +1,5 @@
 """Reliability and failure injection tests for Sprint 3."""
 import pytest
-import asyncio
 import json
 import os
 import sys
@@ -21,7 +20,6 @@ class TestMcpStdoutSanitization:
 
     def test_stdio_sanitize_logging_uses_stderr(self):
         import logging
-        import sys
         root = logging.getLogger()
         stderr_handlers = [
             h for h in root.handlers
@@ -237,7 +235,6 @@ async def test_recovery_engine_replan_on_tool_not_found():
 async def test_observability_bus_survives_db_failure():
     from core.observability.bus import ObservabilityBus
     from core.observability.models import ObservabilityEvent, ObservabilityEventType
-    from datetime import datetime, timezone
 
     bus = ObservabilityBus()
 

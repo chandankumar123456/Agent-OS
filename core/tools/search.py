@@ -17,15 +17,15 @@ class SearchTool(BaseTool):
 
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         query = tool_input.parameters.get("query", "")
-        
+
         if not query:
             return ToolOutput(
                 success=False,
                 error="No query provided"
             )
-        
+
         logger.info(f"SearchTool executing: {query}")
-        
+
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 "https://api.exa.ai/search",
@@ -68,7 +68,7 @@ class CalculatorTool(BaseTool):
         a = tool_input.parameters.get("a", 0)
         b = tool_input.parameters.get("b", 0)
         result = 0
-        
+
         try:
             if operation == "add":
                 result = a + b
@@ -83,7 +83,7 @@ class CalculatorTool(BaseTool):
                     return ToolOutput(success=False, error="Division by zero")
             else:
                 return ToolOutput(success=False, error=f"Unknown operation: {operation}")
-            
+
             return ToolOutput(
                 success=True,
                 result={"operation": operation, "a": a, "b": b, "result": result}
@@ -106,7 +106,7 @@ class TextProcessorTool(BaseTool):
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         text = tool_input.parameters.get("text", "")
         operation = tool_input.parameters.get("operation", "uppercase")
-        
+
         try:
             if operation == "uppercase":
                 result = text.upper()
@@ -116,7 +116,7 @@ class TextProcessorTool(BaseTool):
                 result = len(text)
             else:
                 return ToolOutput(success=False, error=f"Unknown operation: {operation}")
-            
+
             return ToolOutput(
                 success=True,
                 result={"original": text, "processed": result, "operation": operation}

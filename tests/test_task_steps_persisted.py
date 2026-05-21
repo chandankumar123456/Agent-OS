@@ -10,7 +10,6 @@ if os.environ.get("AGENTOS_RUNTIME_MODE", "").lower() == "grpc":
 from core.api.routes.tasks import get_task
 from core.memory.long_term import db
 from core.memory.long_term import task_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
-from core.queue.tasks import execute_task as celery_execute_task
 
 
 def test_persisted_task_lookup_includes_workflow_nodes_when_present():

@@ -9,13 +9,11 @@ Usage:
     await crash_recovery.scan_and_resume(kernel)
 """
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 
 from ..logs.logger import logger
 from .sqlite_store import sqlite_store
-from .state_machine import TaskState
 
 
 class CrashRecovery:

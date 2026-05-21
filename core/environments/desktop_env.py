@@ -12,9 +12,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..logs.logger import logger
 from ..tools.base import ToolOutput
-from .vision_fallback import get_vision_parser, VisionFallbackParser
+from .vision_fallback import get_vision_parser
 from .execution_stabilizer import ActionStabilizer, StabilizerConfig
-from .app_launcher import launch_application, is_process_running, resolve_app_path
+from .app_launcher import launch_application
 
 # Optional dependencies (graceful degradation if missing)
 try:
@@ -123,7 +123,7 @@ class DesktopSession:
         func_name = getattr(func, '__name__', str(func))
         logger.info(f"[desktop_env][TRACE] OS CALL: {func_name} args={args} kwargs={kwargs}")
         if self._is_headless():
-            logger.error(f"[desktop_env][TRACE] OS CALL BLOCKED: headless environment")
+            logger.error("[desktop_env][TRACE] OS CALL BLOCKED: headless environment")
             return ToolOutput(
                 success=False,
                 error="Desktop automation unavailable: running headless (no display detected)",
@@ -860,7 +860,7 @@ class DesktopSession:
                 error="Desktop automation unavailable: running headless (no display detected)",
             )
         if pyautogui is None:
-            logger.error(f"[desktop_env][TRACE] click ABORTED: pyautogui is None")
+            logger.error("[desktop_env][TRACE] click ABORTED: pyautogui is None")
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
@@ -920,7 +920,7 @@ class DesktopSession:
     async def type_text(self, text: str, interval: float = 0.01) -> ToolOutput:
         logger.info(f"[desktop_env][TRACE] type_text CALLED: text_len={len(text)} interval={interval} headless={self._is_headless()}")
         if pyautogui is None:
-            logger.error(f"[desktop_env][TRACE] type_text ABORTED: pyautogui is None")
+            logger.error("[desktop_env][TRACE] type_text ABORTED: pyautogui is None")
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
@@ -949,7 +949,7 @@ class DesktopSession:
         """
         logger.info(f"[desktop_env][TRACE] press_key CALLED: keys='{keys}' headless={self._is_headless()}")
         if pyautogui is None:
-            logger.error(f"[desktop_env][TRACE] press_key ABORTED: pyautogui is None")
+            logger.error("[desktop_env][TRACE] press_key ABORTED: pyautogui is None")
             return ToolOutput(
                 success=False, error="Input automation library (pyautogui) not available"
             )
@@ -1072,7 +1072,6 @@ class DesktopSession:
         Uses ActionStabilizer.dismiss_popup() with the session's screenshot/click/key methods.
         """
         # Lazy import — avoid circular issues
-        from .execution_stabilizer import ActionStabilizer
 
         async def _screenshot_fn(path: Optional[str] = None) -> Any:
             result = await self.screenshot(path)
@@ -1308,7 +1307,6 @@ class DesktopSession:
         """
         try:
             import ctypes
-            from ctypes import wintypes
 
             user32 = ctypes.WinDLL("user32", use_last_error=True)
 

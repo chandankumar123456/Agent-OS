@@ -3,7 +3,7 @@ import logging
 import os
 import sys
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 
 def _is_desktop_mode() -> bool:
@@ -120,7 +120,7 @@ class AgentOSLogger:
         self._maybe_local_log("critical", message, task_id, **kwargs)
 
     def log_task(self, task_id: str, status: str, **kwargs: Any) -> None:
-        self.info(f"task_lifecycle", task_id=task_id, status=status, **kwargs)
+        self.info("task_lifecycle", task_id=task_id, status=status, **kwargs)
 
     def log_step(self, task_id: str, step_id: str, step: str, status: str) -> None:
         self.info("step_lifecycle", task_id=task_id, step_id=step_id, step=step, status=status)

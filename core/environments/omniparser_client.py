@@ -11,9 +11,8 @@ Models are downloaded lazily from HuggingFace on first use.
 
 import logging
 import os
-import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -273,8 +272,6 @@ class OmniParserClient:
             return []
 
         from PIL import Image
-        import torch
-        from torchvision.transforms import ToPILImage
 
         t0 = time.time()
 

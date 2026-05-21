@@ -23,7 +23,6 @@ from .models import (
     AgentVersionModel,
     ConfigModel,
     GuardrailRuleModel,
-    CheckpointModel,
     DeploymentModel,
 )
 from ..config.settings import settings

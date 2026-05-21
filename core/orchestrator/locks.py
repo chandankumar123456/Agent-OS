@@ -15,7 +15,6 @@ from pydantic import BaseModel, Field
 
 from ..config.settings import settings
 from ..logs.logger import logger
-from .errors import AgentOSError, ErrorCode, ErrorType
 
 
 def _is_grpc_mode() -> bool:
@@ -117,7 +116,7 @@ class ExecutionLock:
             )
             if acquired:
                 logger.info(
-                    f"Execution lock acquired",
+                    "Execution lock acquired",
                     extra={"task_id": task_id, "lock_id": lock_id, "owner": owner, "ttl": ttl},
                 )
                 return record
@@ -173,7 +172,7 @@ class ExecutionLock:
 
             await redis_client.client.delete(key)
             logger.info(
-                f"Execution lock released",
+                "Execution lock released",
                 extra={"task_id": task_id, "lock_id": lock_id},
             )
             return True
@@ -230,7 +229,7 @@ class ExecutionLock:
                 ex=new_ttl,
             )
             logger.info(
-                f"Execution lock extended",
+                "Execution lock extended",
                 extra={"task_id": task_id, "lock_id": lock_id, "new_ttl": new_ttl},
             )
             return True
@@ -303,7 +302,7 @@ class ExecutionLock:
             from ..memory.short_term import redis_client
             await redis_client.client.delete(key)
             logger.warning(
-                f"Execution lock forcefully released",
+                "Execution lock forcefully released",
                 extra={"task_id": task_id},
             )
             return True

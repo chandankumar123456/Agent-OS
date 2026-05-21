@@ -11,22 +11,18 @@ Services:
 
 import asyncio
 import json
-from typing import Dict, Any, Optional
 from concurrent import futures
 
 import grpc
-from google.protobuf import empty_pb2
 
 from ..logs.logger import logger
 
 # Import proto-generated classes (files are in app/proto/ directory)
 # Generated from supervisor/proto/ files using grpc_tools.protoc
-import sys
-from pathlib import Path
 
 # Import from app/proto where generated files are located
 from ..proto import runtime_pb2, runtime_pb2_grpc
-from ..proto import checkpoint_pb2, checkpoint_pb2_grpc
+from ..proto import checkpoint_pb2_grpc
 from ..proto.checkpoint_pb2 import (
     SaveCheckpointResponse as CheckpointResponse,
     GetCheckpointResponse,
@@ -107,10 +103,14 @@ class GRPCServer:
             WorkerServiceImpl(self._runtime, self._orchestrator, self._kernel), self._server
         )
 
-        self._server.add_insecure_port(f"{self._host}:{self._port}")
+        if self._host.startswith("unix:"):
+            bind_addr = self._host
+        else:
+            bind_addr = f"{self._host}:{self._port}"
+        self._server.add_insecure_port(bind_addr)
         await self._server.start()
 
-        logger.info(f"gRPC server started on {self._host}:{self._port}")
+        logger.info(f"gRPC server started on {bind_addr}")
 
     async def stop(self, grace: float = 5.0):
         """Stop the gRPC server."""
@@ -172,13 +172,12 @@ class RuntimeServiceImpl:
 
     async def CreateTask(self, request, context):
         """Create and execute a new task."""
-        import uuid
         from uuid import uuid4
         from google.protobuf.timestamp_pb2 import Timestamp
-        
+
         ts = Timestamp()
         ts.GetCurrentTime()
-        
+
         if self._kernel is not None:
             # Unified AgentKernel path: submit async and return immediately
             try:
@@ -202,7 +201,7 @@ class RuntimeServiceImpl:
             except Exception as kernel_err:
                 logger.error(f"AgentKernel task submission failed: {kernel_err}")
                 return runtime_pb2.CreateTaskResponse(success=False, error=str(kernel_err))
-        
+
         # Legacy orchestrator path (fallback)
         task_id = f"task_{uuid4().hex[:12]}"
         try:
@@ -212,7 +211,7 @@ class RuntimeServiceImpl:
                 config=config,
                 task_id=uuid4(),
             )
-            
+
             # Map AgentOutput status to protobuf TaskStatus
             from ..agents.base import AgentStatus
             status_map = {
@@ -222,7 +221,7 @@ class RuntimeServiceImpl:
                 AgentStatus.RUNNING: runtime_pb2.TASK_STATUS_EXECUTING,
             }
             pb_status = status_map.get(result.status, runtime_pb2.TASK_STATUS_COMPLETED)
-            
+
             task = runtime_pb2.Task(
                 id=str(result.task_id),
                 query=request.query,
@@ -244,10 +243,10 @@ class RuntimeServiceImpl:
                 created_at=ts,
                 updated_at=ts,
             )
-        
+
         # Store for GetTask/ListTasks lookups
         self._tasks[task.id] = task
-        
+
         return runtime_pb2.CreateTaskResponse(
             task=task,
             success=True,
@@ -307,12 +306,12 @@ class RuntimeServiceImpl:
         try:
             tasks = list(self._tasks.values())
             total = len(tasks)
-            
+
             # Apply pagination
             offset = request.offset if hasattr(request, 'offset') else 0
             limit = request.limit if hasattr(request, 'limit') else 100
             paginated = tasks[offset:offset + limit] if offset < len(tasks) else []
-            
+
             return runtime_pb2.ListTasksResponse(
                 tasks=paginated,
                 total_count=total,
@@ -347,9 +346,9 @@ class RuntimeServiceImpl:
                     state=runtime_pb2.RuntimeState.RUNTIME_STATE_READY,
                     active_tasks=self._kernel.active_task_count,
                     queued_tasks=0,
-                    completed_tasks=sum(1 for t in self._tasks.values() 
+                    completed_tasks=sum(1 for t in self._tasks.values()
                                        if t.status == runtime_pb2.TASK_STATUS_COMPLETED),
-                    failed_tasks=sum(1 for t in self._tasks.values() 
+                    failed_tasks=sum(1 for t in self._tasks.values()
                                    if t.status == runtime_pb2.TASK_STATUS_FAILED),
                     metrics=runtime_pb2.RuntimeMetrics(
                         cpu_percent=0.0,
@@ -367,9 +366,9 @@ class RuntimeServiceImpl:
                 state=runtime_pb2.RuntimeState.RUNTIME_STATE_READY,
                 active_tasks=len(self._tasks),
                 queued_tasks=0,
-                completed_tasks=sum(1 for t in self._tasks.values() 
+                completed_tasks=sum(1 for t in self._tasks.values()
                                    if t.status == runtime_pb2.TASK_STATUS_COMPLETED),
-                failed_tasks=sum(1 for t in self._tasks.values() 
+                failed_tasks=sum(1 for t in self._tasks.values()
                                if t.status == runtime_pb2.TASK_STATUS_FAILED),
                 metrics=runtime_pb2.RuntimeMetrics(
                     cpu_percent=0.0,

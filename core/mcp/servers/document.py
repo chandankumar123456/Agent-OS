@@ -5,16 +5,14 @@ import core.mcp.servers._stdio_sanitize  # noqa: F401, E402
 
 import json
 import os
-import sys
 
 os.environ["AGENTOS_LOG_STDERR"] = "1"
 
-from typing import Optional
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("document")
 
-from core.pipelines.document_ingestion import DocumentParser, TextChunker, DocumentSummarizer
+from core.pipelines.document_ingestion import DocumentParser, TextChunker
 
 
 def _fmt(tool_output) -> str:

@@ -1,6 +1,6 @@
 """FR6.1: Desktop recovery strategy tests — RecoveryStrategy.DESKTOP enum and tool alternatives."""
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import patch
 from core.capabilities.recovery import RecoveryEngine, RecoveryStrategy, RecoveryAction
 from core.capabilities.models import ExecutionEnvironment
 
@@ -108,7 +108,6 @@ class TestRecoveryStrategyExecute:
 
     def test_execute_exists(self):
         """execute() method must exist on RecoveryEngine."""
-        from core.capabilities.models import RecoveryDecision
         engine = RecoveryEngine()
         assert hasattr(engine, "execute")
         assert callable(engine.execute)

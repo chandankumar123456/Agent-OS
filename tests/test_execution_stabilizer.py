@@ -502,7 +502,7 @@ async def test_dismiss_popup_verifies_popup_is_gone():
     from core.environments.execution_stabilizer import ActionStabilizer
     from unittest.mock import patch, AsyncMock
     stab = ActionStabilizer()
-    
+
     # First call (before first strategy) detects popup, second call (after dismissal) does not
     with patch.object(stab, "detect_popup_window", new_callable=AsyncMock, side_effect=[
         {"title": "Popup"},  # pre-dismissal check: popup found

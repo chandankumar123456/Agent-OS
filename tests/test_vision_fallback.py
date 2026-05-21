@@ -1,7 +1,7 @@
 """Tests for DPI scaling in vision fallback (FR7.1)."""
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from core.environments.vision_fallback import OpenCVFallbackParser
 

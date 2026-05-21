@@ -5,7 +5,6 @@ Uses monkeypatching for DB isolation (same pattern as existing tests)
 """
 import asyncio
 from uuid import uuid4
-from types import SimpleNamespace
 
 import pytest
 

@@ -1,5 +1,4 @@
 """Tests for LangGraph state definitions."""
-import pytest
 from core.langgraph.state import AgentState
 
 

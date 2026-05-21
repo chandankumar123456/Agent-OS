@@ -1,6 +1,5 @@
 from typing import Dict, Any, Optional, List, Callable
 from uuid import UUID, uuid4
-from datetime import datetime
 from .message import MCPMessage, Payload, Metadata
 from .bus import MCPBus, MemoryMCPBus
 from .router import MessageRouter
@@ -97,7 +96,7 @@ class MCPProtocol:
             ]
         else:
             self.message_log.clear()
-        logger.info(f"Cleared MCP message history")
+        logger.info("Cleared MCP message history")
 
     def _append_to_log(self, message: MCPMessage):
         self.message_log.append(message)

@@ -1,6 +1,6 @@
 """Tests for MCP client manager."""
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 from core.mcp.client_manager import MCPClientManager
 

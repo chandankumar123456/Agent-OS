@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from .short_term import redis_client
 from .long_term import db
 from ..logs.logger import logger
-from ..orchestrator.errors import AgentOSError, ErrorCode, ErrorType
 
 
 class ConsistencyLevel(str, Enum):

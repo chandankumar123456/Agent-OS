@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean, UniqueConstraint, Enum as SQLEnum
+from sqlalchemy import Column, String, DateTime, Integer, Float, Text, JSON, Boolean, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase
 from datetime import datetime, timezone
@@ -67,7 +67,7 @@ class GuardrailRuleStatus(str, PyEnum):
 
 class TaskModel(Base):
     __tablename__ = "tasks"
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id = Column(String(36), nullable=False, index=True)
     query = Column(Text, nullable=False)
@@ -80,7 +80,7 @@ class TaskModel(Base):
 
 class StepModel(Base):
     __tablename__ = "steps"
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     task_id = Column(String(36), nullable=False, index=True)
     step_number = Column(Integer, nullable=False)
@@ -138,7 +138,7 @@ class WorkflowEdgeModel(Base):
 
 class ContextModel(Base):
     __tablename__ = "context"
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     task_id = Column(String(36), nullable=False, index=True)
     key = Column(String(100), nullable=False)
@@ -149,7 +149,7 @@ class ContextModel(Base):
 
 class MessageModel(Base):
     __tablename__ = "messages"
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     task_id = Column(String(36), nullable=False, index=True)
     step_id = Column(String(36), nullable=True, index=True)
@@ -322,7 +322,7 @@ class CheckpointWriteModel(Base):
 
 class UserModel(Base):
     __tablename__ = "users"
-    
+
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     email = Column(String(255), unique=True, nullable=False, index=True)
     name = Column(String(100), nullable=True)
@@ -492,25 +492,25 @@ class CheckpointMetadataModel(Base):
     checkpoint_id = Column(String(100), nullable=False, index=True)
     thread_id = Column(String(100), nullable=False, index=True)
     task_id = Column(String(36), nullable=False, index=True)
-    
+
     # Node and step information
     node_name = Column(String(100), nullable=False)  # planner_node, executor_node, etc.
     step_index = Column(Integer, nullable=True)  # Current step in plan
     step_type = Column(String(50), nullable=True)  # Type of step being executed
-    
+
     # Decision context
     decision_context = Column(JSON, nullable=True)  # Why this checkpoint was saved
     decision_reason = Column(Text, nullable=True)  # Human-readable reason
-    
+
     # Chain navigation
     parent_checkpoint_id = Column(String(100), nullable=True, index=True)
     child_checkpoint_ids = Column(JSON, default=list)  # List of child checkpoint IDs
-    
+
     # Execution context
     agent_id = Column(String(36), nullable=True)  # Which agent was active
     tool_calls = Column(JSON, default=list)  # Tool calls made at this point
     recovery_attempts = Column(Integer, default=0)  # Number of recovery attempts
-    
+
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     metadata_json = Column("metadata", JSON, nullable=True)
@@ -530,23 +530,23 @@ class UserMemoryProfileModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     user_id = Column(String(36), nullable=False, unique=True, index=True)
-    
+
     # Profile content
     learned_patterns = Column(JSON, default=list)  # List of learned patterns
     preferences = Column(JSON, default=dict)  # User preferences
     common_tasks = Column(JSON, default=list)  # Frequently executed task types
     recent_context = Column(JSON, default=list)  # Recent task summaries
-    
+
     # Cross-task knowledge
     knowledge_entries = Column(JSON, default=list)  # Key-value knowledge pairs
     error_patterns = Column(JSON, default=list)  # Known error patterns and solutions
     success_strategies = Column(JSON, default=list)  # What worked well
-    
+
     # Pruning and management
     last_pruned_at = Column(DateTime, nullable=True)
     entry_count = Column(Integer, default=0)
     profile_size_bytes = Column(Integer, default=0)
-    
+
     # Metadata
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
@@ -562,32 +562,32 @@ class ArtifactModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     artifact_id = Column(String(100), unique=True, nullable=False, index=True)
-    
+
     # Ownership
     task_id = Column(String(36), nullable=False, index=True)
     agent_id = Column(String(36), nullable=True, index=True)
     user_id = Column(String(36), nullable=False, index=True)
-    
+
     # Artifact details
     artifact_type = Column(String(50), nullable=False)  # file, image, document, etc.
     name = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
     mime_type = Column(String(100), nullable=True)
-    
+
     # Storage
     storage_backend = Column(String(50), default="filesystem")  # filesystem, s3, etc.
     uri = Column(String(500), nullable=False)  # Full path/URL to artifact
     size_bytes = Column(Integer, nullable=True)
     checksum = Column(String(64), nullable=True)  # SHA-256 checksum
-    
+
     # Metadata
     tags = Column(JSON, default=list)
     metadata_json = Column("metadata", JSON, nullable=True)  # Custom metadata
-    
+
     # Lifecycle
     retention_days = Column(Integer, default=90)
     archived_at = Column(DateTime, nullable=True)
-    
+
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
@@ -601,37 +601,37 @@ class AuditModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     audit_id = Column(String(100), unique=True, nullable=False, index=True)
-    
+
     # Event details
     event_type = Column(String(50), nullable=False, index=True)  # task_start, tool_call, approval, etc.
     event_action = Column(String(100), nullable=False)  # Specific action taken
-    
+
     # Actors
     user_id = Column(String(36), nullable=True, index=True)  # Who triggered it
     task_id = Column(String(36), nullable=True, index=True)
     agent_id = Column(String(36), nullable=True, index=True)
     session_id = Column(String(100), nullable=True, index=True)
-    
+
     # Context
     resource_type = Column(String(50), nullable=True)  # task, tool, agent, etc.
     resource_id = Column(String(100), nullable=True)
-    
+
     # Data (immutable record)
     request_data = Column(JSON, nullable=True)  # Input/request
     response_data = Column(JSON, nullable=True)  # Output/response
-    
+
     # Outcome
     status = Column(String(20), nullable=False)  # success, failure, denied
     error_message = Column(Text, nullable=True)
-    
+
     # Security
     ip_address = Column(String(45), nullable=True)  # IPv6 compatible
     user_agent = Column(String(500), nullable=True)
-    
+
     # Timestamp (separate from created_at for potential clock skew handling)
     event_timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
-    
+
     # Tamper-evident (optional - for high-security deployments)
     previous_audit_hash = Column(String(64), nullable=True)  # Chain of custody
     audit_hash = Column(String(64), nullable=True)  # Hash of this record
@@ -646,16 +646,16 @@ class AgentStateTransitionModel(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     agent_id = Column(String(36), nullable=False, index=True)
-    
+
     # State transition
     from_state = Column(String(50), nullable=False)
     to_state = Column(String(50), nullable=False)
-    
+
     # Context
     triggered_by = Column(String(100), nullable=False)  # Component that triggered
     reason = Column(Text, nullable=True)  # Human-readable reason
     context = Column(JSON, nullable=True)  # Additional context
-    
+
     # Timestamps
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -671,29 +671,29 @@ class TaskQueueEntryModel(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
     task_id = Column(String(36), nullable=False, unique=True, index=True)
     user_id = Column(String(36), nullable=False, index=True)
-    
+
     # Queue position
     priority = Column(String(20), default="normal")  # critical, high, normal, low
     priority_score = Column(Float, default=0.0)  # Computed priority score
     queue_position = Column(Integer, nullable=True)
-    
+
     # Scheduling
     scheduled_at = Column(DateTime, nullable=True)  # When to execute (future scheduling)
     enqueue_time = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     expected_start_time = Column(DateTime, nullable=True)
-    
+
     # Status
     status = Column(String(20), default="queued")  # queued, processing, completed, failed
     worker_id = Column(String(100), nullable=True)  # Assigned worker
-    
+
     # Execution constraints
     required_capabilities = Column(JSON, default=list)
     excluded_workers = Column(JSON, default=list)
-    
+
     # Timeouts
     timeout_seconds = Column(Integer, nullable=True)
     expires_at = Column(DateTime, nullable=True)
-    
+
     # Metadata
     retry_count = Column(Integer, default=0)
     last_error = Column(Text, nullable=True)

@@ -3,7 +3,6 @@
 Validates tool inputs through a multi-stage pipeline:
 Schema Validation → Type Check → Safety Check → Permission Check → Execution
 """
-import json
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -99,7 +98,7 @@ class ToolInputValidator:
 
         if not valid:
             logger.warning(
-                f"Tool validation failed",
+                "Tool validation failed",
                 extra={
                     "tool_name": tool_name,
                     "errors": errors,

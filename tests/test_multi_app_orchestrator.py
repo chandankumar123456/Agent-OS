@@ -8,13 +8,13 @@ graceful degradation — all with session managers and subprocess mocked.
 import os
 import sys
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
+from unittest.mock import patch, MagicMock, PropertyMock
 
 from core.environments.multi_app_orchestrator import (
     WorkflowCheckpoint,
     MultiAppOrchestrator,
 )
-from core.environments.window_registry import WindowRef, WindowRegistry
+from core.environments.window_registry import WindowRegistry
 from core.tools.base import ToolOutput
 
 

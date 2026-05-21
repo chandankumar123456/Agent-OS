@@ -4,9 +4,7 @@
 import core.mcp.servers._stdio_sanitize  # noqa: F401, E402
 
 import os
-import fnmatch
 from pathlib import Path
-from typing import List
 
 os.environ["AGENTOS_LOG_STDERR"] = "1"
 

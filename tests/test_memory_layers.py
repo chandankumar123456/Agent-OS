@@ -1,10 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from core.memory.task_memory import TaskMemory, task_memory
-from core.memory.session_memory import SessionMemory, session_memory
-from core.memory.workflow_memory import WorkflowMemory, workflow_memory
-from core.memory.user_memory import UserMemory, user_memory
+from core.memory.task_memory import TaskMemory
+from core.memory.session_memory import SessionMemory
+from core.memory.workflow_memory import WorkflowMemory
+from core.memory.user_memory import UserMemory
 
 
 @pytest.mark.asyncio

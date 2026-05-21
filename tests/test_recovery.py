@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 from core.capabilities.recovery import RecoveryEngine, RecoveryAction
 from core.capabilities.models import VerificationReport, VerificationResult
 

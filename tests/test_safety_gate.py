@@ -1,4 +1,3 @@
-import pytest
 
 from core.safety.gate import SafetyGate, safety_gate
 from core.safety.models import ActionSeverity

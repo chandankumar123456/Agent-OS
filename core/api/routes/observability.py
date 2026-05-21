@@ -1,5 +1,4 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-from typing import Optional
 from ...api.deps import get_current_user
 from ...logs.metrics import metrics_collector
 from ...logs.anomaly import anomaly_detector
@@ -8,7 +7,6 @@ from ...logs.profiler import performance_profiler
 from ...runtime.resource_limits import resource_limit_enforcer
 from ...runtime.scaling import scaling_coordinator
 from ...logs.tracing import trace_manager
-from ...memory.long_term import trace_repo
 
 router = APIRouter(prefix="/observability", tags=["observability"])
 

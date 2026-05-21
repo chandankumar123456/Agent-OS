@@ -3,7 +3,7 @@
 Stores user preferences, learned patterns, and task history to enable
 personalized agent behavior across multiple task executions.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from .short_term import redis_client
 from .long_term import db
 from ..logs.logger import logger
-from ..orchestrator.errors import AgentOSError, ErrorCode, ErrorType
 
 
 class UserFact(BaseModel):

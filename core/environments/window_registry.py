@@ -11,7 +11,6 @@ and optional — the module degrades gracefully when they are unavailable.
 from __future__ import annotations
 
 import importlib
-import platform
 import sys
 import uuid
 from dataclasses import dataclass, field, asdict

@@ -3,13 +3,13 @@
 Enforces which agents can use which tools at execution time,
 integrating with the RBAC system and ToolRegistry.
 """
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from ..logs.logger import logger
 from ..safety.rbac import AgentRole, RBAC, rbac as default_rbac
-from .base import ToolInput, ToolOutput
+from .base import ToolOutput
 
 
 class PermissionResult(BaseModel):
@@ -172,7 +172,7 @@ class ToolPermissions:
         result = await self.check_permission(tool_name, agent_id, agent_role)
         if not result.allowed:
             logger.warning(
-                f"Tool permission denied",
+                "Tool permission denied",
                 extra={
                     "tool_name": tool_name,
                     "agent_id": agent_id,

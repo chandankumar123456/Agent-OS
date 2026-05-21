@@ -14,14 +14,12 @@ import json
 import re
 import hashlib
 from enum import Enum
-from typing import Dict, Any, List, Optional, Set, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field
 
 from ..logs.logger import logger
-from ..orchestrator.errors import AgentOSError, ErrorType, ErrorCode
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────
@@ -205,7 +203,7 @@ class GroundingVerifier:
             if claim_url in result_str:
                 claim.status = GroundingStatus.GROUNDED
                 claim.source_tool = tool_result.get("tool", "unknown")
-                claim.anchor = f"Tool result references URL"
+                claim.anchor = "Tool result references URL"
                 claim.verified_at = datetime.now(timezone.utc).isoformat()
                 return claim
 

@@ -6,7 +6,6 @@ All desktop-native subsystems should use this for persistence.
 
 import asyncio
 import os
-import sqlite3
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Optional
 

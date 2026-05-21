@@ -1,11 +1,9 @@
 """Deterministic Verification Engine — replaces weak LLM verification with concrete checks."""
 import os
 import sys
-import json
 import re
 import asyncio
 from typing import Dict, Any, List, Optional, Callable
-from urllib.parse import urlparse
 
 import httpx
 

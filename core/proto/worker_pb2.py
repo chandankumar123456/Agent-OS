@@ -24,14 +24,14 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cworker.proto\x12\x06worker\"\xc1\x01\n\x0bTaskRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x11\n\ttask_type\x18\x02 \x01(\t\x12\x0f\n\x07payload\x18\x03 \x01(\t\x12\x17\n\x0ftimeout_seconds\x18\x04 \x01(\x05\x12\x33\n\x08metadata\x18\x05 \x03(\x0b\x32!.worker.TaskRequest.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"w\n\x0cTaskResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x0e\n\x06result\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x05 \x01(\x03\x12\x11\n\tworker_id\x18\x06 \x01(\t\"\"\n\rHealthRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\"2\n\x0eHealthResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x0f\n\x07version\x18\x02 \x01(\t2\x88\x01\n\x0eWorkerExecutor\x12\x38\n\x0b\x45xecuteTask\x12\x13.worker.TaskRequest\x1a\x14.worker.TaskResponse\x12<\n\x0bHealthCheck\x12\x15.worker.HealthRequest\x1a\x16.worker.HealthResponseB%Z#github.com/AgentOS/supervisor/protob\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x0cworker.proto\x12\x06worker\"\xc1\x01\n\x0bTaskRequest\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x11\n\ttask_type\x18\x02 \x01(\t\x12\x0f\n\x07payload\x18\x03 \x01(\t\x12\x17\n\x0ftimeout_seconds\x18\x04 \x01(\x05\x12\x33\n\x08metadata\x18\x05 \x03(\x0b\x32!.worker.TaskRequest.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"w\n\x0cTaskResponse\x12\x0f\n\x07task_id\x18\x01 \x01(\t\x12\x0f\n\x07success\x18\x02 \x01(\x08\x12\x0e\n\x06result\x18\x03 \x01(\t\x12\r\n\x05\x65rror\x18\x04 \x01(\t\x12\x13\n\x0b\x64uration_ms\x18\x05 \x01(\x03\x12\x11\n\tworker_id\x18\x06 \x01(\t\"\"\n\rHealthRequest\x12\x11\n\tworker_id\x18\x01 \x01(\t\"2\n\x0eHealthResponse\x12\x0f\n\x07healthy\x18\x01 \x01(\x08\x12\x0f\n\x07version\x18\x02 \x01(\t2\x88\x01\n\x0eWorkerExecutor\x12\x38\n\x0b\x45xecuteTask\x12\x13.worker.TaskRequest\x1a\x14.worker.TaskResponse\x12<\n\x0bHealthCheck\x12\x15.worker.HealthRequest\x1a\x16.worker.HealthResponseB:Z8github.com/AgentOS/agentos-runtime/internal/proto/workerb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'worker_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
-  _globals['DESCRIPTOR']._serialized_options = b'Z#github.com/AgentOS/supervisor/proto'
+  _globals['DESCRIPTOR']._serialized_options = b'Z8github.com/AgentOS/agentos-runtime/internal/proto/worker'
   _globals['_TASKREQUEST_METADATAENTRY']._loaded_options = None
   _globals['_TASKREQUEST_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_TASKREQUEST']._serialized_start=25

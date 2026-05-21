@@ -2,7 +2,6 @@ import os
 import platform
 
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
-from uuid import uuid4
 from typing import List, Dict, Any
 from .llm_client import get_llm_client
 from ..logs.logger import logger
@@ -180,7 +179,7 @@ class PlannerAgent:
                     step["required"] = True
 
         return steps
-    
+
     async def execute(self, input_data: AgentInput) -> AgentOutput:
         query = input_data.input_data.get("query", "")
         tools = input_data.input_data.get("tools", [])
@@ -211,7 +210,7 @@ class PlannerAgent:
         try:
             result = await get_llm_client().complete_json(messages)
             steps = self._normalize_plan_response(result, home_path=home_path, desktop_path=desktop_path)
-            
+
             return AgentOutput(
                 task_id=input_data.task_id,
                 step_id=input_data.step_id,

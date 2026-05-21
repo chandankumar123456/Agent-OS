@@ -2,7 +2,6 @@ from typing import Dict, Any
 from ..agents.planner import PlannerAgent
 from ..agents.executor import ExecutorAgent
 from ..agents.verifier import VerifierAgent
-from ..agents.base import BaseAgent
 from ..logs.logger import logger
 
 

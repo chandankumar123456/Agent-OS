@@ -26,7 +26,7 @@ class MCPMessage(BaseModel):
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     payload: Payload = Field(default_factory=Payload)
     metadata: Metadata = Field(default_factory=Metadata)
-    
+
     model_config = ConfigDict(json_schema_extra={
             "example": {
                 "message_id": "a1b2c3d4-...",

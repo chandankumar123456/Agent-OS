@@ -5,23 +5,21 @@ checkpointing, and slow-app launch scenarios — all under heavy mocking to
 simulate real workflows without actual apps open.
 """
 
-import asyncio
 import json
 import os
 import sys
 import tempfile
 import pytest
-from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
-from core.safety.approval_store import ApprovalStore, ApprovalMode, ApprovalSession
-from core.environments.desktop_env import DesktopSession, DesktopSessionManager
+from core.safety.approval_store import ApprovalStore, ApprovalMode
+from core.environments.desktop_env import DesktopSession
 from core.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
 from core.environments.multi_app_orchestrator import (
     MultiAppOrchestrator,
     WorkflowCheckpoint,
 )
 from core.environments.window_registry import WindowRef, WindowRegistry
-from core.tools.base import ToolOutput
 
 
 # ===========================================================================

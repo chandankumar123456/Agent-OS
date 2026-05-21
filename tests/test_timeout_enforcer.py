@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from core.orchestrator.timeouts import TimeoutEnforcer, TimeoutConfig
-from core.orchestrator.errors import AgentOSError, ErrorType, ErrorCode
+from core.orchestrator.errors import AgentOSError, ErrorCode
 
 
 @pytest.fixture

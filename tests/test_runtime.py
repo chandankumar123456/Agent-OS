@@ -1,7 +1,6 @@
 import pytest
 from uuid import uuid4
 from core.runtime.runtime import AgentRuntime
-from core.runtime.worker import AgentWorker
 
 
 def test_runtime_singleton():

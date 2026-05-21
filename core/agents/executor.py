@@ -2,15 +2,12 @@ import json
 import os
 import platform
 from .base import AgentInput, AgentOutput, AgentRole, AgentStatus
-from uuid import uuid4
 from typing import List, Dict, Any, Optional
 from .llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.parser import ToolCallParser
 from ..tools.registry import tool_registry
 from ..environments.desktop_env import DesktopSessionManager
-from ..environments.execution_stabilizer import ActionStabilizer
-from ..environments.window_registry import WindowRegistry
 # Lazy import to avoid circular import with app.desktop.goal_loop
 # DesktopGoalLoop = None  # type: ignore
 from ..utils.paths import get_desktop_path as _get_desktop_path

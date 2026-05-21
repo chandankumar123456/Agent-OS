@@ -108,7 +108,7 @@ class LocalExecutionLock:
             logger.warning(f"Failed to persist lock to SQLite: {e}")
 
         logger.info(
-            f"Execution lock acquired",
+            "Execution lock acquired",
             extra={"task_id": task_id, "lock_id": lock_id, "owner": owner, "ttl": ttl},
         )
         return record
@@ -146,7 +146,7 @@ class LocalExecutionLock:
             logger.warning(f"Failed to remove lock from SQLite: {e}")
 
         logger.info(
-            f"Execution lock released",
+            "Execution lock released",
             extra={"task_id": task_id, "lock_id": lock_id},
         )
         return True
@@ -192,7 +192,7 @@ class LocalExecutionLock:
             logger.warning(f"Failed to extend lock in SQLite: {e}")
 
         logger.info(
-            f"Execution lock extended",
+            "Execution lock extended",
             extra={"task_id": task_id, "lock_id": lock_id, "new_ttl": current.ttl_seconds},
         )
         return True
@@ -233,7 +233,7 @@ class LocalExecutionLock:
             logger.warning(f"Failed to force release lock in SQLite: {e}")
 
         logger.warning(
-            f"Execution lock forcefully released",
+            "Execution lock forcefully released",
             extra={"task_id": task_id},
         )
         return True

@@ -7,7 +7,6 @@ from ..config.settings import settings
 from ..logs.logger import logger
 from ..agents.types import TaskStatus
 from ..runtime.runtime import AgentRuntime
-from ..orchestrator.errors import ErrorType, ErrorCode, UnrecoverableError, AgentOSError
 
 
 def _is_desktop_mode() -> bool:

@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -198,7 +198,6 @@ def _search_registry_uninstall(app_name: str) -> Optional[str]:
 
 def _find_main_executable(directory: str, app_name: str) -> Optional[str]:
     """Find the main executable in a directory, heuristic based on name."""
-    import fnmatch
     candidates = []
     for root, _, files in os.walk(directory):
         for f in files:

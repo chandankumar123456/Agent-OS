@@ -11,7 +11,6 @@ Usage:
     await sqlite_tuning.apply_optimizations()
 """
 
-import asyncio
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 

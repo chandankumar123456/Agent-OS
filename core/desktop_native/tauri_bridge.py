@@ -12,8 +12,6 @@ Usage:
     await tauri_bridge.show_notification("Task Complete", "Your task has finished")
 """
 
-import json
-import os
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 

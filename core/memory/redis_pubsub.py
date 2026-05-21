@@ -8,7 +8,6 @@ Redis instance with its own connection pool.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 from typing import AsyncIterator, Optional
 
 import redis.asyncio as redis

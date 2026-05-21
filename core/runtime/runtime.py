@@ -2,7 +2,7 @@ import asyncio
 import os
 from typing import Dict, Any, List, Optional
 from ..logs.logger import logger
-from ..orchestrator.errors import AgentOSError, UnrecoverableError, ErrorCode, ErrorType
+from ..orchestrator.errors import UnrecoverableError, ErrorCode, ErrorType
 from .worker import AgentWorker
 from .factory import AgentFactory
 from .pool import AgentPool
@@ -53,7 +53,7 @@ class AgentRuntime:
             if self._initialized:
                 logger.debug("AgentRuntime.initialize() called but already initialized; skipping")
                 return
-            
+
             # Initialize gRPC client if in grpc mode
             if GRPC_AVAILABLE:
                 try:
@@ -72,7 +72,7 @@ class AgentRuntime:
                     self._grpc_mode = False
             else:
                 logger.info("AgentRuntime initializing without gRPC support")
-            
+
             logger.info("AgentRuntime initializing core agents...")
 
             # Try to acquire a cross-process Redis mutex for DB writes
@@ -158,7 +158,7 @@ class AgentRuntime:
                 pass
             self._init_mutex_value = None
         logger.info("AgentRuntime reset")
-    
+
     async def initialize_grpc_client(self) -> bool:
         """Initialize gRPC client when in GRPC mode.
         
@@ -168,40 +168,40 @@ class AgentRuntime:
         if not GRPC_AVAILABLE:
             logger.warning("gRPC not available (import error)")
             return False
-        
+
         try:
             mode = get_runtime_mode()
             # mode is a RuntimeMode enum from config.mode
             self._grpc_mode = (mode == RuntimeMode.GRPC)
-            
+
             if not self._grpc_mode:
                 logger.info("Runtime mode is HTTP, skipping gRPC client initialization")
                 return False
-            
+
             # Initialize gRPC client
             grpc_address = get_grpc_address()
             host, port_str = grpc_address.rsplit(":", 1)
             port = int(port_str)
-            
+
             config = GRPCClientConfig(
                 host=host,
                 port=port,
                 connection_timeout=5.0,
                 keepalive_timeout=60
             )
-            
+
             self._grpc_client = GRPCClient(config)
             await self._grpc_client.connect()
-            
+
             logger.info(f"gRPC client initialized for mode={mode}, address={grpc_address}")
             return True
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize gRPC client: {e}")
             self._grpc_client = None
             self._grpc_mode = False
             return False
-    
+
     async def shutdown_grpc_client(self):
         """Shutdown gRPC client if initialized."""
         if self._grpc_client and self._grpc_client.is_connected:
@@ -210,7 +210,7 @@ class AgentRuntime:
                 logger.info("gRPC client shutdown")
             except Exception as e:
                 logger.error(f"Failed to shutdown gRPC client: {e}")
-    
+
     def is_grpc_mode(self) -> bool:
         """Check if runtime is in gRPC mode.
         
@@ -218,7 +218,7 @@ class AgentRuntime:
             bool: True if gRPC mode, False if HTTP mode
         """
         return self._grpc_mode
-    
+
     async def execute_task_via_grpc(
         self,
         task_id: str,
@@ -244,10 +244,10 @@ class AgentRuntime:
         """
         if not self._grpc_client:
             raise RuntimeError("gRPC client not initialized. Call initialize_grpc_client() first.")
-        
+
         if not self._grpc_client.is_connected:
             raise RuntimeError("gRPC client not connected.")
-        
+
         return await self._grpc_client.worker.execute_task(
             task_id=task_id,
             task_type=task_type,
@@ -312,7 +312,7 @@ class AgentRuntime:
                 errors.append((agent_id, f"release: {e}"))
         self._workers.clear()
         self._initialized = False
-        
+
         # Close gRPC client if connected
         if self._grpc_client:
             try:
@@ -320,7 +320,7 @@ class AgentRuntime:
                 logger.info("gRPC client closed")
             except Exception as e:
                 errors.append(("grpc", f"close: {e}"))
-        
+
         if errors:
             logger.warning(f"Shutdown errors: {errors}")
         logger.info("All agent workers shutdown")
@@ -400,7 +400,7 @@ class AgentRuntime:
             self._workers.pop(agent_key, None)
         await self.register(agent_key, config)
         logger.info(f"Runtime loaded agent {agent_key} version {version}")
-    
+
     def get_grpc_client(self) -> Optional[Any]:
         """Get gRPC client if available."""
         return self._grpc_client if self._grpc_client is not None else None

@@ -13,18 +13,12 @@ Design:
 
 import asyncio
 import json
-import os
 import signal
-import sys
-import time
-import traceback
 import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from ..logs.logger import logger
-from ..config.settings import settings
 from .sqlite_store import sqlite_store
 from .event_bus import local_event_bus, Event
 from .locks import local_execution_lock
@@ -456,7 +450,6 @@ class AgentKernel:
             await local_timeout_enforcer.set_config(task_id, timeout_config)
 
             # Execute via orchestrator
-            from ..agents.types import TaskStatus
             from ..orchestrator.context import TaskContext
 
             ctx = TaskContext(

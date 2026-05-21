@@ -6,10 +6,9 @@ Events are also persisted to SQLite for recovery.
 
 import asyncio
 import json
-import weakref
 from collections import defaultdict
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Dict, List, Optional, Set
 
 from ..logs.logger import logger
 from .sqlite_store import sqlite_store

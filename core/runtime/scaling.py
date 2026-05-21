@@ -1,6 +1,5 @@
-import asyncio
 from typing import Dict, Any, List, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from ..memory.short_term import redis_client
 from ..logs.logger import logger

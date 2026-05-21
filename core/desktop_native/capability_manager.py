@@ -15,12 +15,11 @@ Usage:
 """
 
 import secrets
-import hashlib
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Set
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ..logs.logger import logger
 from .sqlite_store import sqlite_store

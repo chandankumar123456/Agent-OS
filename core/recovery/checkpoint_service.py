@@ -1,5 +1,5 @@
 """Checkpoint recovery service for resuming tasks from persisted state."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from ..langgraph.graphs import get_checkpointer
 from ..logs.logger import logger

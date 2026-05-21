@@ -1,5 +1,4 @@
 """Unit tests for RBAC system: AgentRole, Permission, RoleDefinition, RBAC."""
-import pytest
 
 from core.safety.rbac import (
     AgentRole,

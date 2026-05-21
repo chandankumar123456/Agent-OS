@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from ..memory.short_term import redis_client
 from ..memory.long_term import db
 from ..logs.logger import logger
-from ..orchestrator.errors import AgentOSError, ErrorCode, ErrorType
 
 
 class ReplayStep(BaseModel):

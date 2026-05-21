@@ -99,7 +99,7 @@ def get_grpc_client_config():
     """Get gRPC client configuration for current mode."""
     from core.proto.grpc_client import GRPCClientConfig
     from core.config.settings import settings
-    
+
     return GRPCClientConfig(
         host=settings.GRPC_HOST,
         port=settings.GRPC_PORT,

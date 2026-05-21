@@ -1,7 +1,7 @@
 """Tests for ToolPermissions with RBAC integration and permission denial."""
 import pytest
 
-from core.tools.permissions import ToolPermissions, PermissionResult, ToolPermissionModel
+from core.tools.permissions import ToolPermissions, ToolPermissionModel
 from core.safety.rbac import AgentRole
 
 

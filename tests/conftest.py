@@ -19,7 +19,6 @@ if str(ROOT) not in sys.path:
 
 
 import pytest
-from typing import AsyncGenerator
 
 
 def is_grpc_mode() -> bool:

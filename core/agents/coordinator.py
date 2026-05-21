@@ -4,7 +4,6 @@ All multi-agent workflow orchestration has been consolidated into
 ``orchestrator.agent_loop.AgentLoop``.  This module retains the Pydantic
 models that tests and legacy code import from here.
 """
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 

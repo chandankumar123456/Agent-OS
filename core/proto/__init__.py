@@ -9,7 +9,7 @@ from .grpc_client import GRPCClient, GRPCClientConfig
 
 __all__ = [
     'checkpoint_pb2',
-    'runtime_pb2', 
+    'runtime_pb2',
     'worker_pb2',
     'checkpoint_pb2_grpc',
     'runtime_pb2_grpc',

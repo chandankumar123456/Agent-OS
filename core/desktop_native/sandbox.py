@@ -24,7 +24,7 @@ import sys
 import tempfile
 import subprocess
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 
 from ..logs.logger import logger
 

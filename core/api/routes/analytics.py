@@ -1,11 +1,10 @@
 from fastapi import APIRouter, Query, HTTPException, Depends
 from sqlalchemy import func, extract, select
 from datetime import datetime, timedelta, timezone
-from typing import Optional
 from collections import Counter
 
 from ...memory.long_term import db
-from ...memory.models import TaskModel, TraceModel, NodeTraceModel, SpanModel, TokenUsageModel
+from ...memory.models import TaskModel, TraceModel, SpanModel, TokenUsageModel
 from ...api.deps import get_current_user
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])

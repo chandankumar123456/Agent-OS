@@ -6,9 +6,7 @@ Integrates with TaskStateMachine, IdempotencyEnforcement, and ExecutionLock.
 In gRPC mode (AGENTOS_RUNTIME_MODE=grpc), transparently delegates to
 in-memory fallback to avoid Redis dependency.
 """
-import json
 import time
-import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -194,7 +192,7 @@ class TaskQueue:
             estimated_wait = await self._estimate_wait(position)
 
             logger.info(
-                f"Task enqueued",
+                "Task enqueued",
                 extra={
                     "task_id": task_id,
                     "priority": priority.name,
@@ -307,7 +305,7 @@ class TaskQueue:
                 logger.warning(f"Could not acquire execution lock for {task_id}")
 
             logger.info(
-                f"Task dequeued",
+                "Task dequeued",
                 extra={
                     "task_id": task_id,
                     "worker_id": worker_id,
@@ -352,7 +350,7 @@ class TaskQueue:
             # Set short TTL for cleanup
             await redis_client.client.expire(self._task_key(task_id), 3600)
 
-            logger.info(f"Task marked complete in queue", extra={"task_id": task_id})
+            logger.info("Task marked complete in queue", extra={"task_id": task_id})
             return True
         except Exception as e:
             logger.error(f"Failed to complete task {task_id} in queue: {e}")
@@ -388,7 +386,7 @@ class TaskQueue:
                 await self.execution_lock.release(task_id, lock_info.lock_id)
 
             await redis_client.client.expire(self._task_key(task_id), 3600)
-            logger.info(f"Task marked failed in queue", extra={"task_id": task_id, "error": error})
+            logger.info("Task marked failed in queue", extra={"task_id": task_id, "error": error})
             return True
         except Exception as e:
             logger.error(f"Failed to mark task {task_id} as failed: {e}")
@@ -444,7 +442,7 @@ class TaskQueue:
             )
 
             logger.info(
-                f"Task requeued",
+                "Task requeued",
                 extra={"task_id": task_id, "retry_count": task.retry_count, "delay": delay_seconds},
             )
             return True

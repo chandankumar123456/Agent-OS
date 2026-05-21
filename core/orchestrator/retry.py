@@ -1,10 +1,10 @@
 # Retry logic for AgentOS
 import asyncio
-from typing import Callable, Any, Optional, Dict, Type
+from typing import Callable, Any, Optional
 from functools import wraps
 from ..logs.logger import logger
 from ..config.settings import settings
-from ..orchestrator.errors import RetryableError, UnrecoverableError, AgentOSError
+from ..orchestrator.errors import RetryableError, UnrecoverableError
 
 
 class RetryConfig:

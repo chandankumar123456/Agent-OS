@@ -172,7 +172,7 @@ class ToolCostTracker:
             )
 
         logger.debug(
-            f"Tool invocation cost recorded",
+            "Tool invocation cost recorded",
             extra={
                 "task_id": task_id,
                 "tool_name": tool_name,
@@ -257,7 +257,7 @@ class ToolCostTracker:
             ))
 
         logger.debug(
-            f"Batch tool costs recorded",
+            "Batch tool costs recorded",
             extra={"task_id": task_id, "count": len(records)},
         )
         return records
@@ -274,7 +274,6 @@ class ToolCostTracker:
         Returns:
             Dict mapping tool_name to total cost.
         """
-        from ..logs.cost_tracker import CostBreakdown
         # Get task-level breakdown which includes tool metadata
         breakdown = await self.cost_tracker.get_cost_breakdown("task", task_id)
         # The Redis hash may contain tool metadata but for a clean breakdown
@@ -344,7 +343,7 @@ class _ToolInvocationContext:
         )
 
         logger.debug(
-            f"Tool track finished",
+            "Tool track finished",
             extra={
                 "task_id": self.task_id,
                 "tool_name": self.tool_name,

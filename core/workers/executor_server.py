@@ -43,14 +43,14 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
     Routes task execution requests to the real LangGraph orchestration
     engine and tool registry — no mock data.
     """
-    
+
     def __init__(self):
         """Initialize the executor servicer."""
         pass
-    
+
     def ExecuteTask(
-        self, 
-        request, 
+        self,
+        request,
         context: grpc.ServicerContext
     ):
         """
@@ -59,20 +59,20 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
         start_time = time.time()
         task_id = request.task_id
         task_type = request.task_type
-        
+
         try:
             # Parse JSON payload
             try:
                 payload = json.loads(request.payload) if request.payload else {}
             except json.JSONDecodeError as e:
                 return self._error_response(task_id, f"Invalid JSON payload: {str(e)}", start_time)
-            
+
             # Route to appropriate handler
             result = self._execute_real(task_type, task_id, payload)
             duration_ms = int((time.time() - start_time) * 1000)
-            
+
             result_json = json.dumps(result, default=str)
-            
+
             return worker_pb2.TaskResponse(
                 task_id=task_id,
                 success=True,
@@ -80,11 +80,11 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
                 error="",
                 duration_ms=duration_ms
             )
-            
+
         except Exception as e:
             logger.error(f"Executor task failed: {e}", exc_info=True)
             return self._error_response(task_id, str(e), start_time)
-    
+
     def _execute_real(self, task_type: str, task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Execute a task using real AgentOS components.
@@ -100,15 +100,15 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
             return self._execute_agent(task_id, payload)
         else:
             raise ValueError(f"Unknown task type: {task_type}")
-    
+
     def _execute_mcp_tool(self, task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute an MCP tool call through the real tool registry."""
         tool_name = payload.get("tool_name", "")
         tool_args = payload.get("arguments", {})
-        
+
         if not tool_name:
             raise ValueError("tool_name is required")
-        
+
         # Execute via async bridge
         async def run():
             result = await tool_registry.execute(tool_name, tool_args)
@@ -120,17 +120,17 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
                 "error": result.error if not result.success else None,
                 "success": result.success,
             }
-        
+
         return asyncio.run(run())
-    
+
     def _execute_langgraph(self, task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a LangGraph workflow through the real orchestrator."""
         query = payload.get("query", "")
         config = payload.get("config", {})
-        
+
         if not query:
             raise ValueError("query is required for LangGraph task")
-        
+
         async def run():
             output = await orchestrator.execute_task(
                 query=query,
@@ -146,21 +146,21 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
                 "error": output.error_message if hasattr(output, 'error_message') else None,
                 "success": output.status.name == "SUCCESS" if hasattr(output.status, 'name') else False,
             }
-        
+
         return asyncio.run(run())
-    
+
     def _execute_agent(self, task_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a single agent task through the real orchestrator."""
         query = payload.get("query", "")
         agent_name = payload.get("agent_name", payload.get("agent_id", "default"))
-        
+
         config = {
             "mode": "task",
             "agent_id": agent_name,
         }
         if payload.get("model"):
             config["model"] = payload["model"]
-        
+
         async def run():
             output = await orchestrator.execute_task(
                 query=query,
@@ -177,9 +177,9 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
                 "error": output.error_message if hasattr(output, 'error_message') else None,
                 "success": output.status.name == "SUCCESS" if hasattr(output.status, 'name') else False,
             }
-        
+
         return asyncio.run(run())
-    
+
     def HealthCheck(self, request, context):
         """Health check endpoint."""
         return worker_pb2.HealthResponse(
@@ -187,7 +187,7 @@ class WorkerExecutorServicer(worker_pb2_grpc.WorkerExecutorServicer):
             status="healthy",
             timestamp=int(time.time() * 1000)
         )
-    
+
     def _error_response(self, task_id: str, error: str, start_time: float):
         """Create an error TaskResponse."""
         duration_ms = int((time.time() - start_time) * 1000)
@@ -210,17 +210,17 @@ async def serve(port: int = 50052) -> None:
     if worker_pb2 is None:
         logger.error("worker_pb2 proto module not available, executor server cannot start")
         return
-    
+
     server = grpc.aio.server(futures.ThreadPoolExecutor(max_workers=10))
     worker_pb2_grpc.add_WorkerExecutorServicer_to_server(
         WorkerExecutorServicer(), server
     )
     server.add_insecure_port(f"[::]:{port}")
-    
+
     await server.start()
     logger.info(f"Worker Executor Server started on port {port}")
     logger.info("Using real LangGraph orchestration — no mock data")
-    
+
     try:
         await server.wait_for_termination()
     except asyncio.CancelledError:

@@ -7,7 +7,7 @@ import json
 import os
 import urllib.request
 import urllib.parse
-from typing import Optional, Dict, Any
+from typing import Optional
 
 os.environ["AGENTOS_LOG_STDERR"] = "1"
 

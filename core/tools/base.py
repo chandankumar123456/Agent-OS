@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from abc import ABC, abstractmethod
 
 
@@ -19,11 +19,11 @@ class BaseTool(ABC):
     name: str
     description: str
     parameters_schema: Optional[Dict[str, Any]] = None
-    
+
     @abstractmethod
     async def execute(self, tool_input: ToolInput) -> ToolOutput:
         pass
-    
+
     def get_schema(self) -> Dict[str, Any]:
         return {
             "name": self.name,

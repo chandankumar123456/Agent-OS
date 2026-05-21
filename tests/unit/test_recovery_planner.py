@@ -1,5 +1,4 @@
 """Unit tests for DesktopRecoveryPlanner positive recovery strategies."""
-import pytest
 
 from core.capabilities.recovery import (
     DesktopRecoveryAction,

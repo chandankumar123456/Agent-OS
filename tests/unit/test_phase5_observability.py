@@ -8,12 +8,9 @@ Tests the desktop-native observability and memory systems:
 - MemoryHierarchy (working, short-term, long-term, episodic)
 """
 
-import asyncio
 import json
 import os
-import sys
 import tempfile
-from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -23,10 +20,10 @@ os.environ.setdefault("RUNTIME_MODE", "grpc")
 
 from core.desktop_native.sqlite_store import sqlite_store
 from core.desktop_native.local_logger import LocalLogger
-from core.desktop_native.local_metrics import local_metrics, LocalMetrics
-from core.desktop_native.local_tracer import local_tracer, LocalTracer
-from core.desktop_native.local_alerts import local_alerts, LocalAlertManager, AlertRule
-from core.desktop_native.memory_hierarchy import memory_hierarchy, MemoryHierarchy
+from core.desktop_native.local_metrics import LocalMetrics
+from core.desktop_native.local_tracer import LocalTracer
+from core.desktop_native.local_alerts import LocalAlertManager, AlertRule
+from core.desktop_native.memory_hierarchy import MemoryHierarchy
 
 
 @pytest_asyncio.fixture(autouse=True)

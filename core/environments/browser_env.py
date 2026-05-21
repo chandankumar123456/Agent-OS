@@ -7,19 +7,18 @@ import sys
 import tempfile
 import time
 import urllib.parse
-from typing import Optional, Dict, Any, List, Callable, TypeVar
+from typing import Optional, Dict, List, Callable, TypeVar
 from playwright.async_api import (
     async_playwright,
     Page,
     Browser,
     BrowserContext,
-    Locator,
     TimeoutError as PlaywrightTimeoutError,
     Error as PlaywrightError,
 )
 
 from ..logs.logger import logger
-from ..tools.base import ToolInput, ToolOutput
+from ..tools.base import ToolOutput
 
 
 # Domain-specific search input selectors
@@ -269,7 +268,6 @@ class BrowserSession:
 
     @_retry(max_retries=3, base_delay=1.0)
     async def search(self, query: str) -> ToolOutput:
-        import re
         page = await self._ensure_page()
 
         # If the browser is still on about:blank, navigate to a search engine first

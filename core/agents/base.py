@@ -46,6 +46,6 @@ class AgentOutput(BaseModel):
 class BaseAgent(Protocol):
     name: str
     role: AgentRole
-    
+
     async def execute(self, input_data: AgentInput) -> AgentOutput:
         ...

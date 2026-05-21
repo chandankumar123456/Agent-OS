@@ -121,17 +121,17 @@ class CacheOptimizer:
     async def invalidate_tool(self, tool_name: str) -> int:
         """Invalidate all cached entries for a tool."""
         count = 0
-        pattern = f"agentos:cache:*"
+        pattern = "agentos:cache:*"
 
         # Clear local entries for this tool
-        keys_to_remove = [k for k in self._local_cache if k.startswith(f"agentos:cache:")]
+        keys_to_remove = [k for k in self._local_cache if k.startswith("agentos:cache:")]
         for k in keys_to_remove:
             del self._local_cache[k]
             count += 1
 
         if self._redis and self._redis.client:
             try:
-                async for key in self._redis.client.scan_iter(match=f"agentos:cache:*"):
+                async for key in self._redis.client.scan_iter(match="agentos:cache:*"):
                     await self._redis.client.delete(key)
                     count += 1
             except Exception as e:

@@ -40,7 +40,7 @@ class FindRequest(BaseModel):
 
 class DesktopEngine:
     """Provides desktop automation operations using pyautogui/uiautomation/mss."""
-    
+
     def __init__(self):
         self._pyautogui = None
         self._uia = None
@@ -56,13 +56,13 @@ class DesktopEngine:
             self._pyautogui = pyautogui
         except ImportError:
             logger.warning("pyautogui not available, desktop actions will fail")
-        
+
         try:
             import uiautomation as uia
             self._uia = uia
         except ImportError:
             logger.warning("uiautomation not available, window ops limited")
-        
+
         try:
             import mss
             self._mss = mss.mss()
@@ -74,14 +74,14 @@ class DesktopEngine:
     def screenshot(self, window_title: Optional[str] = None) -> bytes:
         """Take a screenshot, optionally of a specific window by title."""
         self._ensure_initialized()
-        
+
         if window_title:
             # Try to focus and capture specific window
             try:
                 self.focus_window(window_title)
             except HTTPException:
                 logger.warning(f"Window '{window_title}' not found, capturing full screen")
-        
+
         if self._mss:
             monitor = self._mss.monitors[1]  # Primary monitor
             sct_img = self._mss.grab(monitor)
@@ -102,7 +102,7 @@ class DesktopEngine:
         self._ensure_initialized()
         if not self._pyautogui:
             raise HTTPException(status_code=501, detail="pyautogui not available")
-        
+
         btn = button.lower()
         self._pyautogui.click(x, y, clicks=clicks, button=btn)
         logger.info(f"Desktop: clicked at ({x}, {y}) with {btn}")
@@ -112,21 +112,21 @@ class DesktopEngine:
         self._ensure_initialized()
         if not self._pyautogui:
             raise HTTPException(status_code=501, detail="pyautogui not available")
-        
+
         self._pyautogui.typewrite(text, interval=interval_ms / 1000.0)
         logger.info(f"Desktop: typed {len(text)} characters")
 
     def focus_window(self, title: str) -> bool:
         """Focus a window by title."""
         self._ensure_initialized()
-        
+
         if self._uia:
             window = self._uia.WindowControl(searchDepth=1, Name=title)
             if window.Exists(maxSearchSeconds=2):
                 window.SetFocus()
                 logger.info(f"Desktop: focused window '{title}'")
                 return True
-        
+
         # Fallback: try pygetwindow
         try:
             import pygetwindow as gw
@@ -137,13 +137,13 @@ class DesktopEngine:
                 return True
         except ImportError:
             pass
-        
+
         raise HTTPException(status_code=404, detail=f"Window '{title}' not found")
 
     def list_windows(self, filter_text: Optional[str] = None) -> List[Dict[str, Any]]:
         """List all visible windows."""
         windows = []
-        
+
         try:
             import pygetwindow as gw
             all_windows = gw.getAllWindows()
@@ -181,22 +181,22 @@ class DesktopEngine:
                                 "height": w.BoundingRectangle.height() if hasattr(w, 'BoundingRectangle') else 0,
                             }
                         })
-        
+
         return windows
 
     def find_element(self, text: str) -> Optional[Dict[str, Any]]:
         """Find an element on screen by text (OCR-based)."""
         self._ensure_initialized()
-        
+
         # Take screenshot first
         screenshot_bytes = self.screenshot()
-        
+
         # Try OCR
         try:
             import pytesseract
             img = Image.open(io.BytesIO(screenshot_bytes))
             data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-            
+
             for i in range(len(data["text"])):
                 if text.lower() in data["text"][i].lower():
                     confidence = int(data["conf"][i]) / 100.0 if data["conf"][i] != "-1" else 0.5
@@ -213,7 +213,7 @@ class DesktopEngine:
         except ImportError:
             logger.warning("pytesseract not available, cannot find element by text")
             raise HTTPException(status_code=501, detail="pytesseract not available for text search")
-        
+
         return None
 
 

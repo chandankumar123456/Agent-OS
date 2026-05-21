@@ -3,34 +3,32 @@ import json
 import os
 import platform
 from typing import Dict, Any, List, Set, Optional
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.types import interrupt
 
 from ..agents.llm_client import get_llm_client
 from ..logs.logger import logger
 from ..tools.registry import tool_registry, is_task_cancelled
-from ..capabilities import verification_engine, recovery_engine
-from ..capabilities.models import VerificationResult, RecoveryAction
+from ..capabilities import verification_engine
+from ..capabilities.models import VerificationResult
 from ..observability import observability_bus, ObservabilityEventType
 from ..safety.gate import SafetyGate, ActionSeverity
-from ..orchestrator.event_bus import event_bus, Event
 from ..guardrails.validator import guardrails
 from .state import AgentState
-from ..execution_state import ExecutionState, ToolExecutionRecord, ExecutionVerdict
-from ..orchestrator.errors import ErrorType, ErrorCode
+from ..execution_state import ExecutionState, ToolExecutionRecord
 
 async def _validate_node_output(node_name: str, task_id: str, result: Dict[str, Any], output_content: Any) -> Dict[str, Any]:
     """Helper to validate node output through guardrails. Returns updated result if blocked."""
     from ..guardrails.validator import guardrails
     status = result.get("status", "unknown")
     payload = {"status": status, "node": node_name}
-    
+
     # Add snippet of output for content-based guardrails
     if isinstance(output_content, str):
         payload["output"] = output_content[:1000]
     elif isinstance(output_content, (dict, list)):
         payload["output"] = str(output_content)[:1000]
-        
+
     out_valid = await guardrails.verify_output(payload)
     if not out_valid:
         logger.warning(f"[{node_name}] Guardrail output validation failed for task {task_id}")
@@ -42,7 +40,6 @@ async def _validate_node_output(node_name: str, task_id: str, result: Dict[str, 
 
 from ..desktop.goal_loop import DesktopGoalLoop
 from ..utils.paths import get_desktop_path as _get_desktop_path
-from ..utils.paths import resolve_default_params as _build_default_params
 
 
 def _to_openai_messages(messages):
@@ -827,7 +824,7 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         if execution_state and execution_state.has_any_terminal_success():
             det_pass = True
             det_reports = []
-            logger.info(f"[verifier_node] Terminal success detected in execution_state; skipping re-verification")
+            logger.info("[verifier_node] Terminal success detected in execution_state; skipping re-verification")
         else:
             # 2. Fallback: check raw tool_calls for backwards compat
             tool_calls = state.get("tool_calls", []) or []
@@ -841,7 +838,7 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
             if open_app_calls:
                 det_pass = True
                 det_reports = []
-                logger.info(f"[verifier_node] Successful open_application detected in tool_calls; skipping re-verification")
+                logger.info("[verifier_node] Successful open_application detected in tool_calls; skipping re-verification")
             elif env_type == "desktop":
                 # Desktop block handles verify_plan with environment_config;
                 # skip general verify_plan call to avoid double invocation.
@@ -867,7 +864,7 @@ async def verifier_node(state: AgentState) -> Dict[str, Any]:
         # Deterministic terminal success is trusted; skip expensive LLM verification
         llm_verified = True
         notes = "Deterministic terminal success verified. Skipping LLM semantic check."
-        logger.info(f"[verifier_node] Deterministic terminal success — skipping LLM verification")
+        logger.info("[verifier_node] Deterministic terminal success — skipping LLM verification")
     else:
         llm = get_llm_client()
         context = json.dumps({"query": query, "steps": steps}, indent=2, default=str)

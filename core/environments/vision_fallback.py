@@ -21,7 +21,6 @@ Output format matches the accessibility tree so existing tools (click_element,
 type_element, etc.) work transparently.
 """
 
-import json
 import logging
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -778,7 +777,7 @@ class HybridVisionParser(VisionFallbackParser):
             roi_img = img[: full_h - self._opencv.TASKBAR_HEIGHT_ESTIMATE, :]
             window_offset = (0, 0)
             logger.info(
-                f"HybridVisionParser: no window found; excluding taskbar"
+                "HybridVisionParser: no window found; excluding taskbar"
             )
 
         if roi_img.size == 0:
@@ -876,7 +875,7 @@ class HybridVisionParser(VisionFallbackParser):
                 logger.error(f"HybridVisionParser: OmniParser failed: {e}")
         else:
             logger.warning(
-                f"HybridVisionParser: OmniParser not available, staying with weak OpenCV"
+                "HybridVisionParser: OmniParser not available, staying with weak OpenCV"
             )
 
         # 5. Fallback to OpenCV even if weak ---------------------------

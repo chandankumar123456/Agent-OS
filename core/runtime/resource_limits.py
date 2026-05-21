@@ -1,8 +1,7 @@
 import asyncio
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from dataclasses import dataclass
 from ..logs.logger import logger
-from ..runtime.pool import AgentPool
 from ..memory.short_term import redis_client
 
 

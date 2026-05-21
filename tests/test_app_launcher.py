@@ -1,8 +1,6 @@
 """Tests for deterministic app launcher."""
-import os
 import sys
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
 
 from core.environments.app_launcher import (
     _normalize_app_name,

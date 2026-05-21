@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Form, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from typing import List
 
 from ...knowledge.parser import parse_document, split_text_into_chunks

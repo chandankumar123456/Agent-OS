@@ -1,6 +1,6 @@
 """Capability system models and enums for AgentOS."""
 from enum import Enum
-from typing import Dict, Any, List, Optional, Set
+from typing import Dict, Any, List, Optional
 from pydantic import BaseModel
 
 

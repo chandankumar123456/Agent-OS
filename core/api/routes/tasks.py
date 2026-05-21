@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field
 from uuid import UUID, uuid4
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-from ...orchestrator.core import Orchestrator
 from ...agents.types import TaskStatus, StepStatus
 from ...logs.logger import logger
 from ...memory.long_term import task_repo, trace_repo, node_trace_repo, span_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
