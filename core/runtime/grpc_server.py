@@ -10,12 +10,21 @@ Services:
 """
 
 import asyncio
+import importlib.metadata
 import json
 from concurrent import futures
 
 import grpc
 
 from ..logs.logger import logger
+
+
+def _get_version() -> str:
+    """Return the installed package version, or 'dev' if not installed."""
+    try:
+        return importlib.metadata.version("agentos")
+    except importlib.metadata.PackageNotFoundError:
+        return "dev"
 
 # Import proto-generated classes (files are in app/proto/ directory)
 # Generated from supervisor/proto/ files using grpc_tools.protoc
@@ -342,7 +351,7 @@ class RuntimeServiceImpl:
         try:
             if self._kernel is not None:
                 return runtime_pb2.RuntimeStatus(
-                    version="0.2.0",
+                    version=_get_version(),
                     state=runtime_pb2.RuntimeState.RUNTIME_STATE_READY,
                     active_tasks=self._kernel.active_task_count,
                     queued_tasks=0,
@@ -362,7 +371,7 @@ class RuntimeServiceImpl:
                 except Exception:
                     agents = []
             return runtime_pb2.RuntimeStatus(
-                version="0.2.0",
+                version=_get_version(),
                 state=runtime_pb2.RuntimeState.RUNTIME_STATE_READY,
                 active_tasks=len(self._tasks),
                 queued_tasks=0,
@@ -378,7 +387,7 @@ class RuntimeServiceImpl:
         except Exception as e:
             logger.error(f"Get runtime status failed: {e}")
             return runtime_pb2.RuntimeStatus(
-                version="0.2.0",
+                version=_get_version(),
                 state=runtime_pb2.RuntimeState.RUNTIME_STATE_ERROR,
             )
 
@@ -404,11 +413,11 @@ class RuntimeServiceImpl:
                 self._runtime.list_active()
             return runtime_pb2.HealthCheckResponse(
                 healthy=healthy,
-                version="0.2.0"
+                version=_get_version()
             )
         except Exception as e:
             logger.error(f"Health check failed: {e}")
-            return runtime_pb2.HealthCheckResponse(healthy=False, version="0.2.0")
+            return runtime_pb2.HealthCheckResponse(healthy=False, version=_get_version())
 
     async def StreamTaskEvents(self, request, context):
         """Stream task events via server-side streaming."""
@@ -431,7 +440,7 @@ class RuntimeServiceImpl:
         """Get configuration."""
         try:
             return runtime_pb2.GetConfigResponse(
-                config={"runtime_mode": "grpc", "version": "0.2.0"},
+                config={"runtime_mode": "grpc", "version": _get_version()},
                 success=True
             )
         except Exception as e:
@@ -646,7 +655,7 @@ class WorkerServiceImpl:
             agents = self._runtime.list_active()
             return worker_pb2.HealthResponse(
                 healthy=True,
-                version="0.2.0",
+                version=_get_version(),
             )
         except Exception as e:
             logger.error(f"Health check failed: {e}")

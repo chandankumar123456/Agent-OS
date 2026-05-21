@@ -83,14 +83,14 @@ Examples:
   agentos-supervisor -log-level debug   # Enable debug logging
   agentos-supervisor -data-dir /custom/path  # Use custom data directory
 
-Version: 0.4.0 (Phase 5 - Lifecycle/Update/Crypto only)
+Version: 0.5.0 (Phase 5 - Lifecycle/Update/Crypto only)
 `
 	fmt.Print(helpText)
 }
 
 // PrintVersion prints version information
 func PrintVersion() {
-	fmt.Println("AgentOS Supervisor v0.4.0")
+	fmt.Println("AgentOS Supervisor v0.5.0")
 	fmt.Println("Local-native lifecycle supervisor for AgentOS")
 }
 

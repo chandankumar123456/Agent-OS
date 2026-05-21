@@ -2,7 +2,7 @@
 
 Boot the AgentKernel and gRPC IPC server with a single command::
 
-    python -m core --socket-path /tmp/agentos.sock
+    python -m core --socket-path ~/.agentos/ipc.sock
     python -m core --http --http-port 8000
 
 Flags:
@@ -31,7 +31,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--socket-path",
         default=None,
-        help="Unix socket path for gRPC IPC (default: $XDG_RUNTIME_DIR/agentos.sock or /tmp/agentos.sock).",
+        help="Unix socket path for gRPC IPC (default: ~/.agentos/ipc.sock).",
     )
     parser.add_argument(
         "--http",
@@ -102,10 +102,7 @@ async def _run(args: argparse.Namespace) -> None:
 
     socket_path = args.socket_path or os.environ.get(
         "AGENTOS_SOCKET_PATH",
-        os.path.join(
-            os.environ.get("XDG_RUNTIME_DIR", "/tmp"),
-            "agentos.sock",
-        ),
+        os.path.join(data_dir, "ipc.sock"),
     )
 
     grpc_server = GRPCServer(kernel=kernel)
@@ -121,6 +118,7 @@ async def _run(args: argparse.Namespace) -> None:
 
     # --- Optional HTTP adapter --------------------------------------------
     http_server = None
+    http_task = None
     if args.http:
         try:
             from core.adapters.http import build_http_app
@@ -140,7 +138,12 @@ async def _run(args: argparse.Namespace) -> None:
         )
         http_server = uvicorn.Server(config)
         # Run uvicorn in a background task so we don't block the loop
-        asyncio.create_task(http_server.serve())
+        http_task = asyncio.create_task(http_server.serve())
+        http_task.add_done_callback(
+            lambda t: log.error("HTTP server exited unexpectedly: %s", t.exception())
+            if t.done() and not t.cancelled() and t.exception()
+            else None
+        )
         log.info("HTTP adapter listening on port %d", args.http_port)
 
     # --- Shutdown machinery -----------------------------------------------
@@ -165,8 +168,18 @@ async def _run(args: argparse.Namespace) -> None:
     log.info("Shutting down...")
     if http_server is not None:
         http_server.should_exit = True
-        # Give uvicorn a moment to finish in-flight requests
-        await asyncio.sleep(0.5)
+    if http_task is not None:
+        # Give uvicorn time to finish in-flight requests, then cancel
+        try:
+            await asyncio.wait_for(http_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            http_task.cancel()
+            try:
+                await http_task
+            except asyncio.CancelledError:
+                pass
+        except asyncio.CancelledError:
+            pass
     await grpc_server.stop(grace=5.0)
     await kernel.stop(timeout=5.0)
     log.info("AgentOS kernel stopped. Goodbye.")

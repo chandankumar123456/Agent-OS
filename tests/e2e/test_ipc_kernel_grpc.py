@@ -208,4 +208,4 @@ async def test_health_check_via_grpc(grpc_kernel_server):
         stub = runtime_pb2_grpc.RuntimeServiceStub(channel)
         resp = await stub.HealthCheck(runtime_pb2.HealthCheckRequest())
         assert resp.healthy is True
-        assert resp.version == "0.2.0"
+        assert resp.version != ""  # version comes from package metadata
