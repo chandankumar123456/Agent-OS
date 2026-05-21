@@ -6,8 +6,6 @@ import (
 	"runtime"
 	"testing"
 	"time"
-
-	"github.com/AgentOS/supervisor/logger"
 )
 
 // TestSupervisorStarts verifies the supervisor binary starts and responds to health checks
@@ -16,8 +14,8 @@ func TestSupervisorStarts(t *testing.T) {
 		t.Skip("Skipping supervisor smoke test on non-Windows platform")
 	}
 
-	// Find supervisor binary
-	supervisorPath := "../../supervisor/supervisor.exe"
+	// Find supervisor binary (built from runtime-go/)
+	supervisorPath := "../../supervisor.exe"
 	if _, err := os.Stat(supervisorPath); os.IsNotExist(err) {
 		t.Skip("Supervisor binary not found, skipping smoke test")
 	}

@@ -19,11 +19,11 @@ jobs:
           go-version: '1.23'
 
       - name: Build Supervisor
-        working-directory: ./supervisor
+        working-directory: ./runtime-go
         run: go build -v ./...
 
       - name: Test Supervisor
-        working-directory: ./supervisor
+        working-directory: ./runtime-go
         run: go test -v ./...
 
   build-cli:
@@ -172,8 +172,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Supervisor
-        working-directory: ./supervisor
-        run: go build -o supervisor.exe .
+        working-directory: ./runtime-go
+        run: go build -o ../supervisor.exe ./cmd/agentos-supervisor
 
       - name: Build CLI
         working-directory: ./cli

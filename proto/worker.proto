@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package worker;
+
+option go_package = "github.com/AgentOS/agentos-runtime/internal/proto/worker";
+
+// Task execution service for Go worker pool to Python executor communication
+service WorkerExecutor {
+  // Execute a task
+  rpc ExecuteTask(TaskRequest) returns (TaskResponse);
+  // Health check
+  rpc HealthCheck(HealthRequest) returns (HealthResponse);
+}
+
+// Task request message
+message TaskRequest {
+  string task_id = 1;
+  string task_type = 2;      // "mcp_tool_call", "langgraph_task", "agent_task"
+  string payload = 3;        // JSON-serialized task data
+  int32 timeout_seconds = 4; // Task timeout in seconds
+  map<string, string> metadata = 5; // Additional metadata key-value pairs
+}
+
+// Task response message
+message TaskResponse {
+  string task_id = 1;
+  bool success = 2;
+  string result = 3;         // JSON-serialized result
+  string error = 4;          // Error message if failed
+  int64 duration_ms = 5;   // Execution duration in milliseconds
+  string worker_id = 6;      // ID of the worker that processed the task
+}
+
+// Health check request
+message HealthRequest {
+  string worker_id = 1;
+}
+
+// Health check response
+message HealthResponse {
+  bool healthy = 1;
+  string version = 2;
+}
