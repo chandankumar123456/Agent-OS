@@ -1,0 +1,21 @@
+[package]
+name = "agentos-ipc-client"
+version = "0.1.0"
+edition = "2021"
+authors = ["AgentOS Contributors"]
+license = "MIT"
+description = "Shared gRPC client for AgentOS UI crates"
+
+[dependencies]
+agentos-ipc-protocol = { path = "../../native/ipc-protocol" }
+tonic = { version = "0.11", features = ["transport"] }
+prost = "0.12"
+prost-types = "0.12"
+tokio = { version = "1.37", features = ["full"] }
+tower = "0.4"
+http = "0.2"
+hyper = "0.14"
+anyhow = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+dirs = "5.0"
