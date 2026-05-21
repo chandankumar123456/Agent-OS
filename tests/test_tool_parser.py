@@ -1,4 +1,4 @@
-from app.tools.parser import ToolCallParser
+from core.tools.parser import ToolCallParser
 
 
 def test_parser_detects_tool_call():

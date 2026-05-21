@@ -8,14 +8,14 @@ graceful degradation — all with session managers and subprocess mocked.
 import os
 import sys
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock, PropertyMock
+from unittest.mock import patch, MagicMock, PropertyMock
 
-from app.environments.multi_app_orchestrator import (
+from core.environments.multi_app_orchestrator import (
     WorkflowCheckpoint,
     MultiAppOrchestrator,
 )
-from app.environments.window_registry import WindowRef, WindowRegistry
-from app.tools.base import ToolOutput
+from core.environments.window_registry import WindowRegistry
+from core.tools.base import ToolOutput
 
 
 # ---------------------------------------------------------------------------
@@ -303,15 +303,15 @@ def test_get_state_no_checkpoint(orchestrator):
 
 def test_launch_app_failure():
     """_launch_app returns False when subprocess raises."""
-    with patch("app.environments.multi_app_orchestrator.subprocess.Popen", side_effect=OSError("fail")):
+    with patch("core.environments.multi_app_orchestrator.subprocess.Popen", side_effect=OSError("fail")):
         result = MultiAppOrchestrator._launch_app("nonexistent_app_xyz")
         assert result is False
 
 
 def test_launch_app_success_windows():
     """_launch_app returns True on Windows when subprocess.Popen succeeds."""
-    with patch("app.environments.multi_app_orchestrator.sys") as mock_sys, \
-         patch("app.environments.multi_app_orchestrator.subprocess.Popen") as mock_popen:
+    with patch("core.environments.multi_app_orchestrator.sys") as mock_sys, \
+         patch("core.environments.multi_app_orchestrator.subprocess.Popen") as mock_popen:
         mock_sys.platform = "win32"
         mock_popen.return_value = MagicMock()
         result = MultiAppOrchestrator._launch_app("notepad")
@@ -328,7 +328,7 @@ def test_transfer_file_to_desktop_with_existing_file(orchestrator):
 
     try:
         # Mock subprocess.Popen and os.startfile to avoid actually opening
-        with patch("app.environments.multi_app_orchestrator.subprocess.Popen") as mock_popen, \
+        with patch("core.environments.multi_app_orchestrator.subprocess.Popen") as mock_popen, \
              patch("os.path.isfile", return_value=True), \
              patch("os.path.abspath", return_value=tmp_path), \
              patch.object(orchestrator, "_wait_for_window", return_value=None), \

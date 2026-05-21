@@ -8,15 +8,14 @@ Verifies:
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
-from app.orchestrator.errors import (
+from core.orchestrator.errors import (
     ErrorCode, ErrorType, AgentOSError, UnrecoverableError, RetryableError
 )
-from app.orchestrator.core import Orchestrator
-from app.guardrails.validator import Guardrails
-from app.agents.base import AgentStatus
-from app.guardrails.schema import ValidationResult
+from core.orchestrator.core import Orchestrator
+from core.agents.base import AgentStatus
+from core.guardrails.schema import ValidationResult
 
 
 class TestErrorCodes:

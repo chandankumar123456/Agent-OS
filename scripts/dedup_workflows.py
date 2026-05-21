@@ -13,8 +13,8 @@ import sys
 sys.path.insert(0, "E:\\Projects\\AgentOS")
 
 from sqlalchemy import select, delete
-from app.memory.long_term import db
-from app.memory.models import WorkflowModel, WorkflowNodeModel, WorkflowEdgeModel
+from core.memory.long_term import db
+from core.memory.models import WorkflowModel, WorkflowNodeModel, WorkflowEdgeModel
 
 
 async def deduplicate():

@@ -12,10 +12,10 @@ import pytest_asyncio
 os.environ.setdefault("AGENTOS_RUNTIME_MODE", "grpc")
 os.environ.setdefault("RUNTIME_MODE", "grpc")
 
-from app.desktop_native.sqlite_store import sqlite_store
-from app.desktop_native.resource_monitor import ResourceMonitor, ResourceBudget
-from app.desktop_native.crash_recovery import CrashRecovery
-from app.desktop_native.sqlite_tuning import SQLiteTuning
+from core.desktop_native.sqlite_store import sqlite_store
+from core.desktop_native.resource_monitor import ResourceMonitor, ResourceBudget
+from core.desktop_native.crash_recovery import CrashRecovery
+from core.desktop_native.sqlite_tuning import SQLiteTuning
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -144,8 +144,8 @@ class TestKernelIntegration:
     @pytest.mark.asyncio
     async def test_kernel_with_resource_monitor(self):
         """Verify AgentKernel starts resource monitor and runs tasks."""
-        from app.desktop_native.kernel import AgentKernel
-        from app.desktop_native.resource_monitor import resource_monitor
+        from core.desktop_native.kernel import AgentKernel
+        from core.desktop_native.resource_monitor import resource_monitor
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()
@@ -170,7 +170,7 @@ class TestKernelIntegration:
     @pytest.mark.asyncio
     async def test_kernel_gc_loop(self):
         """Verify GC loop runs without errors."""
-        from app.desktop_native.kernel import AgentKernel
+        from core.desktop_native.kernel import AgentKernel
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()
@@ -186,8 +186,7 @@ class TestKernelIntegration:
     @pytest.mark.asyncio
     async def test_kernel_crash_recovery_scan(self):
         """Verify kernel runs crash recovery on startup."""
-        from app.desktop_native.kernel import AgentKernel
-        from app.desktop_native.crash_recovery import crash_recovery
+        from core.desktop_native.kernel import AgentKernel
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()

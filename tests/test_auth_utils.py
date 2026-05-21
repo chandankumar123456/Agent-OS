@@ -1,6 +1,6 @@
 from datetime import timedelta
 
-from app.auth.utils import create_access_token, verify_access_token
+from core.auth.utils import create_access_token, verify_access_token
 
 
 def test_access_token_round_trip_includes_expiry_claim():

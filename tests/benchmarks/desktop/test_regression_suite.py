@@ -28,7 +28,7 @@ class NotepadBenchmark(DesktopBenchmarkBase):
         super().__init__("notepad_type_save")
 
     async def _execute(self) -> None:
-        from app.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
+        from core.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
 
         loop = DesktopGoalLoop(task_id="bench-notepad")
         result = await loop.execute(
@@ -59,7 +59,7 @@ class CalculatorBenchmark(DesktopBenchmarkBase):
         super().__init__("calculator_multiply")
 
     async def _execute(self) -> None:
-        from app.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
+        from core.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
 
         loop = DesktopGoalLoop(task_id="bench-calculator")
         result = await loop.execute(
@@ -90,7 +90,7 @@ class PaintBenchmark(DesktopBenchmarkBase):
         super().__init__("paint_draw_line")
 
     async def _execute(self) -> None:
-        from app.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
+        from core.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
 
         loop = DesktopGoalLoop(task_id="bench-paint")
         result = await loop.execute(
@@ -121,7 +121,7 @@ class VSCodeBenchmark(DesktopBenchmarkBase):
         super().__init__("vscode_new_file")
 
     async def _execute(self) -> None:
-        from app.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
+        from core.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
 
         loop = DesktopGoalLoop(task_id="bench-vscode")
         result = await loop.execute(
@@ -152,7 +152,7 @@ class ExplorerBenchmark(DesktopBenchmarkBase):
         super().__init__("explorer_navigate_desktop")
 
     async def _execute(self) -> None:
-        from app.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
+        from core.desktop.goal_loop import DesktopGoalLoop  # lazy: avoid circular import
 
         loop = DesktopGoalLoop(task_id="bench-explorer")
         result = await loop.execute(

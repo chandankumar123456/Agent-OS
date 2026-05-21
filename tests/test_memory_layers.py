@@ -1,16 +1,16 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.memory.task_memory import TaskMemory, task_memory
-from app.memory.session_memory import SessionMemory, session_memory
-from app.memory.workflow_memory import WorkflowMemory, workflow_memory
-from app.memory.user_memory import UserMemory, user_memory
+from core.memory.task_memory import TaskMemory
+from core.memory.session_memory import SessionMemory
+from core.memory.workflow_memory import WorkflowMemory
+from core.memory.user_memory import UserMemory
 
 
 @pytest.mark.asyncio
 async def test_task_memory_set_get():
     mock_redis = AsyncMock()
-    with patch("app.memory.task_memory.redis_client", mock_redis):
+    with patch("core.memory.task_memory.redis_client", mock_redis):
         mem = TaskMemory()
         mock_redis.get.return_value = {"foo": "bar"}
         result = await mem.get("t1")
@@ -26,7 +26,7 @@ async def test_task_memory_set_get():
 @pytest.mark.asyncio
 async def test_task_memory_update_progress():
     mock_redis = AsyncMock()
-    with patch("app.memory.task_memory.redis_client", mock_redis):
+    with patch("core.memory.task_memory.redis_client", mock_redis):
         mem = TaskMemory()
         mock_redis.get.return_value = {"existing": "data"}
         mock_redis.set.return_value = True
@@ -45,7 +45,7 @@ async def test_task_memory_update_progress():
 @pytest.mark.asyncio
 async def test_task_memory_clear():
     mock_redis = AsyncMock()
-    with patch("app.memory.task_memory.redis_client", mock_redis):
+    with patch("core.memory.task_memory.redis_client", mock_redis):
         mem = TaskMemory()
         mock_redis.delete.return_value = True
         ok = await mem.clear("t1")
@@ -56,7 +56,7 @@ async def test_task_memory_clear():
 @pytest.mark.asyncio
 async def test_session_memory_browser_session_roundtrip():
     mock_redis = AsyncMock()
-    with patch("app.memory.session_memory.redis_client", mock_redis):
+    with patch("core.memory.session_memory.redis_client", mock_redis):
         mem = SessionMemory()
         mock_redis.set.return_value = True
         ok = await mem.set_browser_session("t1", {"cookies": ["a"]}, expire=3600)
@@ -76,7 +76,7 @@ async def test_session_memory_browser_session_roundtrip():
 @pytest.mark.asyncio
 async def test_session_memory_active_envs_roundtrip():
     mock_redis = AsyncMock()
-    with patch("app.memory.session_memory.redis_client", mock_redis):
+    with patch("core.memory.session_memory.redis_client", mock_redis):
         mem = SessionMemory()
         mock_redis.set.return_value = True
         ok = await mem.set_active_envs("t1", {"env": "prod"}, expire=3600)
@@ -97,8 +97,8 @@ async def test_session_memory_active_envs_roundtrip():
 async def test_workflow_memory_get_state():
     mock_repo = AsyncMock()
     mock_node_repo = AsyncMock()
-    with patch("app.memory.workflow_memory.workflow_repo", mock_repo), patch(
-        "app.memory.workflow_memory.workflow_node_repo", mock_node_repo
+    with patch("core.memory.workflow_memory.workflow_repo", mock_repo), patch(
+        "core.memory.workflow_memory.workflow_node_repo", mock_node_repo
     ):
         mem = WorkflowMemory()
         wf = MagicMock()
@@ -122,8 +122,8 @@ async def test_workflow_memory_get_state():
 async def test_workflow_memory_save_state():
     mock_repo = AsyncMock()
     mock_node_repo = AsyncMock()
-    with patch("app.memory.workflow_memory.workflow_repo", mock_repo), patch(
-        "app.memory.workflow_memory.workflow_node_repo", mock_node_repo
+    with patch("core.memory.workflow_memory.workflow_repo", mock_repo), patch(
+        "core.memory.workflow_memory.workflow_node_repo", mock_node_repo
     ):
         mem = WorkflowMemory()
         wf = MagicMock()
@@ -147,8 +147,8 @@ async def test_workflow_memory_save_state():
 async def test_workflow_memory_get_node_status():
     mock_repo = AsyncMock()
     mock_node_repo = AsyncMock()
-    with patch("app.memory.workflow_memory.workflow_repo", mock_repo), patch(
-        "app.memory.workflow_memory.workflow_node_repo", mock_node_repo
+    with patch("core.memory.workflow_memory.workflow_repo", mock_repo), patch(
+        "core.memory.workflow_memory.workflow_node_repo", mock_node_repo
     ):
         mem = WorkflowMemory()
         node = MagicMock()
@@ -165,8 +165,8 @@ async def test_workflow_memory_get_node_status():
 async def test_workflow_memory_get_node_status_wrong_workflow():
     mock_repo = AsyncMock()
     mock_node_repo = AsyncMock()
-    with patch("app.memory.workflow_memory.workflow_repo", mock_repo), patch(
-        "app.memory.workflow_memory.workflow_node_repo", mock_node_repo
+    with patch("core.memory.workflow_memory.workflow_repo", mock_repo), patch(
+        "core.memory.workflow_memory.workflow_node_repo", mock_node_repo
     ):
         mem = WorkflowMemory()
         node = MagicMock()
@@ -182,8 +182,8 @@ async def test_workflow_memory_get_node_status_wrong_workflow():
 async def test_workflow_memory_set_node_status():
     mock_repo = AsyncMock()
     mock_node_repo = AsyncMock()
-    with patch("app.memory.workflow_memory.workflow_repo", mock_repo), patch(
-        "app.memory.workflow_memory.workflow_node_repo", mock_node_repo
+    with patch("core.memory.workflow_memory.workflow_repo", mock_repo), patch(
+        "core.memory.workflow_memory.workflow_node_repo", mock_node_repo
     ):
         mem = WorkflowMemory()
         node = MagicMock()
@@ -205,8 +205,8 @@ async def test_workflow_memory_set_node_status():
 async def test_user_memory_preferences_roundtrip():
     mock_redis = AsyncMock()
     mock_config = AsyncMock()
-    with patch("app.memory.user_memory.redis_client", mock_redis), patch(
-        "app.memory.user_memory.config_repo", mock_config
+    with patch("core.memory.user_memory.redis_client", mock_redis), patch(
+        "core.memory.user_memory.config_repo", mock_config
     ):
         mem = UserMemory()
         mock_redis.get.return_value = None

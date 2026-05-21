@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.langgraph.nodes import planner_node
-from app.langgraph.state import AgentState
+from core.langgraph.nodes import planner_node
+from core.langgraph.state import AgentState
 
 
 @pytest.fixture
@@ -25,8 +25,8 @@ def planner_tools():
 
 
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
-@patch("app.langgraph.nodes.tool_registry")
+@patch("core.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.tool_registry")
 async def test_planner_open_notepad_and_type_hello_world(mock_tool_registry, mock_obs_bus, planner_tools):
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
     mock_tool_registry.list_tools.return_value = planner_tools
@@ -52,8 +52,8 @@ async def test_planner_open_notepad_and_type_hello_world(mock_tool_registry, moc
 
 
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
-@patch("app.langgraph.nodes.tool_registry")
+@patch("core.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.tool_registry")
 async def test_planner_open_notepad_and_type_opinion_adds_content_generation(mock_tool_registry, mock_obs_bus, planner_tools):
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
     mock_tool_registry.list_tools.return_value = planner_tools
@@ -80,8 +80,8 @@ async def test_planner_open_notepad_and_type_opinion_adds_content_generation(moc
 
 
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
-@patch("app.langgraph.nodes.tool_registry")
+@patch("core.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.tool_registry")
 async def test_planner_open_chrome_and_search_latest_ai_news(mock_tool_registry, mock_obs_bus, planner_tools):
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
     mock_tool_registry.list_tools.return_value = planner_tools

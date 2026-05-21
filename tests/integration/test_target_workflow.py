@@ -11,15 +11,14 @@ This test verifies:
 6. No false 'filesystem tools unavailable' errors.
 """
 import pytest
-import json
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.langgraph.nodes import executor_node, planner_node
-from app.langgraph.state import AgentState
+from core.langgraph.nodes import executor_node, planner_node
+from core.langgraph.state import AgentState
 
 
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.observability_bus")
 async def test_target_workflow_planner_produces_clean_steps(mock_obs_bus):
     """Planner must emit isolated filesystem-first steps for the target query."""
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
@@ -35,7 +34,7 @@ async def test_target_workflow_planner_produces_clean_steps(mock_obs_bus):
         messages=[],
     )
 
-    with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm:
+    with patch("core.langgraph.nodes.get_llm_client") as mock_get_llm:
         # Force deterministic decomposition (no LLM fallback)
         mock_llm = AsyncMock()
         mock_llm.complete_json = AsyncMock(return_value={"plan": []})
@@ -84,7 +83,7 @@ async def test_target_workflow_planner_produces_clean_steps(mock_obs_bus):
 
 @pytest.mark.skip(reason="Guardrail validator rejects valid statuses (step_executed, failed, completed). Fix pending in guardrails hardening phase.")
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.observability_bus")
 async def test_target_workflow_executor_obeys_allowed_tools(mock_obs_bus):
     """Executor must use only tools from the planner's allowed_tools list."""
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
@@ -131,12 +130,12 @@ async def test_target_workflow_executor_obeys_allowed_tools(mock_obs_bus):
         {"answer": "Found report at C:\\Users\\Name\\Desktop\\report.txt"},
     ]
 
-    with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm:
+    with patch("core.langgraph.nodes.get_llm_client") as mock_get_llm:
         mock_llm = AsyncMock()
         mock_llm.complete_json = AsyncMock(side_effect=mock_llm_responses)
         mock_get_llm.return_value = mock_llm
 
-        with patch("app.langgraph.nodes.tool_registry") as mock_registry:
+        with patch("core.langgraph.nodes.tool_registry") as mock_registry:
             mock_registry.list_tools = MagicMock(return_value=[
                 {"name": "filesystem__search_files"},
                 {"name": "filesystem__list_directory"},
@@ -151,7 +150,7 @@ async def test_target_workflow_executor_obeys_allowed_tools(mock_obs_bus):
             mock_tool_output.error = None
             mock_registry.execute = AsyncMock(return_value=mock_tool_output)
 
-            with patch("app.langgraph.nodes.verification_engine") as mock_verif:
+            with patch("core.langgraph.nodes.verification_engine") as mock_verif:
                 mock_verif.verify = AsyncMock(return_value=MagicMock(result="pass", model_dump=MagicMock(return_value={})))
 
                 result = await executor_node(state)
@@ -166,7 +165,7 @@ async def test_target_workflow_executor_obeys_allowed_tools(mock_obs_bus):
 
 @pytest.mark.skip(reason="Guardrail validator rejects valid statuses (step_executed, failed, completed). Fix pending in guardrails hardening phase.")
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.observability_bus")
 async def test_target_workflow_halts_on_dependency_failure(mock_obs_bus):
     """If file search (step 1) fails, step 2 must not run and workflow must halt."""
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
@@ -218,7 +217,7 @@ async def test_target_workflow_halts_on_dependency_failure(mock_obs_bus):
         messages=[],
     )
 
-    with patch("app.langgraph.nodes.tool_registry") as mock_registry:
+    with patch("core.langgraph.nodes.tool_registry") as mock_registry:
         mock_registry.execute = AsyncMock()
         result = await executor_node(state)
 
@@ -232,19 +231,19 @@ async def test_target_workflow_halts_on_dependency_failure(mock_obs_bus):
 
 
 @pytest.mark.asyncio
-@patch("app.langgraph.nodes.observability_bus")
+@patch("core.langgraph.nodes.observability_bus")
 async def test_target_workflow_no_false_filesystem_unavailable(mock_obs_bus):
     """Executor must not falsely claim filesystem tools are unavailable when they are registered."""
     mock_obs_bus.emit_safe = AsyncMock(return_value=None)
 
     # Simulate ExecutorAgent-level check (used by PipelineExecutor / StepExecutor)
-    from app.agents.executor import ExecutorAgent
-    from app.agents.base import AgentInput, AgentRole
+    from core.agents.executor import ExecutorAgent
+    from core.agents.base import AgentInput, AgentRole
     from uuid import uuid4
 
     agent = ExecutorAgent()
 
-    with patch("app.agents.executor.tool_registry") as mock_registry:
+    with patch("core.agents.executor.tool_registry") as mock_registry:
         mock_registry.list_tools = MagicMock(return_value=[
             {"name": "filesystem__read_file"},
             {"name": "filesystem__write_file"},
@@ -271,8 +270,8 @@ async def test_target_workflow_no_false_filesystem_unavailable(mock_obs_bus):
 @pytest.mark.skip(reason="Guardrail validator rejects valid statuses (completed) and event bus fails without Redis. Fix pending in Phase 2 decoupling.")
 @pytest.mark.asyncio
 async def test_summarizer_handles_dict_outputs():
-    from app.langgraph.nodes import summarizer_node
-    from app.langgraph.state import AgentState
+    from core.langgraph.nodes import summarizer_node
+    from core.langgraph.state import AgentState
     from unittest.mock import AsyncMock, patch
     state = AgentState(
         task_id="test", user_id="u1", query="q",
@@ -282,7 +281,7 @@ async def test_summarizer_handles_dict_outputs():
         ],
         messages=[], tool_calls=[], plan=[]
     )
-    with patch("app.langgraph.nodes.get_llm_client") as mock_llm:
+    with patch("core.langgraph.nodes.get_llm_client") as mock_llm:
         mock_llm.return_value.complete_json = AsyncMock(return_value={"summary": "done"})
         result = await summarizer_node(state)
     assert result.get("status") == "completed"

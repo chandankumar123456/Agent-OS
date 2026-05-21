@@ -12,9 +12,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from app.orchestrator.core import Orchestrator
-from app.agents.base import AgentOutput, AgentStatus
-from app.orchestrator.errors import UnrecoverableError, ErrorType
+from core.orchestrator.core import Orchestrator
+from core.agents.base import AgentOutput, AgentStatus
+from core.orchestrator.errors import UnrecoverableError, ErrorType
 
 
 class TestOrchestratorFallbackChain:
@@ -65,18 +65,18 @@ class TestOrchestratorFallbackChain:
                 mock_lg.side_effect = RuntimeError("LangGraph failed")
 
                 with patch(
-                    'app.orchestrator.core.event_bus',
+                    'core.orchestrator.core.event_bus',
                 ) as mock_bus:
                     mock_bus.publish = AsyncMock()
 
                     with patch(
-                        'app.orchestrator.core.CheckpointRecoveryService',
+                        'core.orchestrator.core.CheckpointRecoveryService',
                         new_callable=MagicMock
                     ) as mock_rec:
                         mock_rec.return_value.resume_task = AsyncMock(return_value=None)
 
                         with patch(
-                            'app.orchestrator.core.ModeStrategyFactory',
+                            'core.orchestrator.core.ModeStrategyFactory',
                             new_callable=MagicMock
                         ) as mock_factory:
                             mock_factory.get.side_effect = ValueError("Unknown mode: invalid_mode")
@@ -114,12 +114,12 @@ class TestOrchestratorFallbackChain:
                 ]
 
                 with patch(
-                    'app.orchestrator.core.event_bus',
+                    'core.orchestrator.core.event_bus',
                 ) as mock_bus:
                     mock_bus.publish = AsyncMock()
 
                     with patch(
-                        'app.orchestrator.core.CheckpointRecoveryService',
+                        'core.orchestrator.core.CheckpointRecoveryService',
                         new_callable=MagicMock
                     ) as mock_rec_cls:
                         mock_recovery = MagicMock()
@@ -153,18 +153,18 @@ class TestOrchestratorFallbackChain:
                 mock_lg.side_effect = RuntimeError("LangGraph error")
 
                 with patch(
-                    'app.orchestrator.core.event_bus',
+                    'core.orchestrator.core.event_bus',
                 ) as mock_bus:
                     mock_bus.publish = AsyncMock()
 
                     with patch(
-                        'app.orchestrator.core.CheckpointRecoveryService',
+                        'core.orchestrator.core.CheckpointRecoveryService',
                         new_callable=MagicMock
                     ) as mock_rec:
                         mock_rec.return_value.resume_task = AsyncMock(return_value=None)
 
                         with patch(
-                            'app.orchestrator.core.ModeStrategyFactory',
+                            'core.orchestrator.core.ModeStrategyFactory',
                             new_callable=MagicMock
                         ) as mock_factory:
                             mock_strategy = MagicMock()
@@ -201,18 +201,18 @@ class TestOrchestratorFallbackChain:
                 mock_lg.side_effect = RuntimeError("LangGraph failed")
 
                 with patch(
-                    'app.orchestrator.core.event_bus',
+                    'core.orchestrator.core.event_bus',
                 ) as mock_bus:
                     mock_bus.publish = AsyncMock()
 
                     with patch(
-                        'app.orchestrator.core.CheckpointRecoveryService',
+                        'core.orchestrator.core.CheckpointRecoveryService',
                         new_callable=MagicMock
                     ) as mock_rec:
                         mock_rec.return_value.resume_task = AsyncMock(return_value=None)
 
                         with patch(
-                            'app.orchestrator.core.ModeStrategyFactory',
+                            'core.orchestrator.core.ModeStrategyFactory',
                             new_callable=MagicMock
                         ) as mock_factory:
                             mock_strategy = MagicMock()

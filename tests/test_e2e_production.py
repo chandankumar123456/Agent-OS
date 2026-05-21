@@ -5,13 +5,12 @@ Uses monkeypatching for DB isolation (same pattern as existing tests)
 """
 import asyncio
 from uuid import uuid4
-from types import SimpleNamespace
 
 import pytest
 
-from app.memory.long_term import db, task_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
-from app.agents.types import TaskStatus
-from app.auth.utils import create_access_token
+from core.memory.long_term import db, task_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
+from core.agents.types import TaskStatus
+from core.auth.utils import create_access_token
 
 
 # Case 1: Simple task creation and status transitions
@@ -137,7 +136,7 @@ def test_case4_auth_token_validation():
 # Case 5: Structured error format validation
 def test_case5_structured_error_format():
     """Verify error envelope structure"""
-    from app.orchestrator.errors import AgentOSError, ErrorCode, RetryableError, UnrecoverableError
+    from core.orchestrator.errors import AgentOSError, ErrorCode, RetryableError, UnrecoverableError
 
     err = AgentOSError(
         message="Test error",
@@ -161,7 +160,7 @@ def test_case5_structured_error_format():
 # Case 6: Config validation
 def test_case6_config_validation():
     """Verify config validation works"""
-    from app.config.settings import settings
+    from core.config.settings import settings
 
     assert settings.MAX_RETRIES >= 0
     assert settings.MAX_RETRIES <= 10
@@ -254,8 +253,8 @@ def test_case8_workflow_persistence():
 # Case 9: Retry behavior validation
 def test_case9_retry_behavior():
     """Verify retry logic classifies errors correctly"""
-    from app.orchestrator.retry import is_retryable, RetryConfig
-    from app.orchestrator.errors import RetryableError, UnrecoverableError
+    from core.orchestrator.retry import is_retryable, RetryConfig
+    from core.orchestrator.errors import RetryableError, UnrecoverableError
 
     config = RetryConfig(max_retries=3)
 
@@ -269,7 +268,7 @@ def test_case9_retry_behavior():
 # Case 10: Rate limit config
 def test_case10_rate_limit_config():
     """Verify rate limit settings are valid"""
-    from app.config.settings import settings
+    from core.config.settings import settings
 
     assert settings.RATE_LIMIT_PER_MINUTE >= 1
     assert settings.MAX_ACTIVE_TASKS_PER_USER >= 1

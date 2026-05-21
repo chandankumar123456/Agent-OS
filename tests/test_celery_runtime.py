@@ -1,13 +1,12 @@
 import os
-import asyncio
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import patch
 
 if os.environ.get("AGENTOS_RUNTIME_MODE", "").lower() == "grpc":
     pytest.skip("Celery tests not applicable in gRPC/desktop mode", allow_module_level=True)
 
-from app.queue.tasks import _ensure_runtime_initialized
-from app.runtime.runtime import AgentRuntime
+from core.queue.tasks import _ensure_runtime_initialized
+from core.runtime.runtime import AgentRuntime
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +65,7 @@ async def test_runtime_initialization_logs():
     runtime = AgentRuntime()
     runtime.reset()
 
-    with patch("app.runtime.runtime.logger") as mock_logger:
+    with patch("core.runtime.runtime.logger") as mock_logger:
         await runtime.initialize()
 
         # Should log that initialization happened

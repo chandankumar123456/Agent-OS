@@ -1,6 +1,6 @@
 import asyncio
 
-from app.orchestrator.workflow import WorkflowEngine
+from core.orchestrator.workflow import WorkflowEngine
 
 
 def test_load_workflow_keeps_nodes_and_edges():

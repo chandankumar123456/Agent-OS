@@ -1,7 +1,6 @@
 import pytest
 from uuid import uuid4
-from app.runtime.runtime import AgentRuntime
-from app.runtime.worker import AgentWorker
+from core.runtime.runtime import AgentRuntime
 
 
 def test_runtime_singleton():
@@ -56,7 +55,7 @@ async def test_agent_worker_executes():
     await runtime.initialize()
     worker = runtime.get("core_executor")
     assert worker is not None
-    from app.agents.base import AgentInput, AgentRole
+    from core.agents.base import AgentInput, AgentRole
     result = await worker.execute(AgentInput(
         task_id=uuid4(),
         step_id=uuid4(),

@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.orchestrator.queue import TaskQueue, TaskPriority, QueuePosition
+from core.orchestrator.queue import TaskQueue, TaskPriority
 
 
 @pytest.fixture
@@ -12,7 +12,7 @@ def queue():
 
 @pytest.fixture
 def mock_redis():
-    with patch("app.orchestrator.queue.redis_client") as mock:
+    with patch("core.orchestrator.queue.redis_client") as mock:
         yield mock
 
 

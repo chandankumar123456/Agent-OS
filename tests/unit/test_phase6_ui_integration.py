@@ -16,8 +16,8 @@ import pytest_asyncio
 os.environ.setdefault("AGENTOS_RUNTIME_MODE", "grpc")
 os.environ.setdefault("RUNTIME_MODE", "grpc")
 
-from app.desktop_native.sqlite_store import sqlite_store
-from app.desktop_native.tauri_bridge import tauri_bridge, TauriBridge
+from core.desktop_native.sqlite_store import sqlite_store
+from core.desktop_native.tauri_bridge import tauri_bridge, TauriBridge
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -160,7 +160,7 @@ class TestTauriBridgeWithKernel:
     @pytest.mark.asyncio
     async def test_kernel_notifies_on_task_complete(self):
         """Verify that AgentKernel sends notifications through TauriBridge."""
-        from app.desktop_native.kernel import AgentKernel
+        from core.desktop_native.kernel import AgentKernel
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()
@@ -189,7 +189,7 @@ class TestTauriBridgeWithKernel:
     @pytest.mark.asyncio
     async def test_kernel_task_stats_updated(self):
         """Verify that task stats are updated after kernel execution."""
-        from app.desktop_native.kernel import AgentKernel
+        from core.desktop_native.kernel import AgentKernel
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()

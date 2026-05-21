@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.langgraph.checkpointer import PostgresCheckpointSaver
+from core.langgraph.checkpointer import PostgresCheckpointSaver
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
-from app.capabilities.recovery import RecoveryEngine, RecoveryAction
-from app.capabilities.models import ExecutionEnvironment
+from core.capabilities.recovery import RecoveryEngine, RecoveryAction
+from core.capabilities.models import ExecutionEnvironment
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def mock_redis():
     client.expire = AsyncMock(return_value=True)
     client.scan_iter = _scan_iter
     client.delete = AsyncMock(return_value=0)
-    with patch("app.capabilities.recovery.redis_client") as mock_rc:
+    with patch("core.capabilities.recovery.redis_client") as mock_rc:
         mock_rc.client = client
         yield client
 

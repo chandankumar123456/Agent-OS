@@ -1,8 +1,8 @@
 """Tests for ToolPermissions with RBAC integration and permission denial."""
 import pytest
 
-from app.tools.permissions import ToolPermissions, PermissionResult, ToolPermissionModel
-from app.safety.rbac import AgentRole
+from core.tools.permissions import ToolPermissions, ToolPermissionModel
+from core.safety.rbac import AgentRole
 
 
 @pytest.fixture
@@ -250,7 +250,7 @@ class TestWrapToolExecution:
     @pytest.mark.asyncio
     async def test_wrap_executes_when_allowed(self, perms):
         async def execute_fn():
-            from app.tools.base import ToolOutput
+            from core.tools.base import ToolOutput
             return ToolOutput(success=True, result="done")
 
         result = await perms.wrap_tool_execution(
@@ -265,7 +265,7 @@ class TestWrapToolExecution:
     @pytest.mark.asyncio
     async def test_wrap_denies_when_not_allowed(self, perms):
         async def execute_fn():
-            from app.tools.base import ToolOutput
+            from core.tools.base import ToolOutput
             return ToolOutput(success=True, result="done")
 
         result = await perms.wrap_tool_execution(

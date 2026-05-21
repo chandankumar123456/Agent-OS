@@ -4,16 +4,15 @@ Validates the systemic fix: tool success must become canonical truth
 that prevents re-verification, recovery, and fallback loops.
 """
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, patch
 
-from app.execution_state import (
+from core.execution_state import (
     ExecutionState,
     ToolExecutionRecord,
-    StepExecutionRecord,
     ExecutionVerdict,
 )
-from app.langgraph.nodes import verifier_node
-from app.capabilities.recovery import RecoveryEngine, RecoveryAction
+from core.langgraph.nodes import verifier_node
+from core.capabilities.recovery import RecoveryEngine, RecoveryAction
 
 
 class TestCanonicalExecutionState:
@@ -154,7 +153,7 @@ class TestVerifierRespectsExecutionState:
         )
         state["execution_state"] = exec_state.to_dict()
 
-        with patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+        with patch("core.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
             mock_verify.return_value = []
             result = await verifier_node(state)
 
@@ -186,8 +185,8 @@ class TestVerifierRespectsExecutionState:
             "execution_state": None,
         }
 
-        with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm, \
-             patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+        with patch("core.langgraph.nodes.get_llm_client") as mock_get_llm, \
+             patch("core.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
             mock_llm = AsyncMock()
             mock_llm.complete_json = AsyncMock(return_value={"verified": True, "reason": "Tool succeeded"})
             mock_get_llm.return_value = mock_llm
@@ -211,12 +210,12 @@ class TestVerifierRespectsExecutionState:
             "execution_state": None,
         }
 
-        with patch("app.langgraph.nodes.get_llm_client") as mock_get_llm, \
-             patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+        with patch("core.langgraph.nodes.get_llm_client") as mock_get_llm, \
+             patch("core.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
             mock_llm = AsyncMock()
             mock_llm.complete_json = AsyncMock(return_value={"verified": True, "reason": "Plan verified"})
             mock_get_llm.return_value = mock_llm
-            from app.capabilities.models import VerificationReport, VerificationResult
+            from core.capabilities.models import VerificationReport, VerificationResult
             mock_verify.return_value = [
                 VerificationReport(
                     task_id="test-task",
@@ -314,7 +313,7 @@ class TestNoFallbackLoop:
         """The infamous bug: open_application succeeds, but verifier fails,
         causing recovery to trigger press_key(win) fallback. This test ensures
         that with canonical execution state, no fallback occurs."""
-        
+
         # Simulate the exact state after open_application succeeds
         execution_state = ExecutionState(task_id="test-task")
         execution_state.record_tool(
@@ -346,7 +345,7 @@ class TestNoFallbackLoop:
             "execution_state": execution_state.to_dict(),
         }
 
-        with patch("app.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
+        with patch("core.langgraph.nodes.verification_engine.verify_plan", new_callable=AsyncMock) as mock_verify:
             mock_verify.return_value = []
             result = await verifier_node(state)
             mock_verify.assert_not_called()

@@ -1,7 +1,6 @@
 """Tests for graph cache LRU eviction (NFR2)."""
-import pytest
 from unittest.mock import MagicMock
-from app.langgraph.graphs import get_cached_graph, _graph_cache
+from core.langgraph.graphs import _graph_cache
 
 
 def test_graph_cache_lru_eviction():

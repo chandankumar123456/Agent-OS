@@ -1,0 +1,134 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentos"
+version = "0.5.0"
+description = "Desktop-native autonomous agent runtime"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+readme = "README.md"
+
+dependencies = [
+    # Async runtime
+    "anyio>=4.0",
+    "aiosqlite>=0.20",
+    "asyncio-throttle",
+    # Database
+    "sqlalchemy>=2.0",
+    # Validation / settings
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    # LLM / LangChain
+    "langchain>=1.0",
+    "langchain-core>=1.0",
+    "langchain-openai>=1.0",
+    "langgraph>=1.0",
+    "langgraph-checkpoint>=4.0",
+    "openai>=1.0",
+    "tiktoken",
+    "tenacity>=8.0",
+    # MCP
+    "mcp>=1.0",
+    # Serialization
+    "orjson",
+    "pyyaml>=6.0",
+    "jsonschema>=4.0",
+    "jsonpatch",
+    "jsonpointer",
+    # CLI / env
+    "click>=8.0",
+    "python-dotenv>=1.0",
+    # Crypto
+    "cryptography>=40.0",
+    # gRPC IPC
+    "grpcio>=1.62.0",
+    "protobuf>=6.31.0",
+    # Misc
+    "uuid_utils",
+    "psutil",
+    "watchfiles",
+    # Document processing
+    "python-docx",
+    "pdfplumber",
+    "pypdf",
+    # Auth
+    "python-jose",
+    "passlib",
+    "bcrypt",
+]
+
+[project.optional-dependencies]
+http = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "starlette>=0.27",
+    "sse-starlette>=1.0",
+    "httptools",
+    "python-multipart",
+]
+redis = [
+    "redis>=5.0",
+]
+postgres = [
+    "asyncpg>=0.29",
+    "sqlalchemy[asyncio]>=2.0",
+]
+celery = [
+    "celery>=5.3",
+    "kombu>=5.3",
+    "billiard>=4.1",
+    "amqp>=5.1",
+    "vine>=5.0",
+]
+desktop = [
+    "playwright>=1.40",
+    "pyautogui; sys_platform != 'linux'",
+    "mss",
+    "opencv-python-headless",
+    "pyperclip",
+    "pygetwindow; sys_platform == 'win32'",
+    "pywin32>=306; sys_platform == 'win32'",
+    "uiautomation>=2.0; sys_platform == 'win32'",
+    "comtypes; sys_platform == 'win32'",
+]
+vision = [
+    "transformers",
+    "ultralytics",
+    "easyocr",
+    "huggingface-hub",
+    "timm",
+    "einops",
+    "supervision>=0.18",
+    "pillow",
+    "numpy",
+    "pytesseract",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.23,<1.0",
+    "ruff",
+    "mypy",
+    "black",
+    "grpcio-tools",
+]
+
+[tool.setuptools.packages.find]
+include = ["core*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true

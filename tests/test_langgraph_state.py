@@ -1,6 +1,5 @@
 """Tests for LangGraph state definitions."""
-import pytest
-from app.langgraph.state import AgentState
+from core.langgraph.state import AgentState
 
 
 def test_agent_state_has_required_fields():

@@ -3,12 +3,11 @@
 Tests the gRPC client implementation for AgentOS runtime supervisor communication.
 """
 
-import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from app.proto.grpc_client import (
+from core.proto.grpc_client import (
     GRPCClient,
     GRPCClientConfig,
     RuntimeServiceClient,
@@ -352,12 +351,12 @@ class TestGRPCClient:
         with patch.dict('sys.modules', {
             'grpc': mock_grpc,
             'grpc.aio': mock_grpc.aio,
-            'app.proto.runtime_pb2_grpc': mock_runtime_grpc,
-            'app.proto.checkpoint_pb2_grpc': mock_checkpoint_grpc,
-            'app.proto.worker_pb2_grpc': mock_worker_grpc,
-            'app.proto.runtime_pb2': mock_runtime_pb2,
-            'app.proto.checkpoint_pb2': mock_checkpoint_pb2,
-            'app.proto.worker_pb2': mock_worker_pb2,
+            'core.proto.runtime_pb2_grpc': mock_runtime_grpc,
+            'core.proto.checkpoint_pb2_grpc': mock_checkpoint_grpc,
+            'core.proto.worker_pb2_grpc': mock_worker_grpc,
+            'core.proto.runtime_pb2': mock_runtime_pb2,
+            'core.proto.checkpoint_pb2': mock_checkpoint_pb2,
+            'core.proto.worker_pb2': mock_worker_pb2,
         }):
             yield {
                 'grpc': mock_grpc,

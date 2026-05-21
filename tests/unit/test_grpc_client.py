@@ -6,11 +6,9 @@ with mocked gRPC channels.
 """
 
 import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from google.protobuf import empty_pb2
 
-from app.proto.grpc_client import (
+from core.proto.grpc_client import (
     GRPCClient,
     GRPCClientConfig,
     RuntimeServiceClient,
@@ -298,7 +296,7 @@ class TestGRPCClient:
         # Mock the async channel and stubs
         mock_channel = AsyncMock()
         mock_channel.close = AsyncMock()
-        
+
         # Create separate stubs for each service
         runtime_stub = MagicMock()
         runtime_stub.CreateTask = AsyncMock()
@@ -307,14 +305,14 @@ class TestGRPCClient:
         runtime_stub.ListTasks = AsyncMock()
         runtime_stub.HealthCheck = AsyncMock()
         runtime_stub.GetRuntimeStatus = AsyncMock()
-        
+
         checkpoint_stub = MagicMock()
         checkpoint_stub.SaveCheckpoint = AsyncMock()
         checkpoint_stub.GetCheckpoint = AsyncMock()
         checkpoint_stub.ListCheckpoints = AsyncMock()
         checkpoint_stub.GetLatestCheckpoint = AsyncMock()
         checkpoint_stub.CheckpointHealth = AsyncMock()
-        
+
         worker_stub = MagicMock()
         worker_stub.ExecuteTask = AsyncMock()
         worker_stub.HealthCheck = AsyncMock()
@@ -322,17 +320,17 @@ class TestGRPCClient:
         # Create mock modules for the gRPC imports
         mock_runtime_grpc = MagicMock()
         mock_runtime_grpc.RuntimeServiceStub.return_value = runtime_stub
-        
+
         mock_checkpoint_grpc = MagicMock()
         mock_checkpoint_grpc.CheckpointServiceStub.return_value = checkpoint_stub
-        
+
         mock_worker_grpc = MagicMock()
         mock_worker_grpc.WorkerExecutorStub.return_value = worker_stub
 
         with patch('grpc.aio.insecure_channel', return_value=mock_channel) as mock_grpc_channel:
-            with patch('app.proto.grpc_client.runtime_pb2_grpc', mock_runtime_grpc), \
-                 patch('app.proto.grpc_client.checkpoint_pb2_grpc', mock_checkpoint_grpc), \
-                 patch('app.proto.grpc_client.worker_pb2_grpc', mock_worker_grpc):
+            with patch('core.proto.grpc_client.runtime_pb2_grpc', mock_runtime_grpc), \
+                 patch('core.proto.grpc_client.checkpoint_pb2_grpc', mock_checkpoint_grpc), \
+                 patch('core.proto.grpc_client.worker_pb2_grpc', mock_worker_grpc):
 
                 client = GRPCClient(config)
                 await client.connect()
@@ -363,8 +361,8 @@ class TestGRPCClient:
         # Mock the async channel
         mock_channel = AsyncMock()
         mock_channel.close = AsyncMock()
-        
-        with patch('app.proto.grpc_client.grpc.aio.insecure_channel', return_value=mock_channel) as mock_grpc_channel:
+
+        with patch('core.proto.grpc_client.grpc.aio.insecure_channel', return_value=mock_channel) as mock_grpc_channel:
             mock_runtime_stub = MagicMock()
             mock_runtime_stub.CreateTask = AsyncMock()
             mock_runtime_stub.GetTask = AsyncMock()
@@ -380,9 +378,9 @@ class TestGRPCClient:
             mock_runtime_stub.ExecuteTask = AsyncMock()
             mock_runtime_stub.HealthCheck = AsyncMock()
 
-            with patch('app.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
-                 patch('app.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
-                 patch('app.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
+            with patch('core.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
+                 patch('core.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
+                 patch('core.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
 
                 mock_runtime_grpc.RuntimeServiceStub.return_value = mock_runtime_stub
                 mock_checkpoint_grpc.CheckpointServiceStub.return_value = mock_runtime_stub
@@ -405,9 +403,9 @@ class TestGRPCClient:
             mock_channel.close = AsyncMock()
             mock_channel.return_value = mock_channel
 
-            with patch('app.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
-                 patch('app.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
-                 patch('app.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
+            with patch('core.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
+                 patch('core.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
+                 patch('core.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
 
                 mock_runtime_grpc.RuntimeServiceStub.return_value = MagicMock()
                 mock_checkpoint_grpc.CheckpointServiceStub.return_value = MagicMock()
@@ -427,9 +425,9 @@ class TestGRPCClient:
             mock_channel.close = AsyncMock()
             mock_channel.return_value = mock_channel
 
-            with patch('app.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
-                 patch('app.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
-                 patch('app.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
+            with patch('core.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
+                 patch('core.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
+                 patch('core.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
 
                 # Create mock stubs
                 runtime_stub = MagicMock()
@@ -461,9 +459,9 @@ class TestGRPCClient:
             mock_channel.close = AsyncMock()
             mock_channel.return_value = mock_channel
 
-            with patch('app.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
-                 patch('app.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
-                 patch('app.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
+            with patch('core.proto.grpc_client.runtime_pb2_grpc') as mock_runtime_grpc, \
+                 patch('core.proto.grpc_client.checkpoint_pb2_grpc') as mock_checkpoint_grpc, \
+                 patch('core.proto.grpc_client.worker_pb2_grpc') as mock_worker_grpc:
 
                 runtime_stub = MagicMock()
                 runtime_stub.HealthCheck = AsyncMock(side_effect=Exception("Service unavailable"))
@@ -483,9 +481,9 @@ class TestGRPCClient:
         config = GRPCClientConfig()
 
         with patch('grpc.aio.insecure_channel') as mock_channel, \
-             patch('app.proto.grpc_client.runtime_pb2_grpc'), \
-             patch('app.proto.grpc_client.checkpoint_pb2_grpc'), \
-             patch('app.proto.grpc_client.worker_pb2_grpc'):
+             patch('core.proto.grpc_client.runtime_pb2_grpc'), \
+             patch('core.proto.grpc_client.checkpoint_pb2_grpc'), \
+             patch('core.proto.grpc_client.worker_pb2_grpc'):
 
             mock_channel.return_value = mock_channel
 

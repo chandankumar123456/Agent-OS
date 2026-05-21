@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.capabilities.models import VerificationResult
-from app.capabilities.verification import DeterministicVerificationEngine
+from core.capabilities.models import VerificationResult
+from core.capabilities.verification import DeterministicVerificationEngine
 
 
 def _make_mock_httpx_client(response_or_side_effect):
@@ -137,11 +137,11 @@ class TestCodeRuns:
         mock_proc.kill = MagicMock()
 
         with patch(
-            "app.capabilities.verification.asyncio.create_subprocess_shell",
+            "core.capabilities.verification.asyncio.create_subprocess_shell",
             new=AsyncMock(return_value=mock_proc),
         ):
             with patch(
-                "app.capabilities.verification.asyncio.wait_for",
+                "core.capabilities.verification.asyncio.wait_for",
                 side_effect=asyncio.TimeoutError,
             ):
                 result, evidence = await engine._verify_code_runs(
@@ -168,7 +168,7 @@ class TestDeploymentHealthy:
 
         mock_client = _make_mock_httpx_client(mock_response)
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
                 {"url": "http://example.com"}
             )
@@ -184,7 +184,7 @@ class TestDeploymentHealthy:
 
         mock_client = _make_mock_httpx_client(mock_response)
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
                 {"url": "http://example.com"}
             )
@@ -197,7 +197,7 @@ class TestDeploymentHealthy:
 
         mock_client = _make_mock_httpx_client(mock_response)
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
                 {"url": "http://example.com"}
             )
@@ -209,7 +209,7 @@ class TestDeploymentHealthy:
     async def test_fail_on_connection_error(self, engine):
         mock_client = _make_mock_httpx_client(Exception("Connection refused"))
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_deployment_healthy(
                 {"url": "http://example.com"}
             )
@@ -232,7 +232,7 @@ class TestWebContent:
 
         mock_client = _make_mock_httpx_client(mock_response)
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
                 {"url": "http://example.com"}
             )
@@ -247,7 +247,7 @@ class TestWebContent:
 
         mock_client = _make_mock_httpx_client(mock_response)
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
                 {"url": "http://example.com", "pattern": r"Hello"}
             )
@@ -261,7 +261,7 @@ class TestWebContent:
 
         mock_client = _make_mock_httpx_client(mock_response)
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
                 {"url": "http://example.com", "pattern": r"Goodbye"}
             )
@@ -272,7 +272,7 @@ class TestWebContent:
     async def test_fail_on_request_error(self, engine):
         mock_client = _make_mock_httpx_client(Exception("timeout"))
 
-        with patch("app.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
+        with patch("core.capabilities.verification.httpx.AsyncClient", return_value=mock_client):
             result, evidence = await engine._verify_web_content(
                 {"url": "http://example.com"}
             )

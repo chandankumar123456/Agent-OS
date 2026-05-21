@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.environments.browser_env import BrowserSession, BrowserSessionManager, DOMAIN_SELECTORS, browser_session_manager
+from core.environments.browser_env import BrowserSession, BrowserSessionManager, DOMAIN_SELECTORS, browser_session_manager
 
 
 @pytest.mark.asyncio
@@ -97,7 +97,7 @@ async def test_browser_session_manager_persistent_browser():
     async_mock_pw = AsyncMock()
     async_mock_pw.start = AsyncMock(return_value=mock_pw)
 
-    with patch("app.environments.browser_env.async_playwright", return_value=async_mock_pw):
+    with patch("core.environments.browser_env.async_playwright", return_value=async_mock_pw):
         s1 = await mgr.get_or_create_session("task-a")
         assert s1._browser is not None
         s2 = await mgr.get_or_create_session("task-b")

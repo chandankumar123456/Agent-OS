@@ -1,0 +1,36 @@
+{
+  "id": "FEAT-006",
+  "type": "refactor",
+  "description": "Phase 6 - Unify the Rust workspaces under a single `native/` workspace whose scope is performance/sandbox/native only. Move `desktop/desktop-automation` to `native/desktop-automation`. Move `desktop/desktop-protocol` to `native/ipc-protocol` and extend it with Rust stubs generated from the canonical `proto/` directory. Add a `native/sandbox/` crate scaffold for OS-level process isolation. Delete the old `desktop/` directory once the workspace builds.",
+  "status": "completed",
+  "steps": [
+    "Create `native/Cargo.toml` as a workspace manifest with members `desktop-automation`, `ipc-protocol`, `sandbox`. Set `resolver = '2'`. Use a shared `[workspace.package]` for version/edition/authors/license. Use `[workspace.dependencies]` to pin common deps (tokio, prost, tonic, serde, anyhow, thiserror, tracing) so members share versions.",
+    "Move `desktop/desktop-automation/` to `native/desktop-automation/`. Update its `Cargo.toml` to declare `package.workspace = true` for shared metadata where appropriate. Replace any path dependencies (e.g. on desktop-protocol) with the new workspace path.",
+    "Move `desktop/desktop-protocol/` to `native/ipc-protocol/`. Rename the crate in its Cargo.toml to `agentos-ipc-protocol` (or keep `desktop-protocol` if other references depend on the name; choose one and update all callers). Update its `build.rs` to read .proto files from the canonical top-level `proto/` directory (relative path `../../proto/*.proto`). Generate Rust stubs into `native/ipc-protocol/src/generated/` (the build.rs's `out_dir`). Add new Rust stubs for the kernel IPC contract: runtime.proto, checkpoint.proto, worker.proto. Re-export them as Rust modules from `native/ipc-protocol/src/lib.rs` (e.g. `pub mod runtime;` `pub mod checkpoint;` `pub mod worker;` `pub mod desktop;`).",
+    "Create `native/sandbox/` crate scaffold: `native/sandbox/Cargo.toml`, `native/sandbox/src/lib.rs`. The lib.rs should declare a public `Sandbox` trait with `spawn(&self, ...) -> Result<...>` and a stub `OsProcessSandbox` impl (TODO body) that uses `std::process::Command` plus future hooks for cgroups/seccomp on Linux, sandbox-exec on macOS, JobObject on Windows. Mark complex platform code as `#[cfg(target_os = '...')]` with `unimplemented!()` bodies and a tracking TODO referencing the migration plan. The Python-side `app/tools/sandbox.py` (now `core/tools/sandbox.py`) is NOT being migrated in this phase; leave it where it is. Document in the lib.rs docstring that this crate is a stub for future migration.",
+    "Delete the now-empty top-level `desktop/` directory: `git rm -r desktop`.",
+    "Verify the workspace builds: `cd native && cargo build --workspace` returns 0.",
+    "Run clippy strict: `cd native && cargo clippy --workspace -- -D warnings`. Fix all warnings or, if pre-existing in moved code, leave with a justified `#[allow(...)]` plus a TODO. Do not introduce new warnings.",
+    "Update `.github/workflows/ci.yml` Rust 'desktop-automation' job: `working-directory: ./native` and `cargo check --workspace`.",
+    "Commit: `git add -A && git commit -m 'refactor(phase-6): unify Rust crates under native/ workspace; move desktop-protocol to ipc-protocol'`."
+  ],
+  "acceptance_criteria": [
+    "Top-level `native/` directory exists with `Cargo.toml` (workspace manifest), `desktop-automation/`, `ipc-protocol/`, `sandbox/`.",
+    "Top-level `desktop/` directory no longer exists.",
+    "`cd native && cargo build --workspace` returns 0.",
+    "`cd native && cargo clippy --workspace -- -D warnings` returns 0.",
+    "`native/ipc-protocol/src/lib.rs` exposes Rust modules for runtime, checkpoint, worker, and desktop proto contracts.",
+    "`native/sandbox/` is a buildable stub crate with a `Sandbox` trait.",
+    "`.github/workflows/ci.yml` Rust desktop-automation job points at `./native`.",
+    "A single git commit on `refactor/unified-core-runtime` records the changes with message starting `refactor(phase-6):`."
+  ],
+  "verification": [
+    "Run `cd native && cargo build --workspace` and confirm exit 0.",
+    "Run `cd native && cargo clippy --workspace -- -D warnings` and confirm exit 0.",
+    "Run `cd native && cargo test --workspace` and confirm exit 0 (no tests yet is acceptable; the test pass simply means nothing red).",
+    "Run `ls desktop/ 2>&1` and confirm 'No such file or directory'.",
+    "Run `ls native/` and confirm the four entries (Cargo.toml, desktop-automation, ipc-protocol, sandbox)."
+  ],
+  "blocked_reason": null,
+  "findings": "Build, clippy -D warnings, and tests all pass on Linux. The windows crate dependency was moved to target-specific [target.'cfg(target_os = \"windows\")'.dependencies] so the workspace builds on all platforms. The ipc-protocol crate generates stubs for all 4 proto files (runtime, checkpoint, worker, desktop) via tonic-build. Protoc 27.1 was already installed from Phase 5. The Cargo.lock from desktop/ was preserved as native/Cargo.lock. The CI workflow now uses 'build-native' job name with protoc setup."
+}

@@ -5,7 +5,7 @@ import time as _time
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.environments.desktop_env import DesktopSessionManager
+from core.environments.desktop_env import DesktopSessionManager
 
 
 @pytest.fixture
@@ -18,7 +18,7 @@ def manager():
 def mock_desktop_session():
     """Mock DesktopSession so tests don't touch real desktop."""
     with patch(
-        "app.environments.desktop_env.DesktopSession"
+        "core.environments.desktop_env.DesktopSession"
     ) as MockSession:
         instance = MagicMock()
         instance.close = AsyncMock(

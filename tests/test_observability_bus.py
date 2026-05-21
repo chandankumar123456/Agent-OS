@@ -1,11 +1,11 @@
 """Tests for ObservabilityBus."""
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.observability.bus import ObservabilityBus
-from app.observability.models import ObservabilityEvent, ObservabilityEventType
+from core.observability.bus import ObservabilityBus
+from core.observability.models import ObservabilityEvent, ObservabilityEventType
 
 
 @pytest.fixture
@@ -28,12 +28,12 @@ def sample_event():
 class TestEmit:
     @pytest.mark.asyncio
     async def test_logs_event(self, bus, sample_event):
-        with patch("app.observability.bus.logger") as mock_logger:
+        with patch("core.observability.bus.logger") as mock_logger:
             with patch(
-                "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
+                "core.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
             ):
                 with patch(
-                    "app.memory.long_term.span_repo.create", new=AsyncMock()
+                    "core.memory.long_term.span_repo.create", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
 
@@ -46,10 +46,10 @@ class TestEmit:
     @pytest.mark.asyncio
     async def test_publishes_to_event_bus(self, bus, sample_event):
         mock_publish = AsyncMock()
-        with patch("app.orchestrator.event_bus.event_bus.publish", mock_publish):
-            with patch("app.observability.bus.logger"):
+        with patch("core.orchestrator.event_bus.event_bus.publish", mock_publish):
+            with patch("core.observability.bus.logger"):
                 with patch(
-                    "app.memory.long_term.span_repo.create", new=AsyncMock()
+                    "core.memory.long_term.span_repo.create", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
 
@@ -64,10 +64,10 @@ class TestEmit:
     @pytest.mark.asyncio
     async def test_persists_span(self, bus, sample_event):
         mock_create = AsyncMock()
-        with patch("app.memory.long_term.span_repo.create", mock_create):
-            with patch("app.observability.bus.logger"):
+        with patch("core.memory.long_term.span_repo.create", mock_create):
+            with patch("core.observability.bus.logger"):
                 with patch(
-                    "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
+                    "core.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
                     await bus.shutdown()
@@ -83,10 +83,10 @@ class TestEmit:
     @pytest.mark.asyncio
     async def test_handles_event_bus_failure(self, bus, sample_event):
         mock_publish = AsyncMock(side_effect=Exception("redis down"))
-        with patch("app.orchestrator.event_bus.event_bus.publish", mock_publish):
-            with patch("app.observability.bus.logger") as mock_logger:
+        with patch("core.orchestrator.event_bus.event_bus.publish", mock_publish):
+            with patch("core.observability.bus.logger") as mock_logger:
                 with patch(
-                    "app.memory.long_term.span_repo.create", new=AsyncMock()
+                    "core.memory.long_term.span_repo.create", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
 
@@ -96,10 +96,10 @@ class TestEmit:
     @pytest.mark.asyncio
     async def test_handles_span_repo_failure(self, bus, sample_event):
         mock_create = AsyncMock(side_effect=Exception("db down"))
-        with patch("app.memory.long_term.span_repo.create", mock_create):
-            with patch("app.observability.bus.logger") as mock_logger:
+        with patch("core.memory.long_term.span_repo.create", mock_create):
+            with patch("core.observability.bus.logger") as mock_logger:
                 with patch(
-                    "app.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
+                    "core.orchestrator.event_bus.event_bus.publish", new=AsyncMock()
                 ):
                     await bus.emit(sample_event)
                     await bus.shutdown()
@@ -136,7 +136,7 @@ class TestEmitSafe:
         with patch.object(
             bus, "emit", new=AsyncMock(side_effect=Exception("boom"))
         ) as mock_emit:
-            with patch("app.observability.bus.logger") as mock_logger:
+            with patch("core.observability.bus.logger") as mock_logger:
                 await bus.emit_safe(
                     ObservabilityEventType.TASK_FAILED,
                     task_id="task-789",

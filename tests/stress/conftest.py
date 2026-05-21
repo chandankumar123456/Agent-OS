@@ -7,8 +7,8 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from app.auth.utils import create_access_token
-from app.main import app
+from core.auth.utils import create_access_token
+from core.main import app
 from .runner import StressTestRunner
 
 logger = logging.getLogger(__name__)
@@ -27,10 +27,10 @@ async def stress_async_client():
 
     Function-scoped so each stress test gets a fresh app lifespan (and fresh DB/Redis connections).
     """
-    from app.memory.long_term import db
-    from app.memory.short_term import redis_client
-    from app.memory.redis_pubsub import redis_pubsub_client
-    from app.runtime.runtime import AgentRuntime
+    from core.memory.long_term import db
+    from core.memory.short_term import redis_client
+    from core.memory.redis_pubsub import redis_pubsub_client
+    from core.runtime.runtime import AgentRuntime
 
     try:
         await db.connect()
@@ -39,7 +39,7 @@ async def stress_async_client():
         raise
 
     try:
-        from app.memory.long_term import user_repo
+        from core.memory.long_term import user_repo
         existing = await user_repo.get_by_id("stress-test-user")
         if not existing:
             await user_repo.create(
@@ -53,12 +53,12 @@ async def stress_async_client():
         logger.warning(f"Stress test user setup skipped or failed (may already exist): {e}")
 
     # Relax rate limits and task caps for stress testing
-    from app.config.settings import settings
+    from core.config.settings import settings
     settings.MAX_ACTIVE_TASKS_PER_USER = 1000
     settings.RATE_LIMIT_PER_MINUTE = 100000
 
     # Disable rate limiting entirely for stress tests by patching the check method
-    import app.middleware.rate_limit as rl_module
+    import core.middleware.rate_limit as rl_module
     _orig_is_rate_limited = rl_module.RateLimitMiddleware._is_rate_limited
     async def _patched_is_rate_limited(self, client_id, limit):
         return False, 0, limit

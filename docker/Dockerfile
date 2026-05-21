@@ -29,8 +29,12 @@ RUN groupadd -r agentos && useradd -r -g agentos agentos
 
 RUN pip install --no-cache-dir --upgrade pip
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Copy project files for editable install
+COPY pyproject.toml .
+COPY core ./core
+
+# Install with http, desktop, and vision extras for full Docker surface
+RUN pip install --no-cache-dir ".[http,desktop,vision]"
 
 # Install Chromium browsers for Playwright (must run as root)
 RUN playwright install chromium
@@ -38,7 +42,6 @@ RUN playwright install chromium
 # Ensure the non-root user can read/execute the Playwright browsers
 RUN chown -R agentos:agentos /root/.cache/ms-playwright || true
 
-COPY app ./app
 COPY scripts ./scripts
 COPY .env .
 
@@ -51,5 +54,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run migrations on startup, then launch the app
-CMD ["sh", "-c", "scripts/migrate.sh && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+CMD ["python", "-m", "core", "--http", "--http-port=8000"]

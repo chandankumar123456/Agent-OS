@@ -1,6 +1,5 @@
 """Reliability and failure injection tests for Sprint 3."""
 import pytest
-import asyncio
 import json
 import os
 import sys
@@ -15,13 +14,12 @@ class TestMcpStdoutSanitization:
 
     def test_stdio_sanitize_patches_print(self):
         import builtins
-        import app.mcp.servers._stdio_sanitize as sanitize
+        import core.mcp.servers._stdio_sanitize as sanitize
         # print should now default to stderr
         assert builtins.print is not sanitize._orig_print
 
     def test_stdio_sanitize_logging_uses_stderr(self):
         import logging
-        import sys
         root = logging.getLogger()
         stderr_handlers = [
             h for h in root.handlers
@@ -40,7 +38,7 @@ class TestMcpStdoutSanitization:
 
 @pytest.mark.asyncio
 async def test_browser_session_handles_crash_gracefully():
-    from app.environments.browser_env import BrowserSession
+    from core.environments.browser_env import BrowserSession
     session = BrowserSession("crash-test")
 
     mock_page = MagicMock()
@@ -55,7 +53,7 @@ async def test_browser_session_handles_crash_gracefully():
 
 @pytest.mark.asyncio
 async def test_browser_navigate_invalid_url():
-    from app.environments.browser_env import BrowserSession
+    from core.environments.browser_env import BrowserSession
     session = BrowserSession("nav-test")
     # No browser context bound yet
     result = await session.navigate("not-a-valid-url")
@@ -66,7 +64,7 @@ async def test_browser_navigate_invalid_url():
 
 @pytest.mark.asyncio
 async def test_document_parse_corrupted_pdf():
-    from app.mcp.servers.document import parse_pdf
+    from core.mcp.servers.document import parse_pdf
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(b"%PDF-1.4\nThis is not a real PDF")
         path = f.name
@@ -81,7 +79,7 @@ async def test_document_parse_corrupted_pdf():
 
 @pytest.mark.asyncio
 async def test_document_parse_nonexistent_file():
-    from app.mcp.servers.document import parse
+    from core.mcp.servers.document import parse
     result = await parse(path="/nonexistent/path/file.txt")
     data = json.loads(result)
     assert data["success"] is False
@@ -90,7 +88,7 @@ async def test_document_parse_nonexistent_file():
 
 @pytest.mark.asyncio
 async def test_document_chunk_empty_text():
-    from app.mcp.servers.document import chunk
+    from core.mcp.servers.document import chunk
     result = await chunk(text="", chunk_size=100)
     data = json.loads(result)
     assert data["success"] is True
@@ -101,8 +99,8 @@ async def test_document_chunk_empty_text():
 
 @pytest.mark.asyncio
 async def test_code_execution_respects_timeout():
-    from app.mcp.servers.code import run_python
-    from app.tools.sandbox import ToolSandbox
+    from core.mcp.servers.code import run_python
+    from core.tools.sandbox import ToolSandbox
 
     # Mock sandbox to simulate timeout without spinning a real thread
     with patch.object(ToolSandbox, "run", new_callable=AsyncMock) as mock_run:
@@ -118,7 +116,7 @@ async def test_code_execution_respects_timeout():
 
 @pytest.mark.asyncio
 async def test_code_execution_blocks_import():
-    from app.mcp.servers.code import run_python
+    from core.mcp.servers.code import run_python
     code = "import os"
     result = await run_python(code=code)
     data = json.loads(result)
@@ -128,7 +126,7 @@ async def test_code_execution_blocks_import():
 
 @pytest.mark.asyncio
 async def test_code_execution_blocks_dangerous_builtins():
-    from app.mcp.servers.code import run_python
+    from core.mcp.servers.code import run_python
     code = "result = eval('1+1')"
     result = await run_python(code=code)
     data = json.loads(result)
@@ -139,7 +137,7 @@ async def test_code_execution_blocks_dangerous_builtins():
 
 @pytest.mark.asyncio
 async def test_filesystem_write_to_readonly_path():
-    from app.mcp.servers.filesystem import write_file
+    from core.mcp.servers.filesystem import write_file
     # Attempt to write to a path that is outside allowed directories
     result = await write_file(path="Z:\\nonexistent\\readonly_test_agentos", content="test")
     assert "error" in result.lower() or "Error" in result or "outside" in result.lower()
@@ -149,7 +147,7 @@ async def test_filesystem_write_to_readonly_path():
 
 @pytest.mark.asyncio
 async def test_mcp_client_manager_handles_server_disconnect():
-    from app.mcp.client_manager import MCPClientManager
+    from core.mcp.client_manager import MCPClientManager
     manager = MCPClientManager()
     # Start with no connections
     assert manager.connections == {}
@@ -160,7 +158,7 @@ async def test_mcp_client_manager_handles_server_disconnect():
 
 @pytest.mark.asyncio
 async def test_registry_execute_handles_missing_tool_gracefully():
-    from app.tools.registry import tool_registry
+    from core.tools.registry import tool_registry
     result = await tool_registry.execute("nonexistent_tool__12345", {})
     assert result.success is False
     assert "not found" in result.error.lower()
@@ -170,12 +168,12 @@ async def test_registry_execute_handles_missing_tool_gracefully():
 
 @pytest.mark.asyncio
 async def test_recovery_engine_degrades_without_redis():
-    from app.capabilities.recovery import RecoveryEngine
-    from app.capabilities.models import RecoveryAction
+    from core.capabilities.recovery import RecoveryEngine
+    from core.capabilities.models import RecoveryAction
 
     engine = RecoveryEngine(max_retries=2)
 
-    with patch("app.capabilities.recovery.redis_client") as mock_redis:
+    with patch("core.capabilities.recovery.redis_client") as mock_redis:
         mock_redis.client = None
 
         decision = await engine.decide(
@@ -205,8 +203,8 @@ async def test_recovery_engine_degrades_without_redis():
 
 @pytest.mark.asyncio
 async def test_recovery_engine_switch_tool_fallback():
-    from app.capabilities.recovery import RecoveryEngine
-    from app.capabilities.models import RecoveryAction
+    from core.capabilities.recovery import RecoveryEngine
+    from core.capabilities.models import RecoveryAction
 
     engine = RecoveryEngine()
     decision = await engine.decide(
@@ -220,8 +218,8 @@ async def test_recovery_engine_switch_tool_fallback():
 
 @pytest.mark.asyncio
 async def test_recovery_engine_replan_on_tool_not_found():
-    from app.capabilities.recovery import RecoveryEngine
-    from app.capabilities.models import RecoveryAction
+    from core.capabilities.recovery import RecoveryEngine
+    from core.capabilities.models import RecoveryAction
 
     engine = RecoveryEngine()
     decision = await engine.decide(
@@ -235,9 +233,8 @@ async def test_recovery_engine_replan_on_tool_not_found():
 
 @pytest.mark.asyncio
 async def test_observability_bus_survives_db_failure():
-    from app.observability.bus import ObservabilityBus
-    from app.observability.models import ObservabilityEvent, ObservabilityEventType
-    from datetime import datetime, timezone
+    from core.observability.bus import ObservabilityBus
+    from core.observability.models import ObservabilityEvent, ObservabilityEventType
 
     bus = ObservabilityBus()
 
@@ -250,7 +247,7 @@ async def test_observability_bus_survives_db_failure():
         source="test",
     )
 
-    with patch("app.observability.bus.span_repo") as mock_repo:
+    with patch("core.observability.bus.span_repo") as mock_repo:
         mock_repo.create = AsyncMock(side_effect=RuntimeError("Database session factory is unavailable"))
         # Should not raise
         await bus.emit(event)
@@ -258,8 +255,8 @@ async def test_observability_bus_survives_db_failure():
 
 @pytest.mark.asyncio
 async def test_observability_emit_safe_swallows_all_errors():
-    from app.observability.bus import ObservabilityBus
-    from app.observability.models import ObservabilityEventType
+    from core.observability.bus import ObservabilityBus
+    from core.observability.models import ObservabilityEventType
 
     bus = ObservabilityBus()
     with patch.object(bus, "emit", side_effect=Exception("boom")):
@@ -276,7 +273,7 @@ async def test_observability_emit_safe_swallows_all_errors():
 
 @pytest.mark.asyncio
 async def test_verification_retryable_flags():
-    from app.capabilities.verification import DeterministicVerificationEngine
+    from core.capabilities.verification import DeterministicVerificationEngine
     engine = DeterministicVerificationEngine()
 
     # File not found should be retryable
@@ -289,8 +286,8 @@ async def test_verification_retryable_flags():
 @pytest.mark.asyncio
 async def test_benchmark_end_to_end_no_transport_corruption():
     """Validate that MCP servers start and tool calls complete without stdout corruption."""
-    from app.mcp.client_manager import MCPClientManager
-    from app.tools.registry import tool_registry
+    from core.mcp.client_manager import MCPClientManager
+    from core.tools.registry import tool_registry
 
     manager = MCPClientManager()
     await manager.start_system_servers()

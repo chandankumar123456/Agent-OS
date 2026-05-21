@@ -5,8 +5,6 @@ completes without crashes when the LLM client is mocked to return predictable
 JSON responses.
 """
 import os
-import sys
-import json
 from unittest.mock import AsyncMock, patch, MagicMock
 from uuid import uuid4
 
@@ -69,38 +67,38 @@ class TestCorePipelineImports:
     """Test that core modules can be imported without crashes."""
 
     def test_import_app_main(self):
-        """Verify app.main can be imported."""
-        import app.main
-        assert hasattr(app.main, "app")
+        """Verify core.main can be imported."""
+        import core.main
+        assert hasattr(core.main, "app")
 
     def test_import_orchestrator(self):
         """Verify the orchestrator can be imported."""
-        from app.orchestrator.core import Orchestrator
+        from core.orchestrator.core import Orchestrator
         assert Orchestrator is not None
 
     def test_import_agent_loop(self):
         """Verify the AgentLoop can be imported."""
-        from app.orchestrator.agent_loop import AgentLoop
+        from core.orchestrator.agent_loop import AgentLoop
         assert AgentLoop is not None
 
     def test_import_llm_client(self):
         """Verify the LLM client module can be imported."""
-        from app.agents.llm_client import LLMClient, get_llm_client
+        from core.agents.llm_client import LLMClient
         assert LLMClient is not None
 
     def test_import_desktop_entry(self):
         """Verify desktop_entry can be imported."""
-        from app.desktop_entry import DesktopRuntime
+        from core.desktop_entry import DesktopRuntime
         assert DesktopRuntime is not None
 
     def test_import_mcp_client_manager(self):
         """Verify MCP client manager can be imported."""
-        from app.mcp.client_manager import MCPClientManager
+        from core.mcp.client_manager import MCPClientManager
         assert MCPClientManager is not None
 
     def test_import_short_term_memory(self):
         """Verify short-term memory can be imported."""
-        from app.memory.short_term import ShortTermMemory
+        from core.memory.short_term import ShortTermMemory
         assert ShortTermMemory is not None
 
 
@@ -112,7 +110,7 @@ class TestLLMClientSSL:
         original = os.environ.get("SSL_CERT_FILE")
         try:
             os.environ["SSL_CERT_FILE"] = "/nonexistent/cert.pem"
-            from app.agents.llm_client import LLMClient
+            from core.agents.llm_client import LLMClient
             # Should not raise FileNotFoundError
             client = LLMClient(api_key="sk-test")
             assert client.client is not None
@@ -127,7 +125,7 @@ class TestLLMClientSSL:
         original = os.environ.get("SSL_CERT_FILE")
         try:
             os.environ["SSL_CERT_FILE"] = "/etc/pki/tls/certs/ca-bundle.crt"
-            from app.agents.llm_client import LLMClient
+            from core.agents.llm_client import LLMClient
             client = LLMClient(api_key="sk-test")
             assert client.client is not None
         finally:
@@ -143,7 +141,7 @@ class TestShortTermMemoryFallback:
     @pytest.mark.asyncio
     async def test_short_term_memory_save_and_get(self):
         """In gRPC mode, ShortTermMemory should use in-memory backend."""
-        from app.memory.short_term import ShortTermMemory
+        from core.memory.short_term import ShortTermMemory
 
         mem = ShortTermMemory()
         task_id = str(uuid4())
@@ -164,7 +162,7 @@ class TestCorePipeline:
 
     async def test_orchestrator_instantiation(self):
         """Orchestrator can be instantiated without crashing."""
-        from app.orchestrator.core import Orchestrator
+        from core.orchestrator.core import Orchestrator
 
         orch = Orchestrator()
         assert orch.runtime is not None
@@ -178,9 +176,8 @@ class TestCorePipeline:
         mock_llm_verifier_response,
     ):
         """Full pipeline: plan -> execute -> verify with mocked agents."""
-        from app.orchestrator.core import Orchestrator
-        from app.agents.base import AgentOutput, AgentStatus
-        from app.orchestrator.agent_loop import AgentLoop
+        from core.orchestrator.core import Orchestrator
+        from core.agents.base import AgentOutput, AgentStatus
 
         orch = Orchestrator()
 
@@ -276,11 +273,11 @@ class TestCorePipeline:
         orch.agent_loop.workflow_engine.execute_graph = mock_execute_graph
 
         # Mock persistence repos to avoid DB dependency
-        with patch("app.orchestrator.agent_loop.trace_repo") as mock_trace_repo, \
-             patch("app.orchestrator.agent_loop.task_repo") as mock_task_repo, \
-             patch("app.orchestrator.agent_loop.workflow_node_repo") as mock_wn_repo, \
-             patch("app.orchestrator.agent_loop.node_trace_repo") as mock_nt_repo, \
-             patch("app.orchestrator.agent_loop.short_term_memory") as mock_stm:
+        with patch("core.orchestrator.agent_loop.trace_repo") as mock_trace_repo, \
+             patch("core.orchestrator.agent_loop.task_repo") as mock_task_repo, \
+             patch("core.orchestrator.agent_loop.workflow_node_repo") as mock_wn_repo, \
+             patch("core.orchestrator.agent_loop.node_trace_repo") as mock_nt_repo, \
+             patch("core.orchestrator.agent_loop.short_term_memory") as mock_stm:
 
             mock_trace_repo.create = AsyncMock()
             mock_trace_repo.update_status = AsyncMock()
@@ -295,7 +292,7 @@ class TestCorePipeline:
             orch._hydrate_memory_context = AsyncMock(return_value={})
 
             # Mock guardrails to always pass
-            with patch("app.orchestrator.agent_loop.guardrails") as mock_guardrails:
+            with patch("core.orchestrator.agent_loop.guardrails") as mock_guardrails:
                 mock_guardrails.verify_output = AsyncMock(return_value=True)
 
                 # Execute the task
@@ -313,8 +310,8 @@ class TestCorePipeline:
 
     async def test_pipeline_handles_planner_failure(self):
         """Pipeline returns failure gracefully when planner fails."""
-        from app.orchestrator.core import Orchestrator
-        from app.agents.base import AgentOutput, AgentStatus
+        from core.orchestrator.core import Orchestrator
+        from core.agents.base import AgentOutput, AgentStatus
 
         orch = Orchestrator()
 
@@ -338,9 +335,9 @@ class TestCorePipeline:
 
         orch.router.resolve = mock_resolve
 
-        with patch("app.orchestrator.agent_loop.trace_repo") as mock_trace_repo, \
-             patch("app.orchestrator.agent_loop.task_repo") as mock_task_repo, \
-             patch("app.orchestrator.agent_loop.short_term_memory") as mock_stm:
+        with patch("core.orchestrator.agent_loop.trace_repo") as mock_trace_repo, \
+             patch("core.orchestrator.agent_loop.task_repo") as mock_task_repo, \
+             patch("core.orchestrator.agent_loop.short_term_memory") as mock_stm:
 
             mock_trace_repo.create = AsyncMock()
             mock_trace_repo.update_status = AsyncMock()

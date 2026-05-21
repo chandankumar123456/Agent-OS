@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from app.environments.browser_env import BrowserSession, browser_session_manager
+from core.environments.browser_env import BrowserSession, browser_session_manager
 
 
 @pytest.mark.asyncio

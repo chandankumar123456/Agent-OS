@@ -1,0 +1,53 @@
+[package]
+name = "agentos-tui"
+version = "0.1.0"
+edition = "2021"
+authors = ["AgentOS Team"]
+description = "AgentOS TUI - Real-time task monitoring dashboard"
+license = "MIT"
+
+[[bin]]
+name = "agentos-tui"
+path = "src/main.rs"
+
+[dependencies]
+# TUI framework
+ratatui = "0.26"
+
+# Terminal handling
+crossterm = { version = "0.27", features = ["event-stream"] }
+
+# Async runtime
+tokio = { workspace = true }
+
+# IPC client (gRPC)
+agentos-ipc-client = { workspace = true }
+tokio-stream = "0.1"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Date/time
+chrono = { workspace = true }
+
+# Configuration directories
+dirs = { workspace = true }
+
+# CLI parsing (for initial args)
+clap = { workspace = true, features = ["derive"] }
+
+# Unicode width for text wrapping
+unicode-width = "0.1"
+
+[dev-dependencies]
+tempfile = "3.10"
+
