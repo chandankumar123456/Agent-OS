@@ -1,6 +1,12 @@
+"""Role-based access control primitives.
+
+This module is plain Python: it has no FastAPI imports and raises plain
+domain exceptions on permission failures.  The FastAPI dependency-style
+glue (``require_permission``, ``require_role``) lives in
+``app.api.deps`` and calls into these primitives.
+"""
 from enum import Enum
-from fastapi import HTTPException, status, Request
-from typing import Any
+from typing import Any, Iterable
 
 
 class Role(str, Enum):
@@ -32,51 +38,48 @@ ROLE_PERMISSIONS = {
 }
 
 
+class AuthorizationError(Exception):
+    """Raised when a principal lacks the requested role/permission.
+
+    Carries an HTTP-shaped status hint (default 403) so the route layer can
+    surface the failure cleanly without this module importing FastAPI.
+    """
+
+    def __init__(self, message: str, *, status_code: int = 403):
+        super().__init__(message)
+        self.message = message
+        self.status_code = status_code
+
+
 def has_permission(user: Any, permission: Permission) -> bool:
     role_str = getattr(user, "role", "user")
     role = Role(role_str) if role_str in [r.value for r in Role] else Role.user
     return permission in ROLE_PERMISSIONS.get(role, [])
 
 
-def require_permission(permission: Permission):
-    from fastapi import Depends
-    from ..api.deps import get_current_user
+def check_permission(
+    user: Any,
+    permission: Permission,
+    *,
+    auth_type: str | None = None,
+    api_key_permissions: Iterable[str] | None = None,
+) -> None:
+    """Raise :class:`AuthorizationError` if ``user`` may not perform ``permission``.
 
-    async def _check_permission(
-        request: Request,
-        current_user: Any = Depends(get_current_user)
-    ):
-        # Check API key permissions if authenticated via API key
-        auth_type = getattr(request.state, "auth_type", None)
-        if auth_type == "api_key":
-            api_key_permissions = getattr(request.state, "api_key_permissions", [])
-            if permission.value in api_key_permissions:
-                return current_user
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied: {permission.value}"
-            )
-        
-        # Otherwise check role-based permissions
-        if not has_permission(current_user, permission):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission denied: {permission.value}"
-            )
-        return current_user
-    return _check_permission
+    When the principal authenticated via API key, the explicit
+    ``api_key_permissions`` list takes precedence over role-based rules.
+    """
+    if auth_type == "api_key":
+        if permission.value in (api_key_permissions or []):
+            return
+        raise AuthorizationError(f"Permission denied: {permission.value}")
+
+    if not has_permission(user, permission):
+        raise AuthorizationError(f"Permission denied: {permission.value}")
 
 
-def require_role(role: Role):
-    from fastapi import Depends
-    from ..api.deps import get_current_user
-
-    async def _check_role(current_user: Any = Depends(get_current_user)):
-        user_role = getattr(current_user, "role", "user")
-        if user_role != role.value:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"{role.value} access required"
-            )
-        return current_user
-    return _check_role
+def check_role(user: Any, role: Role) -> None:
+    """Raise :class:`AuthorizationError` if ``user`` does not have ``role``."""
+    user_role = getattr(user, "role", "user")
+    if user_role != role.value:
+        raise AuthorizationError(f"{role.value} access required")

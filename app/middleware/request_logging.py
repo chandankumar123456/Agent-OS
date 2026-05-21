@@ -1,6 +1,8 @@
 import time
-from fastapi import Request
+
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
 from ..logs.logger import logger
 
 

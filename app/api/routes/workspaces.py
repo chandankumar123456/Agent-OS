@@ -2,8 +2,8 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import List
 from pydantic import BaseModel
 from uuid import uuid4
-from ...auth.rbac import require_role, Role
-from ...api.deps import get_current_user
+from ...auth.rbac import Role
+from ...api.deps import get_current_user, require_role
 from ...memory.long_term import db
 from ...memory.models import WorkspaceModel, WorkspaceMemberModel
 from ...logs.logger import logger
