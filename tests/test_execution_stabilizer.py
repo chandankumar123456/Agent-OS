@@ -5,7 +5,7 @@ import random
 from unittest.mock import AsyncMock, MagicMock
 from PIL import Image
 
-from app.environments.execution_stabilizer import (
+from core.environments.execution_stabilizer import (
     ActionStabilizer,
     StabilizerConfig,
     ActionSnapshot,
@@ -468,7 +468,7 @@ class TestActionTruthLogging:
 @pytest.mark.asyncio
 async def test_stabilizer_detects_infinite_loop():
     """RR4: Must detect same action on same element failing 3x with no state change and abort."""
-    from app.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
+    from core.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
     stab = ActionStabilizer(config=StabilizerConfig())
     for i in range(3):
         stab.add_snapshot(
@@ -491,7 +491,7 @@ async def test_stabilizer_detects_infinite_loop():
 
 def test_stabilizer_config_has_cleanup_age():
     """FR5.3: StabilizerConfig must expose temp_screenshot_max_age_seconds."""
-    from app.environments.execution_stabilizer import StabilizerConfig
+    from core.environments.execution_stabilizer import StabilizerConfig
     cfg = StabilizerConfig(temp_screenshot_max_age_seconds=120)
     assert cfg.temp_screenshot_max_age_seconds == 120
 
@@ -499,7 +499,7 @@ def test_stabilizer_config_has_cleanup_age():
 @pytest.mark.asyncio
 async def test_dismiss_popup_verifies_popup_is_gone():
     """NFR3: dismiss_popup must confirm popup no longer exists after dismissal."""
-    from app.environments.execution_stabilizer import ActionStabilizer
+    from core.environments.execution_stabilizer import ActionStabilizer
     from unittest.mock import patch, AsyncMock
     stab = ActionStabilizer()
     

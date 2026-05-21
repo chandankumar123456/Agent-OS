@@ -3,7 +3,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.environments.browser_env import BrowserSession, _retry, _is_transient_playwright_error
+from core.environments.browser_env import BrowserSession, _retry, _is_transient_playwright_error
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError, Error as PlaywrightError
 
 
@@ -222,7 +222,7 @@ async def test_session_recovery_on_closed_page():
 
 @pytest.mark.asyncio
 async def test_session_manager_reuses_connected_session():
-    from app.environments.browser_env import BrowserSessionManager
+    from core.environments.browser_env import BrowserSessionManager
 
     manager = BrowserSessionManager()
     session = BrowserSession(task_id="reuse")
@@ -239,7 +239,7 @@ async def test_session_manager_reuses_connected_session():
 
 @pytest.mark.asyncio
 async def test_session_manager_recreate_dead_session():
-    from app.environments.browser_env import BrowserSessionManager
+    from core.environments.browser_env import BrowserSessionManager
 
     manager = BrowserSessionManager()
     dead_session = BrowserSession(task_id="dead")

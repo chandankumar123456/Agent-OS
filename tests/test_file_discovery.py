@@ -3,7 +3,7 @@ import os
 import pytest
 import tempfile
 from pathlib import Path
-from app.tools.file_discovery import FastFileDiscovery
+from core.tools.file_discovery import FastFileDiscovery
 
 
 @pytest.fixture

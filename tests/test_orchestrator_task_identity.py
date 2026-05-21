@@ -2,9 +2,9 @@ import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
-from app.agents.base import AgentStatus
-from app.orchestrator.core import Orchestrator
-from app.api.routes.tasks import use_celery
+from core.agents.base import AgentStatus
+from core.orchestrator.core import Orchestrator
+from core.api.routes.tasks import use_celery
 
 
 def test_use_celery_defaults_to_enabled():
@@ -14,7 +14,7 @@ def test_use_celery_defaults_to_enabled():
 def test_execute_task_preserves_provided_task_id():
     orchestrator = Orchestrator()
     provided_task_id = uuid4()
-    import app.orchestrator.core as core
+    import core.orchestrator.core as core
 
     async def fake_validate_input(*args, **kwargs):
         return True

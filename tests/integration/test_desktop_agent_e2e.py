@@ -40,12 +40,12 @@ except ImportError:
 os.environ.setdefault("AGENTOS_RUNTIME_MODE", "grpc")
 os.environ.setdefault("RUNTIME_MODE", "grpc")
 
-from app.desktop_native.sqlite_store import sqlite_store
-from app.desktop_native.task_queue import TaskPriority
-from app.tools.registry import tool_registry
-from app.tools.base import ToolInput
-from app.environments.desktop_env import desktop_session_manager
-from app.llm.providers import get_provider
+from core.desktop_native.sqlite_store import sqlite_store
+from core.desktop_native.task_queue import TaskPriority
+from core.tools.registry import tool_registry
+from core.tools.base import ToolInput
+from core.environments.desktop_env import desktop_session_manager
+from core.llm.providers import get_provider
 
 
 @pytest.fixture(scope="module")
@@ -196,7 +196,7 @@ class TestDesktopAgentNotepadE2E:
 
     async def test_kernel_submits_desktop_task(self, temp_save_dir):
         """Test that AgentKernel can submit and execute a desktop task."""
-        from app.desktop_native.kernel import AgentKernel
+        from core.desktop_native.kernel import AgentKernel
 
         kernel = AgentKernel(max_concurrent_tasks=1)
         await kernel.start()

@@ -1,12 +1,12 @@
 """Unit tests for DesktopRecoveryPlanner positive recovery strategies."""
 import pytest
 
-from app.capabilities.recovery import (
+from core.capabilities.recovery import (
     DesktopRecoveryAction,
     DesktopRecoveryPlanner,
     RecoveryAction,
 )
-from app.capabilities.models import RecoveryDecision
+from core.capabilities.models import RecoveryDecision
 
 
 class TestDesktopRecoveryAction:

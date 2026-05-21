@@ -1,7 +1,7 @@
 import pytest
 
-from app.safety.gate import SafetyGate, safety_gate
-from app.safety.models import ActionSeverity
+from core.safety.gate import SafetyGate, safety_gate
+from core.safety.models import ActionSeverity
 
 
 class TestSafetyGate:

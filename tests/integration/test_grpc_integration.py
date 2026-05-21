@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Import proto modules
-from app.proto import checkpoint_pb2, runtime_pb2, worker_pb2
+from core.proto import checkpoint_pb2, runtime_pb2, worker_pb2
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ class TestGRPCServerLifecycle:
     @pytest.mark.asyncio
     async def test_server_startup(self):
         """Test that gRPC server starts successfully."""
-        from app.runtime.grpc_server import GRPCServer
+        from core.runtime.grpc_server import GRPCServer
 
         server = GRPCServer(host="127.0.0.1", port=50051)
 
@@ -58,7 +58,7 @@ class TestGRPCServerLifecycle:
     @pytest.mark.asyncio
     async def test_server_shutdown(self):
         """Test that gRPC server shuts down gracefully."""
-        from app.runtime.grpc_server import GRPCServer
+        from core.runtime.grpc_server import GRPCServer
 
         server = GRPCServer(host="127.0.0.1", port=50052)
 
@@ -76,9 +76,9 @@ class TestServiceImplementations:
     @pytest.mark.asyncio
     async def test_runtime_service_health_check(self):
         """Test RuntimeService health check."""
-        from app.runtime.grpc_server import GRPCServer, RuntimeServiceImpl
-        from app.runtime.runtime import AgentRuntime
-        from app.orchestrator.core import Orchestrator
+        from core.runtime.grpc_server import GRPCServer, RuntimeServiceImpl
+        from core.runtime.runtime import AgentRuntime
+        from core.orchestrator.core import Orchestrator
 
         # Initialize components
         runtime = AgentRuntime()
@@ -110,8 +110,8 @@ class TestServiceImplementations:
     @pytest.mark.asyncio
     async def test_checkpoint_service_save_get(self, temp_db_path):
         """Test CheckpointService save and get operations."""
-        from app.runtime.grpc_server import CheckpointServiceImpl
-        from app.langgraph.sqlite_checkpointer import SQLiteCheckpointSaver
+        from core.runtime.grpc_server import CheckpointServiceImpl
+        from core.langgraph.sqlite_checkpointer import SQLiteCheckpointSaver
 
         checkpointer = SQLiteCheckpointSaver(db_path=temp_db_path)
 
@@ -156,13 +156,13 @@ class TestClientServerCommunication:
     @pytest.mark.asyncio
     async def test_grpc_client_connection(self):
         """Test gRPC client can connect to server."""
-        from app.proto.grpc_client import GRPCClient, GRPCClientConfig
+        from core.proto.grpc_client import GRPCClient, GRPCClientConfig
 
         config = GRPCClientConfig(host="127.0.0.1", port=50053, use_tls=False)
         client = GRPCClient(config)
 
         # Start server in background
-        from app.runtime.grpc_server import GRPCServer
+        from core.runtime.grpc_server import GRPCServer
         server = GRPCServer(host="127.0.0.1", port=50053)
 
         # Start server
@@ -191,8 +191,8 @@ class TestEndToEndTaskExecution:
     @pytest.mark.asyncio
     async def test_create_task_via_grpc(self):
         """Test creating a task through gRPC."""
-        from app.proto.grpc_client import GRPCClient, GRPCClientConfig
-        from app.runtime.grpc_server import GRPCServer
+        from core.proto.grpc_client import GRPCClient, GRPCClientConfig
+        from core.runtime.grpc_server import GRPCServer
 
         # Start server
         server = GRPCServer(host="127.0.0.1", port=50054)
@@ -227,9 +227,9 @@ class TestConcurrentOperations:
     @pytest.mark.asyncio
     async def test_concurrent_health_checks(self):
         """Test multiple concurrent health checks."""
-        from app.runtime.grpc_server import GRPCServer, RuntimeServiceImpl
-        from app.runtime.runtime import AgentRuntime
-        from app.orchestrator.core import Orchestrator
+        from core.runtime.grpc_server import GRPCServer, RuntimeServiceImpl
+        from core.runtime.runtime import AgentRuntime
+        from core.orchestrator.core import Orchestrator
 
         # Initialize components
         runtime = AgentRuntime()
@@ -260,7 +260,7 @@ class TestErrorHandling:
     @pytest.mark.asyncio
     async def test_invalid_port_error(self):
         """Test connection error handling."""
-        from app.proto.grpc_client import GRPCClient, GRPCClientConfig
+        from core.proto.grpc_client import GRPCClient, GRPCClientConfig
 
         config = GRPCClientConfig(host="localhost", port=9999, use_tls=False)
         client = GRPCClient(config)
@@ -286,8 +286,8 @@ class TestCheckpointPersistence:
     @pytest.mark.asyncio
     async def test_checkpoint_lifecycle(self, temp_db_path):
         """Test complete checkpoint lifecycle."""
-        from app.runtime.grpc_server import GRPCServer, CheckpointServiceImpl
-        from app.langgraph.sqlite_checkpointer import SQLiteCheckpointSaver
+        from core.runtime.grpc_server import GRPCServer, CheckpointServiceImpl
+        from core.langgraph.sqlite_checkpointer import SQLiteCheckpointSaver
 
         checkpointer = SQLiteCheckpointSaver(db_path=temp_db_path)
         service = CheckpointServiceImpl(checkpointer)

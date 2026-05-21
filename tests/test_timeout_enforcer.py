@@ -3,8 +3,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.orchestrator.timeouts import TimeoutEnforcer, TimeoutConfig
-from app.orchestrator.errors import AgentOSError, ErrorType, ErrorCode
+from core.orchestrator.timeouts import TimeoutEnforcer, TimeoutConfig
+from core.orchestrator.errors import AgentOSError, ErrorType, ErrorCode
 
 
 @pytest.fixture
@@ -14,7 +14,7 @@ def enforcer():
 
 @pytest.fixture
 def mock_redis():
-    with patch("app.orchestrator.timeouts.redis_client") as mock:
+    with patch("core.orchestrator.timeouts.redis_client") as mock:
         yield mock
 
 
@@ -144,7 +144,7 @@ class TestToolEnforcement:
             await asyncio.sleep(10)
             return "too late"
 
-        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("core.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
             with pytest.raises(AgentOSError) as exc_info:
                 await enforcer.enforce_tool(
                     "task-1", "shell__execute", slow_coro(), override_seconds=1
@@ -179,7 +179,7 @@ class TestAgentEnforcement:
         async def slow_coro():
             await asyncio.sleep(10)
 
-        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("core.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
             with pytest.raises(AgentOSError) as exc_info:
                 await enforcer.enforce_agent(
                     "task-1", "planner", slow_coro(), override_seconds=1
@@ -213,7 +213,7 @@ class TestStepEnforcement:
         async def slow_coro():
             await asyncio.sleep(10)
 
-        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("core.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
             with pytest.raises(AgentOSError) as exc_info:
                 await enforcer.enforce_step(
                     "task-1", 2, slow_coro(), override_seconds=1
@@ -234,7 +234,7 @@ class TestWorkflowEnforcement:
         async def slow_coro():
             await asyncio.sleep(10)
 
-        with patch("app.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
+        with patch("core.orchestrator.timeouts.asyncio.wait_for", side_effect=asyncio.TimeoutError):
             with pytest.raises(AgentOSError) as exc_info:
                 await enforcer.enforce_workflow(
                     "task-1", slow_coro(), override_seconds=1

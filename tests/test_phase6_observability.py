@@ -3,8 +3,8 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.api.routes.tasks import get_task, get_task_trace
+from core.main import app
+from core.api.routes.tasks import get_task, get_task_trace
 
 
 class FakeUser(SimpleNamespace):
@@ -45,7 +45,7 @@ def test_user_cannot_access_another_users_task(monkeypatch):
             created_at=None,
         )
 
-    monkeypatch.setattr("app.api.routes.tasks.task_repo.get", fake_get)
+    monkeypatch.setattr("core.api.routes.tasks.task_repo.get", fake_get)
 
     try:
         import asyncio
@@ -88,8 +88,8 @@ def test_get_task_returns_lowercase_node_statuses(monkeypatch):
             "edges": [],
         }
 
-    monkeypatch.setattr("app.api.routes.tasks.task_repo.get", fake_task_get)
-    monkeypatch.setattr("app.api.routes.tasks._task_scoped_workflow_state", fake_workflow_state)
+    monkeypatch.setattr("core.api.routes.tasks.task_repo.get", fake_task_get)
+    monkeypatch.setattr("core.api.routes.tasks._task_scoped_workflow_state", fake_workflow_state)
 
     import asyncio
 
@@ -177,11 +177,11 @@ def test_get_task_trace_returns_full_workflow_trace(monkeypatch):
             "edges": [],
         }
 
-    monkeypatch.setattr("app.api.routes.tasks.task_repo.get", fake_task_get)
-    monkeypatch.setattr("app.api.routes.tasks.trace_repo.get_by_trace_id", fake_trace_get)
-    monkeypatch.setattr("app.api.routes.tasks.span_repo.get_by_trace", fake_spans)
-    monkeypatch.setattr("app.api.routes.tasks._task_scoped_workflow_state", fake_workflow_state)
-    monkeypatch.setattr("app.api.routes.tasks.node_trace_repo.get_by_task", fake_node_traces)
+    monkeypatch.setattr("core.api.routes.tasks.task_repo.get", fake_task_get)
+    monkeypatch.setattr("core.api.routes.tasks.trace_repo.get_by_trace_id", fake_trace_get)
+    monkeypatch.setattr("core.api.routes.tasks.span_repo.get_by_trace", fake_spans)
+    monkeypatch.setattr("core.api.routes.tasks._task_scoped_workflow_state", fake_workflow_state)
+    monkeypatch.setattr("core.api.routes.tasks.node_trace_repo.get_by_task", fake_node_traces)
 
     import asyncio
 

@@ -7,10 +7,10 @@ import pytest
 if os.environ.get("AGENTOS_RUNTIME_MODE", "").lower() == "grpc":
     pytest.skip("Celery-dependent tests not applicable in gRPC/desktop mode", allow_module_level=True)
 
-from app.api.routes.tasks import get_task
-from app.memory.long_term import db
-from app.memory.long_term import task_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
-from app.queue.tasks import execute_task as celery_execute_task
+from core.api.routes.tasks import get_task
+from core.memory.long_term import db
+from core.memory.long_term import task_repo, workflow_repo, workflow_node_repo, workflow_edge_repo
+from core.queue.tasks import execute_task as celery_execute_task
 
 
 def test_persisted_task_lookup_includes_workflow_nodes_when_present():
@@ -59,9 +59,9 @@ def test_get_task_returns_workflow_nodes_instead_of_legacy_steps():
 
 def test_celery_worker_marks_failed_tasks_in_db_on_exception(monkeypatch):
     updates = []
-    import app.memory.long_term as long_term
-    import app.orchestrator.core as core
-    import app.queue.tasks as queue_tasks
+    import core.memory.long_term as long_term
+    import core.orchestrator.core as core
+    import core.queue.tasks as queue_tasks
 
     async def fake_update(task_id, status=None, result=None, error=None):
         updates.append({"task_id": task_id, "status": status, "result": result, "error": error})
@@ -88,7 +88,7 @@ def test_task_repo_get_raises_when_db_session_fails(monkeypatch):
     def fail_session():
         raise RuntimeError("db offline")
 
-    monkeypatch.setattr("app.memory.long_term.db.get_session", fail_session)
+    monkeypatch.setattr("core.memory.long_term.db.get_session", fail_session)
 
     async def run():
         await task_repo.get("task-1")

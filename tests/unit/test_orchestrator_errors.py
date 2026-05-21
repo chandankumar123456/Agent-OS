@@ -1,7 +1,7 @@
 """Unit tests for orchestrator error classes: AgentOSError, RetryableError, UnrecoverableError."""
 import pytest
 
-from app.orchestrator.errors import (
+from core.orchestrator.errors import (
     AgentOSError,
     RetryableError,
     UnrecoverableError,

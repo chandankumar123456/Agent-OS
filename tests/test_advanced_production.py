@@ -8,10 +8,10 @@ from uuid import uuid4
 
 import pytest
 
-from app.memory.long_term import db, task_repo, workflow_repo, workflow_node_repo
-from app.agents.types import TaskStatus
-from app.orchestrator.retry import is_retryable, RetryConfig
-from app.orchestrator.errors import RetryableError, UnrecoverableError, ErrorCode
+from core.memory.long_term import db, task_repo, workflow_repo, workflow_node_repo
+from core.agents.types import TaskStatus
+from core.orchestrator.retry import is_retryable, RetryConfig
+from core.orchestrator.errors import RetryableError, UnrecoverableError, ErrorCode
 
 
 # ============================================================

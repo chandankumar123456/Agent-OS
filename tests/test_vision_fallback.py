@@ -3,7 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from app.environments.vision_fallback import OpenCVFallbackParser
+from core.environments.vision_fallback import OpenCVFallbackParser
 
 
 class TestDPIScaling:
@@ -52,7 +52,7 @@ class TestDPIScaling:
         # Mock _get_screen_dpi to return 192 DPI
         with patch.object(parser, "_get_screen_dpi", return_value=(192, 192)):
             # Also mock cv2.imread to return None to short-circuit early
-            with patch("app.environments.vision_fallback.cv2") as mock_cv2:
+            with patch("core.environments.vision_fallback.cv2") as mock_cv2:
                 mock_cv2.imread.return_value = None
                 parser.parse_screenshot("/fake/path.png")
         # After parse, scale should be computed
@@ -66,7 +66,7 @@ class TestDPIScaling:
                 parser._dpi_scale = parser._get_dpi_scale_factor()
                 # At 2x scale, min size is 6px
                 # Create a 4px wide element - would pass at 1x (4 >= 3) but fail at 2x (4 < 6)
-                from app.environments.vision_fallback import DetectedElement
+                from core.environments.vision_fallback import DetectedElement
                 elements = [
                     DetectedElement(1, (10, 10, 4, 8), "button", "test", 0.7),
                 ]
@@ -95,7 +95,7 @@ class TestTextProximityScaling:
             assert parser._dpi_scale == 2.0
             # _filter_text_spam uses self.TEXT_PROXIMITY_PX
             # We can verify by checking that the method works with scaled proximity
-            from app.environments.vision_fallback import DetectedElement
+            from core.environments.vision_fallback import DetectedElement
             # Two elements: a button and a text 60px away (should be near at 2x scale)
             button = DetectedElement(1, (100, 100, 50, 30), "button", "OK", 0.7)
             # Text 60px away horizontally from button edge: at 1x scale (threshold=40) it's too far
@@ -137,7 +137,7 @@ class TestHybridVisionParserDPI:
 
     def test_hybrid_vision_parser_propagates_dpi_scale(self):
         """parse_screenshot() sets _opencv._dpi_scale before calling OpenCV methods."""
-        from app.environments.vision_fallback import HybridVisionParser
+        from core.environments.vision_fallback import HybridVisionParser
         parser = HybridVisionParser()
         if not parser.is_available():
             pytest.skip("Hybrid parser not available (OpenCV missing)")

@@ -19,8 +19,8 @@ import json
 from typing import Generator, Any
 from contextlib import contextmanager
 
-# Import protobuf modules from app.proto package
-from app.proto import worker_pb2, worker_pb2_grpc
+# Import protobuf modules from core.proto package
+from core.proto import worker_pb2, worker_pb2_grpc
 
 # gRPC imports
 import grpc
@@ -47,7 +47,7 @@ def python_server() -> Generator[subprocess.Popen, None, None]:
     # Start the Python gRPC executor server
     # Note: This assumes a worker_executor_server.py exists that implements WorkerExecutor
     process = subprocess.Popen(
-        ["python", "-m", "app.runtime.worker_executor_server"],
+        ["python", "-m", "core.runtime.worker_executor_server"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,

@@ -57,7 +57,7 @@ def isolated_desktop_db(tmp_path, monkeypatch):
     monkeypatch.setenv("USERPROFILE", str(fake_home))  # Windows fallback
 
     # Re-point the singleton store at the tmp path and force reconnect.
-    from app.desktop_native import sqlite_store as ss
+    from core.desktop_native import sqlite_store as ss
 
     db_path = str(fake_home / ".agentos" / "agentos.db")
     monkeypatch.setattr(ss.sqlite_store, "_db_path", db_path, raising=False)
@@ -87,11 +87,11 @@ def _build_stub_kernel():
     Everything else (scheduler, queue, state machine, locks, timeouts,
     event bus, resource monitor) is the real production code.
     """
-    from app.desktop_native.kernel import AgentKernel
-    from app.desktop_native.sqlite_store import sqlite_store
-    from app.desktop_native.sqlite_tuning import sqlite_tuning
-    from app.desktop_native.resource_monitor import resource_monitor
-    from app.desktop_native.state_machine import local_task_state_machine, TaskState
+    from core.desktop_native.kernel import AgentKernel
+    from core.desktop_native.sqlite_store import sqlite_store
+    from core.desktop_native.sqlite_tuning import sqlite_tuning
+    from core.desktop_native.resource_monitor import resource_monitor
+    from core.desktop_native.state_machine import local_task_state_machine, TaskState
 
     class StubKernel(AgentKernel):
         async def start(self) -> None:  # type: ignore[override]
@@ -174,11 +174,11 @@ async def test_desktop_kernel_smoke_reaches_terminal(isolated_desktop_db):
     xfailed because of a known bug in the worker (see that test for
     details).
     """
-    from app.desktop_native.state_machine import (
+    from core.desktop_native.state_machine import (
         local_task_state_machine,
         TaskState,
     )
-    from app.desktop_native.task_queue import TaskPriority
+    from core.desktop_native.task_queue import TaskPriority
 
     StubKernel = _build_stub_kernel()
     kernel = StubKernel(max_concurrent_tasks=1, task_timeout_seconds=15)
@@ -231,29 +231,17 @@ async def test_desktop_kernel_smoke_reaches_terminal(isolated_desktop_db):
         await kernel.stop(timeout=5.0)
 
 
-@pytest.mark.xfail(
-    reason=(
-        "AgentKernel worker attempts an invalid EXECUTING -> COMPLETED "
-        "state transition; the documented valid path is EXECUTING -> "
-        "VERIFYING -> COMPLETED (see app/desktop_native/state_machine.py "
-        "VALID_TRANSITIONS and app/desktop_native/kernel.py worker loop). "
-        "The unification refactor (Phase 3) must reroute completion "
-        "through VERIFYING.  Tracked as a Phase 1 baseline finding."
-    ),
-    strict=False,
-)
 async def test_desktop_kernel_smoke_full_completion(isolated_desktop_db):
     """Strict assertion that the kernel reports the task as COMPLETED.
 
-    Marked xfail today because the worker's terminal transition is buggy.
-    Once Phase 3 lands, this test should xpass / pass and the marker can
-    be removed.
+    The terminal-transition bug (EXECUTING -> COMPLETED) was fixed in Phase 3
+    by routing through VERIFYING: EXECUTING -> VERIFYING -> COMPLETED.
     """
-    from app.desktop_native.state_machine import (
+    from core.desktop_native.state_machine import (
         local_task_state_machine,
         TaskState,
     )
-    from app.desktop_native.task_queue import TaskPriority
+    from core.desktop_native.task_queue import TaskPriority
 
     StubKernel = _build_stub_kernel()
     kernel = StubKernel(max_concurrent_tasks=1, task_timeout_seconds=15)

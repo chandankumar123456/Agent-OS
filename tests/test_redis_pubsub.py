@@ -1,7 +1,7 @@
 import asyncio
 import os
 import pytest
-from app.memory.redis_pubsub import RedisPubSubClient
+from core.memory.redis_pubsub import RedisPubSubClient
 
 
 @pytest.mark.skipif(not os.environ.get("REDIS_URL"), reason="REDIS_URL not set")

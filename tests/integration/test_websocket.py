@@ -1,12 +1,12 @@
 import pytest
 from fastapi.testclient import TestClient
-from app.main import app
+from core.main import app
 
 client = TestClient(app)
 
 
 def test_websocket_valid_token():
-    from app.auth.utils import create_access_token
+    from core.auth.utils import create_access_token
     token = create_access_token({"sub": "test-user", "email": "test@test.com", "role": "user"})
 
     with client.websocket_connect(f"/ws/tasks/test-task-123?token={token}") as ws:

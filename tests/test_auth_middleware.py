@@ -1,6 +1,6 @@
 import asyncio
 
-from app.middleware.auth import APIKeyMiddleware
+from core.middleware.auth import APIKeyMiddleware
 
 
 async def _dispatch(path: str, headers: list[tuple[bytes, bytes]] | None = None):

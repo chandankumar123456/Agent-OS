@@ -2,7 +2,7 @@
 import pytest
 from datetime import datetime
 
-from app.orchestrator.state_machine import (
+from core.orchestrator.state_machine import (
     TaskStateMachine,
     TaskState,
     StateTransition,

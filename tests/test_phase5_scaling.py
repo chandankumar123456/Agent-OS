@@ -1,12 +1,12 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
-from app.tools.cache import CacheOptimizer
-from app.runtime.resource_limits import ResourceLimitEnforcer, ResourceGrant
-from app.logs.anomaly import AnomalyDetector, AnomalySeverity
-from app.logs.alerts import AlertManager, AlertRule, AlertChannel, AnomalySeverity as AlertSeverity
-from app.logs.profiler import PerformanceProfiler
-from app.runtime.scaling import HorizontalScalingCoordinator
+from core.tools.cache import CacheOptimizer
+from core.runtime.resource_limits import ResourceLimitEnforcer, ResourceGrant
+from core.logs.anomaly import AnomalyDetector, AnomalySeverity
+from core.logs.alerts import AlertManager, AlertRule, AlertChannel, AnomalySeverity as AlertSeverity
+from core.logs.profiler import PerformanceProfiler
+from core.runtime.scaling import HorizontalScalingCoordinator
 
 
 # ---------------------------------------------------------------------------

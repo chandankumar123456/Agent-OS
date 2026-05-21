@@ -21,12 +21,12 @@ import pytest_asyncio
 os.environ.setdefault("AGENTOS_RUNTIME_MODE", "grpc")
 os.environ.setdefault("RUNTIME_MODE", "grpc")
 
-from app.desktop_native.sqlite_store import sqlite_store
-from app.desktop_native.local_logger import LocalLogger
-from app.desktop_native.local_metrics import local_metrics, LocalMetrics
-from app.desktop_native.local_tracer import local_tracer, LocalTracer
-from app.desktop_native.local_alerts import local_alerts, LocalAlertManager, AlertRule
-from app.desktop_native.memory_hierarchy import memory_hierarchy, MemoryHierarchy
+from core.desktop_native.sqlite_store import sqlite_store
+from core.desktop_native.local_logger import LocalLogger
+from core.desktop_native.local_metrics import local_metrics, LocalMetrics
+from core.desktop_native.local_tracer import local_tracer, LocalTracer
+from core.desktop_native.local_alerts import local_alerts, LocalAlertManager, AlertRule
+from core.desktop_native.memory_hierarchy import memory_hierarchy, MemoryHierarchy
 
 
 @pytest_asyncio.fixture(autouse=True)

@@ -13,15 +13,15 @@ import tempfile
 import pytest
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch, call
 
-from app.safety.approval_store import ApprovalStore, ApprovalMode, ApprovalSession
-from app.environments.desktop_env import DesktopSession, DesktopSessionManager
-from app.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
-from app.environments.multi_app_orchestrator import (
+from core.safety.approval_store import ApprovalStore, ApprovalMode, ApprovalSession
+from core.environments.desktop_env import DesktopSession, DesktopSessionManager
+from core.environments.execution_stabilizer import ActionStabilizer, StabilizerConfig
+from core.environments.multi_app_orchestrator import (
     MultiAppOrchestrator,
     WorkflowCheckpoint,
 )
-from app.environments.window_registry import WindowRef, WindowRegistry
-from app.tools.base import ToolOutput
+from core.environments.window_registry import WindowRef, WindowRegistry
+from core.tools.base import ToolOutput
 
 
 # ===========================================================================
@@ -32,7 +32,7 @@ from app.tools.base import ToolOutput
 @pytest.fixture(autouse=True)
 def auto_mock_headless():
     """Prevent DesktopSession from seeing a real display — all tests use mocking."""
-    with patch("app.environments.desktop_env.pyautogui") as m:
+    with patch("core.environments.desktop_env.pyautogui") as m:
         size_mock = MagicMock()
         size_mock.width = 1920
         size_mock.height = 1080
@@ -80,7 +80,7 @@ def auto_mock_sync_wait():
 @pytest.fixture
 def mock_gw():
     """Mock the pygetwindow module."""
-    with patch("app.environments.desktop_env.gw") as m:
+    with patch("core.environments.desktop_env.gw") as m:
         yield m
 
 
@@ -1455,8 +1455,8 @@ class TestStressWindowRegistry:
         reg = WindowRegistry()
         with patch.object(reg, "_logger", MagicMock()):
             # With no ctypes or pygetwindow available
-            with patch("app.environments.window_registry._lazy_ctypes", return_value=None), \
-                 patch("app.environments.window_registry._lazy_pygetwindow", return_value=None):
+            with patch("core.environments.window_registry._lazy_ctypes", return_value=None), \
+                 patch("core.environments.window_registry._lazy_pygetwindow", return_value=None):
                 result = reg.get_active_window()
 
         assert result is None
@@ -1540,7 +1540,7 @@ class TestStressWindowRegistry:
 
         # Mock ctypes to return a new title
         with patch.object(sys, "platform", "win32"), \
-             patch("app.environments.window_registry._lazy_ctypes") as mock_ctypes:
+             patch("core.environments.window_registry._lazy_ctypes") as mock_ctypes:
 
             mock_user32 = MagicMock()
             mock_user32.IsWindow.return_value = True

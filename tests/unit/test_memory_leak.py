@@ -6,7 +6,7 @@ desktop sessions, ensuring no significant memory is retained.
 import pytest
 import tracemalloc
 
-from app.environments.desktop_env import DesktopSessionManager
+from core.environments.desktop_env import DesktopSessionManager
 
 
 @pytest.mark.asyncio

@@ -1,8 +1,8 @@
 """FR6.1: Desktop recovery strategy tests — RecoveryStrategy.DESKTOP enum and tool alternatives."""
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from app.capabilities.recovery import RecoveryEngine, RecoveryStrategy, RecoveryAction
-from app.capabilities.models import ExecutionEnvironment
+from core.capabilities.recovery import RecoveryEngine, RecoveryStrategy, RecoveryAction
+from core.capabilities.models import ExecutionEnvironment
 
 
 def test_recovery_strategy_has_desktop_enum():
@@ -37,7 +37,7 @@ def test_tool_alternatives_desktop_to_desktop():
             )
 
 
-@patch("app.capabilities.recovery.redis_client")
+@patch("core.capabilities.recovery.redis_client")
 class TestRecoveryStrategyDesktop:
     """FR6.1: RecoveryStrategy.DESKTOP affects recovery decisions."""
 
@@ -108,7 +108,7 @@ class TestRecoveryStrategyExecute:
 
     def test_execute_exists(self):
         """execute() method must exist on RecoveryEngine."""
-        from app.capabilities.models import RecoveryDecision
+        from core.capabilities.models import RecoveryDecision
         engine = RecoveryEngine()
         assert hasattr(engine, "execute")
         assert callable(engine.execute)
@@ -116,7 +116,7 @@ class TestRecoveryStrategyExecute:
     @pytest.mark.asyncio
     async def test_execute_desktop_strategy_rejects_browser_env_switch(self):
         """execute() with DESKTOP strategy must reject SWITCH_ENVIRONMENT to browser."""
-        from app.capabilities.models import RecoveryDecision
+        from core.capabilities.models import RecoveryDecision
 
         engine = RecoveryEngine()
         decision = RecoveryDecision(
@@ -136,7 +136,7 @@ class TestRecoveryStrategyExecute:
     @pytest.mark.asyncio
     async def test_execute_desktop_strategy_rejects_non_desktop_tool_switch(self):
         """execute() with DESKTOP strategy must reject SWITCH_TOOL to non-desktop tool."""
-        from app.capabilities.models import RecoveryDecision
+        from core.capabilities.models import RecoveryDecision
 
         engine = RecoveryEngine()
         decision = RecoveryDecision(
@@ -156,7 +156,7 @@ class TestRecoveryStrategyExecute:
     @pytest.mark.asyncio
     async def test_execute_passes_through_non_desktop_strategy(self):
         """execute() without DESKTOP strategy should pass decisions through unchanged."""
-        from app.capabilities.models import RecoveryDecision
+        from core.capabilities.models import RecoveryDecision
 
         engine = RecoveryEngine()
         decision = RecoveryDecision(

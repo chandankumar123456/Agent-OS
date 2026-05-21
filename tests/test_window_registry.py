@@ -9,7 +9,7 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock
 
-from app.environments.window_registry import WindowRef, WindowRegistry
+from core.environments.window_registry import WindowRef, WindowRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -154,9 +154,9 @@ def test_registry_serialization_round_trip(registry):
 def test_get_active_window_headless(registry):
     """In a headless environment, get_active_window may return None — that's OK."""
     # Mock all OS-level detection to return nothing
-    with patch("app.environments.window_registry._lazy_ctypes", return_value=None), \
-         patch("app.environments.window_registry._lazy_pygetwindow", return_value=None), \
-         patch("app.environments.window_registry._lazy_psutil", return_value=None):
+    with patch("core.environments.window_registry._lazy_ctypes", return_value=None), \
+         patch("core.environments.window_registry._lazy_pygetwindow", return_value=None), \
+         patch("core.environments.window_registry._lazy_psutil", return_value=None):
         result = registry.get_active_window()
         # In headless, result can be None — we just verify no crash
         assert result is None or isinstance(result, WindowRef)
@@ -170,11 +170,11 @@ def test_get_active_window_with_mock_window(registry):
     mock_win._hWnd = 42
     mock_gw.getActiveWindow.return_value = mock_win
 
-    with patch("app.environments.window_registry._lazy_ctypes", return_value=None), \
-         patch("app.environments.window_registry._lazy_pygetwindow", return_value=mock_gw), \
-         patch("app.environments.window_registry._lazy_psutil", return_value=None):
+    with patch("core.environments.window_registry._lazy_ctypes", return_value=None), \
+         patch("core.environments.window_registry._lazy_pygetwindow", return_value=mock_gw), \
+         patch("core.environments.window_registry._lazy_psutil", return_value=None):
         # Force non-Windows path so pygetwindow is used
-        with patch("app.environments.window_registry.sys") as mock_sys:
+        with patch("core.environments.window_registry.sys") as mock_sys:
             mock_sys.platform = "linux"
             result = registry.get_active_window()
 
@@ -190,9 +190,9 @@ def test_refresh_no_crash(registry):
     """Calling refresh() on a registry should not crash, even in headless."""
     registry.register(title="TestWindow")
 
-    with patch("app.environments.window_registry._lazy_ctypes", return_value=None), \
-         patch("app.environments.window_registry._lazy_pygetwindow", return_value=None), \
-         patch("app.environments.window_registry._lazy_psutil", return_value=None):
+    with patch("core.environments.window_registry._lazy_ctypes", return_value=None), \
+         patch("core.environments.window_registry._lazy_pygetwindow", return_value=None), \
+         patch("core.environments.window_registry._lazy_psutil", return_value=None):
         # refresh should not raise
         changed = registry.refresh()
 
@@ -204,9 +204,9 @@ def test_refresh_marks_stale_when_unreachable(registry):
     """When no OS module can confirm a window, refresh should mark it stale."""
     ref = registry.register(title="GhostWindow")
 
-    with patch("app.environments.window_registry._lazy_ctypes", return_value=None), \
-         patch("app.environments.window_registry._lazy_pygetwindow", return_value=None), \
-         patch("app.environments.window_registry._lazy_psutil", return_value=None):
+    with patch("core.environments.window_registry._lazy_ctypes", return_value=None), \
+         patch("core.environments.window_registry._lazy_pygetwindow", return_value=None), \
+         patch("core.environments.window_registry._lazy_psutil", return_value=None):
         changed = registry.refresh()
 
     # Window should be marked stale since nothing can verify it

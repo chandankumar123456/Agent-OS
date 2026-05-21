@@ -6,8 +6,8 @@ import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 from uuid import uuid4
 
-from app.agents.executor import ExecutorAgent
-from app.agents.base import AgentInput, AgentOutput, AgentRole, AgentStatus
+from core.agents.executor import ExecutorAgent
+from core.agents.base import AgentInput, AgentOutput, AgentRole, AgentStatus
 
 
 @pytest.mark.asyncio
@@ -32,17 +32,17 @@ async def test_legacy_executor_reuses_desktop_components():
         context={"query": "Open notepad and type hello"},
     )
 
-    with patch("app.agents.executor.DesktopSessionManager") as mock_mgr_cls:
+    with patch("core.agents.executor.DesktopSessionManager") as mock_mgr_cls:
         mock_mgr = MagicMock()
         mock_session = AsyncMock()
         mock_mgr.get_or_create_session = AsyncMock(return_value=mock_session)
         mock_mgr_cls.return_value = mock_mgr
 
-        with patch("app.agents.executor.ActionStabilizer") as mock_stab_cls:
+        with patch("core.agents.executor.ActionStabilizer") as mock_stab_cls:
             mock_stab = MagicMock()
             mock_stab_cls.return_value = mock_stab
 
-            with patch("app.agents.executor.WindowRegistry") as mock_reg_cls:
+            with patch("core.agents.executor.WindowRegistry") as mock_reg_cls:
                 mock_reg = MagicMock()
                 mock_reg_cls.return_value = mock_reg
 

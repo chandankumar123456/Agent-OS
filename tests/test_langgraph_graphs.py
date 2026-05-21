@@ -1,13 +1,13 @@
 """Tests for LangGraph graph compilation."""
 import pytest
-from app.langgraph.graphs import (
+from core.langgraph.graphs import (
     compile_task_graph,
     compile_autonomous_graph,
     compile_workflow_graph,
     compile_collaboration_graph,
     get_checkpointer,
 )
-from app.langgraph.checkpointer import PostgresCheckpointSaver
+from core.langgraph.checkpointer import PostgresCheckpointSaver
 
 
 def test_compile_task_graph_returns_compiled_graph():
@@ -56,7 +56,7 @@ def test_get_checkpointer_returns_postgres_saver():
 
 
 def test_graph_cache_reuses_instances():
-    from app.langgraph.graphs import get_cached_graph, _graph_cache
+    from core.langgraph.graphs import get_cached_graph, _graph_cache
     _graph_cache.clear()
     g1 = get_cached_graph("task")
     g2 = get_cached_graph("task")

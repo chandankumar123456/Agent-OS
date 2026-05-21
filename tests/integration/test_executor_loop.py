@@ -1,6 +1,6 @@
 import pytest
-from app.langgraph.nodes import executor_node
-from app.langgraph.state import AgentState
+from core.langgraph.nodes import executor_node
+from core.langgraph.state import AgentState
 
 
 @pytest.mark.asyncio

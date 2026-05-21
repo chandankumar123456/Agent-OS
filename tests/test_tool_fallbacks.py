@@ -12,7 +12,7 @@ os.environ.setdefault("SECRET_KEY", "test-secret-key-for-testing-env-32chars!!")
 os.environ.setdefault("RUNTIME_MODE", "grpc")
 os.environ.setdefault("AGENTOS_RUNTIME_MODE", "grpc")
 
-from app.tools.local_fallbacks import (
+from core.tools.local_fallbacks import (
     local_read_file,
     local_write_file,
     local_list_directory,

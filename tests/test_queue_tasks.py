@@ -7,7 +7,7 @@ class TestCeleryWorkerEventLoop:
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-only test")
     def test_worker_init_sets_proactor_policy_on_windows(self):
         """On Windows, Celery worker must use ProactorEventLoop for subprocess support."""
-        from app.queue.tasks import on_worker_process_init
+        from core.queue.tasks import on_worker_process_init
 
         with patch("asyncio.set_event_loop_policy") as mock_set_policy:
             with patch("asyncio.get_running_loop", side_effect=RuntimeError):
@@ -16,12 +16,12 @@ class TestCeleryWorkerEventLoop:
                     mock_new_loop.return_value = mock_loop
 
                     # Mock DB/Redis connections and runtime (imports are inside func)
-                    with patch("app.memory.long_term.db"):
-                        with patch("app.memory.short_term.redis_client"):
-                            with patch("app.memory.redis_pubsub.redis_pubsub_client"):
-                                with patch("app.queue.tasks._ensure_runtime_initialized"):
-                                    with patch("app.tools.builtin.register_builtin_tools"):
-                                        with patch("app.mcp.client_manager.mcp_client_manager"):
+                    with patch("core.memory.long_term.db"):
+                        with patch("core.memory.short_term.redis_client"):
+                            with patch("core.memory.redis_pubsub.redis_pubsub_client"):
+                                with patch("core.queue.tasks._ensure_runtime_initialized"):
+                                    with patch("core.tools.builtin.register_builtin_tools"):
+                                        with patch("core.mcp.client_manager.mcp_client_manager"):
                                             on_worker_process_init()
 
                     # Assert ProactorEventLoopPolicy was set

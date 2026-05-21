@@ -13,13 +13,13 @@ from datetime import datetime, timezone
 os.environ["AGENTOS_RUNTIME_MODE"] = "grpc"
 os.environ["RUNTIME_MODE"] = "grpc"
 
-from app.desktop_native.sqlite_store import sqlite_store
-from app.desktop_native.event_bus import local_event_bus, Event
-from app.desktop_native.locks import local_execution_lock
-from app.desktop_native.timeouts import local_timeout_enforcer, TimeoutConfig
-from app.desktop_native.task_queue import local_task_queue, TaskPriority
-from app.desktop_native.state_machine import local_task_state_machine, TaskState
-from app.desktop_native.cost_tracker import local_cost_tracker
+from core.desktop_native.sqlite_store import sqlite_store
+from core.desktop_native.event_bus import local_event_bus, Event
+from core.desktop_native.locks import local_execution_lock
+from core.desktop_native.timeouts import local_timeout_enforcer, TimeoutConfig
+from core.desktop_native.task_queue import local_task_queue, TaskPriority
+from core.desktop_native.state_machine import local_task_state_machine, TaskState
+from core.desktop_native.cost_tracker import local_cost_tracker
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -116,7 +116,7 @@ class TestLocalTimeoutEnforcer:
             await asyncio.sleep(10)
             return "done"
 
-        from app.orchestrator.errors import AgentOSError
+        from core.orchestrator.errors import AgentOSError
         with pytest.raises(AgentOSError):
             await local_timeout_enforcer.enforce_tool("task-4", "slow_tool", slow_coro(), override_seconds=1)
 
@@ -158,7 +158,7 @@ class TestLocalTaskStateMachine:
 
     @pytest.mark.asyncio
     async def test_invalid_transition(self):
-        from app.orchestrator.errors import AgentOSError
+        from core.orchestrator.errors import AgentOSError
         with pytest.raises(AgentOSError):
             await local_task_state_machine.transition(
                 "task-9", TaskState.PENDING, TaskState.COMPLETED

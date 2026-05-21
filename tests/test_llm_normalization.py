@@ -1,4 +1,4 @@
-from app.agents.planner import PlannerAgent
+from core.agents.planner import PlannerAgent
 
 
 def test_planner_normalizes_wrapped_steps_response():

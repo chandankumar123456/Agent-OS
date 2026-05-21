@@ -17,16 +17,16 @@ import pytest_asyncio
 os.environ.setdefault("AGENTOS_RUNTIME_MODE", "grpc")
 os.environ.setdefault("RUNTIME_MODE", "grpc")
 
-from app.desktop_native.local_auth import local_auth, LocalAuth
-from app.desktop_native.capability_manager import (
+from core.desktop_native.local_auth import local_auth, LocalAuth
+from core.desktop_native.capability_manager import (
     capability_manager,
     CapabilityManager,
     CapabilityScope,
     CapabilityStatus,
     SENSITIVE_CAPABILITIES,
 )
-from app.desktop_native.sandbox import sandbox, Sandbox, SandboxResult
-from app.desktop_native.sqlite_store import sqlite_store
+from core.desktop_native.sandbox import sandbox, Sandbox, SandboxResult
+from core.desktop_native.sqlite_store import sqlite_store
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -213,7 +213,7 @@ class TestMTLSEnforcement:
     @pytest.mark.asyncio
     async def test_desktop_mode_requires_tls(self):
         """Verify that gRPC client enforces mTLS when AGENTOS_ENFORCE_MTLS=true."""
-        from app.proto.grpc_client import GRPCClient, GRPCClientConfig
+        from core.proto.grpc_client import GRPCClient, GRPCClientConfig
 
         os.environ["AGENTOS_ENFORCE_MTLS"] = "true"
         try:

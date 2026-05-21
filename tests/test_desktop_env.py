@@ -2,13 +2,13 @@ import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 
-from app.environments.desktop_env import DesktopSession, DesktopSessionManager
-from app.environments.execution_stabilizer import ActionStabilizer
+from core.environments.desktop_env import DesktopSession, DesktopSessionManager
+from core.environments.execution_stabilizer import ActionStabilizer
 
 
 @pytest.fixture
 def mock_pyautogui():
-    with patch("app.environments.desktop_env.pyautogui") as m:
+    with patch("core.environments.desktop_env.pyautogui") as m:
         size_mock = MagicMock()
         size_mock.width = 1920
         size_mock.height = 1080
@@ -18,13 +18,13 @@ def mock_pyautogui():
 
 @pytest.fixture
 def mock_pyperclip():
-    with patch("app.environments.desktop_env.pyperclip") as m:
+    with patch("core.environments.desktop_env.pyperclip") as m:
         yield m
 
 
 @pytest.fixture
 def mock_mss():
-    with patch("app.environments.desktop_env.mss") as m:
+    with patch("core.environments.desktop_env.mss") as m:
         sct_instance = MagicMock()
         # mss.MSS() is called in the code, so mock MSS attribute's return value
         mss_mock = MagicMock()
@@ -36,7 +36,7 @@ def mock_mss():
 
 @pytest.fixture
 def mock_gw():
-    with patch("app.environments.desktop_env.gw") as m:
+    with patch("core.environments.desktop_env.gw") as m:
         yield m
 
 
@@ -186,7 +186,7 @@ class TestDesktopSession:
     @pytest.mark.asyncio
     async def test_window_list_linux(self, mock_pyautogui):
         with patch.object(sys, "platform", "linux"):
-            with patch("app.environments.desktop_env.subprocess.run") as mock_run:
+            with patch("core.environments.desktop_env.subprocess.run") as mock_run:
                 mock_run.return_value = MagicMock(returncode=0, stdout="0 1 hostname Terminal\n")
                 session = DesktopSession("task-lin")
                 with patch.object(session, "_is_headless", return_value=False):

@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.mcp.client_manager import MCPClientManager
+from core.mcp.client_manager import MCPClientManager
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.tools.registry import MCPWrappedTool, ToolInput
+from core.tools.registry import MCPWrappedTool, ToolInput
 
 
 @pytest.mark.asyncio
@@ -17,7 +17,7 @@ async def test_mcp_wrapped_tool_passes_parameters_correctly():
     mock_result = AsyncMock()
     mock_result.content = [AsyncMock(text="File written: /tmp/test.txt")]
 
-    with patch("app.mcp.client_manager.mcp_client_manager") as mock_mcp:
+    with patch("core.mcp.client_manager.mcp_client_manager") as mock_mcp:
         mock_mcp.call_tool = AsyncMock(return_value=mock_result)
 
         tool_input = ToolInput(parameters={"path": "/tmp/test.txt", "content": "hello world"})
@@ -40,7 +40,7 @@ async def test_mcp_wrapped_tool_remaps_task_id():
     mock_result = AsyncMock()
     mock_result.content = [AsyncMock(text='{"success": true}')]
 
-    with patch("app.mcp.client_manager.mcp_client_manager") as mock_mcp:
+    with patch("core.mcp.client_manager.mcp_client_manager") as mock_mcp:
         mock_mcp.call_tool = AsyncMock(return_value=mock_result)
 
         tool_input = ToolInput(parameters={"_task_id": "task-42", "url": "https://example.com"})

@@ -4,7 +4,7 @@ import sys
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
-from app.environments.app_launcher import (
+from core.environments.app_launcher import (
     _normalize_app_name,
     _APP_NAME_MAP,
     resolve_app_path,
@@ -110,7 +110,7 @@ class TestFallbackUILaunch:
     async def test_fallback_ui_launch_win32(self):
         if sys.platform != "win32":
             pytest.skip("Windows only")
-        from app.environments.app_launcher import _fallback_ui_launch
+        from core.environments.app_launcher import _fallback_ui_launch
         # Use calc since it's lightweight
         result = await _fallback_ui_launch("calc", "calc.exe", timeout=5.0, verify_window=True)
         if result.success:

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.capabilities.recovery import RecoveryEngine, RecoveryAction
-from app.capabilities.models import VerificationReport, VerificationResult
+from core.capabilities.recovery import RecoveryEngine, RecoveryAction
+from core.capabilities.models import VerificationReport, VerificationResult
 
 
 @pytest.fixture
@@ -28,7 +28,7 @@ def mock_redis():
     client.expire = AsyncMock(return_value=True)
     client.scan_iter = _scan_iter
     client.delete = AsyncMock(return_value=0)
-    with patch("app.capabilities.recovery.redis_client") as mock_rc:
+    with patch("core.capabilities.recovery.redis_client") as mock_rc:
         mock_rc.client = client
         yield client
 
@@ -95,13 +95,13 @@ async def test_recovery_engine_reset_retries(mock_redis):
 
 @pytest.mark.asyncio
 async def test_checkpoint_recovery_service_resume_found():
-    from app.recovery.checkpoint_service import CheckpointRecoveryService
+    from core.recovery.checkpoint_service import CheckpointRecoveryService
     service = CheckpointRecoveryService()
     mock_checkpoint = {"channel_values": {"steps": ["step1"]}}
     mock_tuple = AsyncMock()
     mock_tuple.checkpoint = mock_checkpoint
 
-    with patch("app.recovery.checkpoint_service.get_checkpointer") as mock_get_cp:
+    with patch("core.recovery.checkpoint_service.get_checkpointer") as mock_get_cp:
         mock_cp = AsyncMock()
         mock_cp.aget_tuple = AsyncMock(return_value=mock_tuple)
         mock_get_cp.return_value = mock_cp
@@ -114,9 +114,9 @@ async def test_checkpoint_recovery_service_resume_found():
 
 @pytest.mark.asyncio
 async def test_checkpoint_recovery_service_resume_not_found():
-    from app.recovery.checkpoint_service import CheckpointRecoveryService
+    from core.recovery.checkpoint_service import CheckpointRecoveryService
     service = CheckpointRecoveryService()
-    with patch("app.recovery.checkpoint_service.get_checkpointer") as mock_get_cp:
+    with patch("core.recovery.checkpoint_service.get_checkpointer") as mock_get_cp:
         mock_cp = AsyncMock()
         mock_cp.aget_tuple = AsyncMock(return_value=None)
         mock_get_cp.return_value = mock_cp
