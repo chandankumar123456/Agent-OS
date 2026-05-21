@@ -1,27 +1,27 @@
 //! gRPC Server implementation for desktop automation services
 //! Provides native Windows implementations for <5ms latency
 
-use desktop_protocol::desktop_automation_server::DesktopAutomation;
+use crate::desktop_protocol::desktop_automation_server::DesktopAutomation;
 
-use desktop_protocol::{
+use crate::desktop_protocol::{
     ActRequest, ActResponse, ClickRequest, ClickResponse, CloseSessionRequest,
     CloseSessionResponse, DecideRequest, DecideResponse, FindWindowRequest, FindWindowResponse,
-    ObserveRequest, ObserveResponse, OcrScreenRequest, OcrScreenResponse,
-    RecoverRequest, RecoveryResponse, ScreenCaptureRequest, ScreenCaptureResponse,
-    TypeRequest, TypeResponse, VerifyRequest, VerifyResponse,
+    ObserveRequest, ObserveResponse, OcrScreenRequest, OcrScreenResponse, RecoverRequest,
+    RecoveryResponse, ScreenCaptureRequest, ScreenCaptureResponse, TypeRequest, TypeResponse,
+    VerifyRequest, VerifyResponse,
 };
 
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use async_trait::async_trait;
 
-mod window_service;
 mod ocr_service;
 mod session;
+mod window_service;
 
-pub use window_service::WindowService;
 pub use ocr_service::OcrService;
 pub use session::SessionManager;
+pub use window_service::WindowService;
 
 /// Main desktop automation service implementing gRPC trait
 #[derive(Clone)]
@@ -95,10 +95,17 @@ impl DesktopAutomation for DesktopAutomationService {
         request: tonic::Request<OcrScreenRequest>,
     ) -> std::result::Result<tonic::Response<OcrScreenResponse>, tonic::Status> {
         let req = request.into_inner();
-        tracing::debug!("OCR: language={}, preprocess={}", req.language, req.preprocess);
+        tracing::debug!(
+            "OCR: language={}, preprocess={}",
+            req.language,
+            req.preprocess
+        );
 
         // Use OCR service for text recognition
-        match self.ocr_service.recognize(&req.image_data, &req.language, req.preprocess) {
+        match self
+            .ocr_service
+            .recognize(&req.image_data, &req.language, req.preprocess)
+        {
             Ok(result) => Ok(tonic::Response::new(OcrScreenResponse {
                 text: result.text,
                 confidence: result.confidence,
@@ -125,7 +132,10 @@ impl DesktopAutomation for DesktopAutomationService {
             req.partial_match
         );
 
-        match self.window_service.find_window(&req.title, &req.class_name, req.partial_match) {
+        match self
+            .window_service
+            .find_window(&req.title, &req.class_name, req.partial_match)
+        {
             Some(window_info) => Ok(tonic::Response::new(FindWindowResponse {
                 window_id: window_info.hwnd.to_string(),
                 title: window_info.title,
@@ -155,7 +165,12 @@ impl DesktopAutomation for DesktopAutomationService {
         request: tonic::Request<ClickRequest>,
     ) -> std::result::Result<tonic::Response<ClickResponse>, tonic::Status> {
         let req = request.into_inner();
-        tracing::debug!("Click: window_id={}, x={}, y={}", req.window_id, req.x, req.y);
+        tracing::debug!(
+            "Click: window_id={}, x={}, y={}",
+            req.window_id,
+            req.x,
+            req.y
+        );
 
         // Parse window handle from window_id
         let hwnd = req.window_id.parse::<isize>().unwrap_or(0);
@@ -163,7 +178,11 @@ impl DesktopAutomation for DesktopAutomationService {
 
         Ok(tonic::Response::new(ClickResponse {
             success,
-            error: if success { String::new() } else { "Click failed".to_string() },
+            error: if success {
+                String::new()
+            } else {
+                "Click failed".to_string()
+            },
         }))
     }
 
@@ -180,7 +199,11 @@ impl DesktopAutomation for DesktopAutomationService {
 
         Ok(tonic::Response::new(TypeResponse {
             success,
-            error: if success { String::new() } else { "Type failed".to_string() },
+            error: if success {
+                String::new()
+            } else {
+                "Type failed".to_string()
+            },
         }))
     }
 
@@ -198,7 +221,7 @@ impl DesktopAutomation for DesktopAutomationService {
 
         for (hwnd, _title) in windows {
             let info = self.window_service.get_window_info(hwnd);
-            window_info.push(desktop_protocol::desktop::WindowInfo {
+            window_info.push(crate::desktop_protocol::WindowInfo {
                 id: hwnd.to_string(),
                 title: info.title,
                 x: info.x,
@@ -235,7 +258,7 @@ impl DesktopAutomation for DesktopAutomationService {
         // This is a placeholder - actual decision making would involve AI
         Ok(tonic::Response::new(DecideResponse {
             observation_id: req.observation_id,
-            action: Some(desktop_protocol::desktop::Action {
+            action: Some(crate::desktop_protocol::Action {
                 action_type: "noop".to_string(),
                 target: String::new(),
                 x: 0,
@@ -257,7 +280,7 @@ impl DesktopAutomation for DesktopAutomationService {
         tracing::debug!("Act: session_id={}", req.session_id);
 
         let _session_manager = self.session_manager.read().await;
-        
+
         // Handle action based on type
         if let Some(action) = &req.action {
             match action.action_type.as_str() {
@@ -265,7 +288,9 @@ impl DesktopAutomation for DesktopAutomationService {
                     let target = &action.target;
                     let coords: Vec<&str> = target.split(',').collect();
                     if coords.len() == 2 {
-                        if let (Ok(x), Ok(y)) = (coords[0].parse::<i32>(), coords[1].parse::<i32>()) {
+                        if let (Ok(x), Ok(y)) =
+                            (coords[0].parse::<i32>(), coords[1].parse::<i32>())
+                        {
                             let _ = self.window_service.click(0, x, y);
                         }
                     }
@@ -358,8 +383,8 @@ impl DesktopAutomation for DesktopAutomationService {
 
 /// Start the gRPC server
 pub async fn start_server(addr: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::desktop_protocol::desktop_automation_server::DesktopAutomationServer;
     use tonic::transport::Server;
-    use desktop_protocol::desktop_automation_server::DesktopAutomationServer;
 
     let addr = addr.parse()?;
     let service = DesktopAutomationService::new();
@@ -380,8 +405,7 @@ mod tests {
 
     #[test]
     fn test_service_creation() {
-        let service = DesktopAutomationService::new();
-        assert!(true);
+        let _service = DesktopAutomationService::new();
     }
 
     #[tokio::test]

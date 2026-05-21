@@ -38,13 +38,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Screenshot available: {}", response.screenshot_available);
             println!("Windows:");
             for window in &response.windows {
-                println!("  - {} ({}): {}x{} at ({}, {})",
-                    window.title,
-                    window.id,
-                    window.width,
-                    window.height,
-                    window.x,
-                    window.y
+                println!(
+                    "  - {} ({}): {}x{} at ({}, {})",
+                    window.title, window.id, window.width, window.height, window.x, window.y
                 );
             }
         }

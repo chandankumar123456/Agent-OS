@@ -1,8 +1,8 @@
 // gRPC client for desktop automation bridge
 // Connects Rust desktop automation to Python runtime via gRPC
 
-use desktop_protocol::desktop::desktop_automation_client::DesktopAutomationClient;
-use desktop_protocol::desktop::*;
+use crate::desktop_protocol::desktop_automation_client::DesktopAutomationClient;
+use crate::desktop_protocol::*;
 use std::time::Duration;
 use tokio::time::sleep;
 use tonic::{transport::Channel, Code, Status};
@@ -11,7 +11,10 @@ use tonic::{transport::Channel, Code, Status};
 #[derive(thiserror::Error, Debug)]
 pub enum ClientError {
     #[error("Connection failed after {retries} attempts: {source}")]
-    ConnectionFailed { retries: u32, source: tonic::transport::Error },
+    ConnectionFailed {
+        retries: u32,
+        source: tonic::transport::Error,
+    },
     #[error("Request failed with retry exhaustion: {0}")]
     RequestFailed(#[from] Status),
     #[error("Request timeout after {duration:?}")]
@@ -55,8 +58,8 @@ impl RetryConfig {
 
     /// Calculate backoff duration for a given attempt
     pub fn backoff_for_attempt(&self, attempt: u32) -> Duration {
-        let backoff_secs = self.initial_backoff.as_secs_f64()
-            * self.backoff_multiplier.powi(attempt as i32);
+        let backoff_secs =
+            self.initial_backoff.as_secs_f64() * self.backoff_multiplier.powi(attempt as i32);
         let backoff = Duration::from_secs_f64(backoff_secs);
         std::cmp::min(backoff, self.max_backoff)
     }
@@ -77,10 +80,7 @@ impl DesktopGrpcClient {
     }
 
     /// Connect to the gRPC server with custom retry configuration
-    pub async fn connect_with_retry(
-        addr: &str,
-        config: &RetryConfig,
-    ) -> Result<Self, ClientError> {
+    pub async fn connect_with_retry(addr: &str, config: &RetryConfig) -> Result<Self, ClientError> {
         let mut last_error = None;
 
         for attempt in 0..=config.max_retries {
@@ -111,21 +111,14 @@ impl DesktopGrpcClient {
     fn is_retryable_error(status: &Status) -> bool {
         matches!(
             status.code(),
-            Code::Unavailable
-                | Code::DeadlineExceeded
-                | Code::ResourceExhausted
-                | Code::Aborted
+            Code::Unavailable | Code::DeadlineExceeded | Code::ResourceExhausted | Code::Aborted
         )
     }
 
     /// Health check - ping the gRPC server
     pub async fn health_check(&mut self) -> Result<bool, ClientError> {
         // Use observe as a simple health check with a short timeout
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.observe("health-check", false),
-        )
-        .await;
+        let result = tokio::time::timeout(Duration::from_secs(5), self.observe("health-check", false)).await;
 
         match result {
             Ok(Ok(_)) => Ok(true),
@@ -326,10 +319,7 @@ impl DesktopGrpcClient {
     }
 
     /// Make decision based on observation with retry
-    pub async fn decide(
-        &mut self,
-        observation_id: &str,
-    ) -> Result<DecideResponse, ClientError> {
+    pub async fn decide(&mut self, observation_id: &str) -> Result<DecideResponse, ClientError> {
         let observation_id = observation_id.to_string();
         let mut last_status = None;
         for attempt in 0..=self.retry_config.max_retries {

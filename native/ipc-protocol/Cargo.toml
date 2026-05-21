@@ -1,7 +1,9 @@
 [package]
-name = "desktop-protocol"
-version = "0.1.0"
-edition = "2021"
+name = "agentos-ipc-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 
 [dependencies]
 tonic = { workspace = true }

@@ -51,11 +51,16 @@ jobs:
         working-directory: ./cli
         run: cargo test
 
-  build-desktop-automation:
-    name: Build Desktop Automation
+  build-native:
+    name: Build Native Workspace
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '27.x'
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -63,11 +68,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: "desktop -> target"
+          workspaces: "native -> target"
 
-      - name: Build Desktop Automation
-        working-directory: ./desktop
-        run: cargo check --package desktop-automation
+      - name: Check Native Workspace
+        working-directory: ./native
+        run: cargo check --workspace
 
   build-gui:
     name: Build GUI

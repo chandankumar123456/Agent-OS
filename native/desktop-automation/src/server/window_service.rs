@@ -86,7 +86,7 @@ impl WindowService {
     }
 
     #[cfg(not(target_os = "windows"))]
-    pub fn find_window(&self, title: &str, class_name: &str, partial_match: bool) -> Option<WindowInfo> {
+    pub fn find_window(&self, _title: &str, _class_name: &str, _partial_match: bool) -> Option<WindowInfo> {
         tracing::warn!("Window search not supported on this platform");
         None
     }

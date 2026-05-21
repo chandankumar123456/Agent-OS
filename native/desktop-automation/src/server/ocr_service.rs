@@ -3,7 +3,7 @@
 //! Delegates actual OCR operations to the Python gRPC server (which uses pytesseract).
 //! The Python desktop automation server runs on port 50051 and provides real OCR.
 //! Native Windows OCR (Windows.Media.Ocr) requires complex WinRT/COM interop
-//! and is not yet implemented — the Python gRPC delegation is the production path.
+//! and is not yet implemented - the Python gRPC delegation is the production path.
 
 use std::sync::Mutex;
 
@@ -41,6 +41,7 @@ impl OcrService {
     }
 
     /// Set the gRPC server address for Python delegate calls
+    #[allow(dead_code)]
     pub fn with_grpc_addr(mut self, addr: &str) -> Self {
         self.grpc_addr = addr.to_string();
         self
@@ -52,7 +53,7 @@ impl OcrService {
         if guard.is_some() {
             return guard.clone();
         }
-        // Try to connect — this is a best-effort delegation.
+        // Try to connect - this is a best-effort delegation.
         // If Python gRPC is not available, we return empty results.
         let rt = match tokio::runtime::Runtime::new() {
             Ok(r) => r,
@@ -110,14 +111,14 @@ impl OcrService {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Failed to create tokio runtime for OCR: {}", e);
-                    return Ok(OcrResult { text: String::new(), confidence: 0.0 });
+                    return Ok(OcrResult {
+                        text: String::new(),
+                        confidence: 0.0,
+                    });
                 }
             };
-            match rt.block_on(client.ocr_screen(
-                image_data.to_vec(),
-                effective_language,
-                preprocess,
-            )) {
+            match rt.block_on(client.ocr_screen(image_data.to_vec(), effective_language, preprocess))
+            {
                 Ok(resp) => {
                     if !resp.text.is_empty() {
                         tracing::debug!(
@@ -149,9 +150,7 @@ impl OcrService {
             }
         }
 
-        tracing::warn!(
-            "OCR unavailable — no Python gRPC server and no native OCR engine"
-        );
+        tracing::warn!("OCR unavailable - no Python gRPC server and no native OCR engine");
         Ok(OcrResult {
             text: String::new(),
             confidence: 0.0,
@@ -168,23 +167,29 @@ impl OcrService {
     ) -> Result<Option<OcrResult>, Box<dyn std::error::Error + Send + Sync>> {
         // Windows.Media.Ocr via winrt requires complex COM initialization.
         // For now, this is a placeholder. The recommended path is Python gRPC delegation.
-        //
-        // When implementing, use:
-        //   windows::Media::Ocr::OcrEngine
-        // This requires windows crate features: "Media_Ocr", "Graphics_Imaging"
         Ok(None)
     }
 
     /// Check if a language is supported
+    #[allow(dead_code)]
     pub fn is_language_supported(language: &str) -> bool {
         matches!(
             language.to_lowercase().as_str(),
-            "en-us" | "en-gb" | "de-de" | "fr-fr" | "es-es" | "it-it" |
-            "ja-jp" | "ko-kr" | "zh-cn" | "zh-tw"
+            "en-us"
+                | "en-gb"
+                | "de-de"
+                | "fr-fr"
+                | "es-es"
+                | "it-it"
+                | "ja-jp"
+                | "ko-kr"
+                | "zh-cn"
+                | "zh-tw"
         )
     }
 
     /// Get supported languages
+    #[allow(dead_code)]
     pub fn get_supported_languages() -> Vec<String> {
         vec![
             "en-US".to_string(),

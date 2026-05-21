@@ -1,18 +1,28 @@
-[workspace]
-members = [
-    "desktop-automation",
-    "desktop-protocol",
-]
-resolver = "2"
+[package]
+name = "desktop-automation"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 
-[workspace.dependencies]
-tokio = { version = "1.37", features = ["full"] }
-tonic = { version = "0.11", features = ["transport", "codegen", "prost"] }
-prost = "0.12"
-prost-types = "0.12"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+[[bin]]
+name = "test-client"
+path = "src/bin/test_client.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tonic = { workspace = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+agentos-ipc-protocol = { path = "../ipc-protocol" }
 image = "0.24"
+
+[target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.56", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -43,6 +53,3 @@ windows = { version = "0.56", features = [
     "Graphics_Imaging",
     "Graphics_Capture",
 ] }
-thiserror = "1.0"
-tracing = "0.1"
-async-trait = "0.1"
